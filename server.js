@@ -508,7 +508,7 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(cfg.PORT, () => {
-  console.log('[PM] 服务已启动: http://localhost:' + cfg.PORT);
+app.listen(cfg.PORT, '0.0.0.0', () => {
+  console.log('[PM] 服务已启动: http://0.0.0.0:' + cfg.PORT);
   console.log('[PM] 飞书凭证: ' + (cfg.FEISHU_APP_ID ? '已配置' : '未配置(开发登录模式)'));
 });

@@ -97,6 +97,19 @@ server {
 
 部署完成后，把 `https://pm.your-company.com` 填回飞书网页应用的主页与可信域名，发布到工作台即可全员使用。
 
+### 方式二：Render 一键部署（连 GitHub 仓库）
+
+适合不想自己管服务器的情况。仓库根目录已提供 `render.yaml`（Render Blueprint）：
+
+1. 注册 [Render](https://render.com) → **New** → **Blueprint** → 授权连接你的 GitHub 仓库 `xuwenbin0510/projectmanage`。
+2. Render 自动按 `render.yaml` 建好 Web 服务：`npm install` 构建、`node server.js` 启动、监听 `0.0.0.0:$PORT`、健康检查 `/`。
+3. `SESSION_SECRET` 由 Render 自动生成并保密；`FEISHU_APP_ID/SECRET` 默认留空 = **开发登录模式**（首个登录用户自动为管理员），够演示用。
+4. 部署完成后得到 `https://astrbytes-pm.onrender.com` 这样的公网地址，直接浏览器打开即可用。
+
+> 注意：Render 免费计划的磁盘是**临时的**，重启/重新部署会清空 SQLite 数据（演示无妨）。
+> 需要持久化：升级付费计划 → 在 `render.yaml` 取消 `disk` 注释 → 把 `DB_PATH` 改为 `/data/pm.db`。
+> 接飞书：在飞书开放平台拿到 App ID/Secret 填进 Render 的环境变量，并把重定向/可信域名设为上面的公网地址。
+
 ## 六、权限模型（RBAC，服务端强制）
 
 | 操作 | 允许角色 |
