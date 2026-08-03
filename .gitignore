@@ -1,0 +1,16 @@
+node_modules/
+pm.db
+pm.db-shm
+pm.db-wal
+.env
+*.log
+
+# 开发/调试临时脚本（非应用代码，不入库）
+devcheck.js
+resetdb.js
+test_runner.js
+tmp_checksyntax.js
+verifydb.js
+verifydev.js
+verifyfix.js
+OVERVIEW.md
