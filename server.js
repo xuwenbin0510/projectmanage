@@ -502,10 +502,10 @@ app.get('/api/dashboard', auth, (req, res) => {
 });
 
 /* ---------------- 静态前端 ---------------- */
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'web', 'dist')));
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'not found' });
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'web', 'dist', 'index.html'));
 });
 
 app.listen(cfg.PORT, '0.0.0.0', () => {

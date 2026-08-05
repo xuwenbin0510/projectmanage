@@ -8,7 +8,7 @@ services:
     plan: free              # 免费额度；持久化数据库需升级付费计划并挂载 disk（见下方注释）
     region: singapore       # 离国内近；也可改 oregon / frankfurt
     branch: main
-    buildCommand: npm install
+    buildCommand: npm install && cd web && npm install && npm run build
     startCommand: node server.js
     healthCheckPath: /
     envVars:
