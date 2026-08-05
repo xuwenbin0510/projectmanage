@@ -1,0 +1,159 @@
+{
+  "id": "LT-C-1",
+  "projectType": "C",
+  "version": 1,
+  "name": "C类（基建类）施工生命周期 v1",
+  "isActive": true,
+  "definition": {
+    "meta": {
+      "prd": "P0-02 / P0-03 / P0-05",
+      "description": "面向基建 / 机房 / 产线改造等施工型项目。五阶段五门，强调开工条件、隐蔽验收与竣工资料。",
+      "status": "架构师草拟版（O9/O10），待 PMO + 基建负责人确认后替换"
+    },
+    "roles": {
+      "required": ["pm", "tl"],
+      "recommended": ["qa", "cm"],
+      "optional": ["pmo"],
+      "note": "C 类的 tl 对应「技术/工程负责人」，qa 对应「质量/安全监督」"
+    },
+    "granularity": {
+      "maxLeafDays": 5,
+      "warnMessage": "C类项目叶子任务建议不超过 5 人日，请继续拆分（非阻塞告警）"
+    },
+    "boardDefaults": {
+      "columns": [
+        { "key": "待办", "label": "待办" },
+        { "key": "进行中", "label": "施工中" },
+        { "key": "待评审", "label": "待验收" },
+        { "key": "完成", "label": "完成" }
+      ],
+      "wipLimits": { "进行中": 5 }
+    },
+    "changePolicy": {
+      "ccbTriggers": ["milestone_date", "requirement_baseline", "scope"],
+      "ccbEffortThresholdDays": 3,
+      "ccbChain": ["pm", "tl", "pmo", "customer_rep"],
+      "pmOnlyChain": ["pm"],
+      "note": "C 类范围变更（scope）也强制走 CCB，因涉及造价与工期"
+    },
+    "stages": [
+      {
+        "seq": 1,
+        "code": "S1",
+        "name": "立项与勘察",
+        "description": "需求确认、现场勘察、初步造价与工期评估、立项审批。",
+        "docs": ["立项申请书", "现场勘察报告", "初步概算"],
+        "gate": {
+          "code": "QG1",
+          "name": "立项门",
+          "ownerRole": "pmo",
+          "items": [
+            { "seq": 1, "content": "建设内容与范围明确，边界（含不做项）已书面界定", "ownerRole": "pm" },
+            { "seq": 2, "content": "现场勘察完成，场地 / 电力 / 承重 / 消防等条件已核实", "ownerRole": "tl" },
+            { "seq": 3, "content": "初步概算完成，资金来源与预算额度已落实", "ownerRole": "pm" },
+            { "seq": 4, "content": "项目 PM 与工程负责人已任命且各唯一", "ownerRole": "pmo" },
+            { "seq": 5, "content": "一级 WBS 与 M1~M6 里程碑基线已录入", "ownerRole": "pm" },
+            { "seq": 6, "content": "主要风险（工期 / 安全 / 停机影响）已识别并有应对与责任人", "ownerRole": "pm" },
+            { "seq": 7, "content": "立项评审已通过，审批留痕完整", "ownerRole": "pmo" }
+          ]
+        }
+      },
+      {
+        "seq": 2,
+        "code": "S2",
+        "name": "方案设计",
+        "description": "施工图 / 技术方案设计、造价预算、方案会审。",
+        "docs": ["施工方案", "施工图", "工程量清单", "预算书"],
+        "gate": {
+          "code": "QG2",
+          "name": "方案会审门",
+          "ownerRole": "tl",
+          "items": [
+            { "seq": 1, "content": "施工方案与图纸完成并通过会审，会审意见已闭环", "ownerRole": "tl" },
+            { "seq": 2, "content": "工程量清单与预算书完成，与概算偏差在可接受范围内", "ownerRole": "pm" },
+            { "seq": 3, "content": "涉及的规范与验收标准已明确引用（国标 / 行标 / 企标）", "ownerRole": "qa" },
+            { "seq": 4, "content": "施工对现有业务的影响与停机窗口已与业务方确认", "ownerRole": "pm" },
+            { "seq": 5, "content": "长周期设备 / 材料已识别并启动采购，有到货承诺日期", "ownerRole": "pm" },
+            { "seq": 6, "content": "WBS 细化至分部分项工程，叶子任务有负责人与估算", "ownerRole": "tl" }
+          ]
+        }
+      },
+      {
+        "seq": 3,
+        "code": "S3",
+        "name": "施工准备",
+        "description": "队伍进场、材料到场、安全交底与开工条件确认。",
+        "docs": ["开工报告", "安全技术交底记录", "材料进场验收单"],
+        "gate": {
+          "code": "QG3",
+          "name": "开工条件门",
+          "ownerRole": "qa",
+          "items": [
+            { "seq": 1, "content": "施工队伍资质与人员证件已核验合格", "ownerRole": "qa" },
+            { "seq": 2, "content": "主要材料 / 设备已进场并通过进场验收（含质保资料）", "ownerRole": "cm" },
+            { "seq": 3, "content": "安全技术交底已完成并全员签字", "ownerRole": "qa" },
+            { "seq": 4, "content": "施工许可 / 动火证 / 高空作业等手续齐备", "ownerRole": "pm" },
+            { "seq": 5, "content": "临水临电、围挡、消防等现场条件就绪", "ownerRole": "tl" },
+            { "seq": 6, "content": "施工进度计划已细化到周，与里程碑基线对齐", "ownerRole": "pm" }
+          ]
+        }
+      },
+      {
+        "seq": 4,
+        "code": "S4",
+        "name": "施工实施",
+        "description": "分部分项施工、隐蔽工程验收、中间验收与进度纠偏。",
+        "docs": ["隐蔽工程验收记录", "施工日志", "中间验收报告", "变更洽商记录"],
+        "gate": {
+          "code": "QG4",
+          "name": "隐蔽/中间验收门",
+          "ownerRole": "qa",
+          "items": [
+            { "seq": 1, "content": "所有隐蔽工程均在覆盖前完成验收并留存影像资料", "ownerRole": "qa" },
+            { "seq": 2, "content": "分部分项工程验收记录齐全，不合格项已整改复验", "ownerRole": "qa" },
+            { "seq": 3, "content": "施工日志连续完整，关键工序有旁站记录", "ownerRole": "tl" },
+            { "seq": 4, "content": "现场安全零事故；隐患整改闭环率 100%", "ownerRole": "qa" },
+            { "seq": 5, "content": "所有现场洽商 / 设计变更均已走变更单并留痕", "ownerRole": "pm" },
+            { "seq": 6, "content": "主体工程完工，具备竣工验收条件", "ownerRole": "tl" }
+          ]
+        }
+      },
+      {
+        "seq": 5,
+        "code": "S5",
+        "name": "竣工验收",
+        "description": "竣工验收、资料归档、决算与结项。",
+        "docs": ["竣工图", "竣工验收报告", "决算书", "项目复盘报告"],
+        "gate": {
+          "code": "QG5",
+          "name": "竣工验收门",
+          "ownerRole": "pmo",
+          "items": [
+            { "seq": 1, "content": "竣工验收通过，验收报告已由各方签署", "ownerRole": "pm" },
+            { "seq": 2, "content": "竣工图与全套施工资料完整归档", "ownerRole": "cm" },
+            { "seq": 3, "content": "全部里程碑已达成；延期均有已批准变更单说明", "ownerRole": "pm" },
+            { "seq": 4, "content": "所有变更单已闭环，无「审批中」状态", "ownerRole": "pm" },
+            { "seq": 5, "content": "工程决算完成，与预算偏差有说明", "ownerRole": "pm" },
+            { "seq": 6, "content": "质保期责任与联系人已明确并书面移交运维", "ownerRole": "pm" },
+            { "seq": 7, "content": "项目复盘完成，经验教训入知识库", "ownerRole": "pmo" }
+          ]
+        }
+      }
+    ],
+    "milestones": [
+      { "code": "M1", "name": "项目启动",       "anchorStage": "S1", "anchor": "end",   "required": true, "hint": "立项评审通过之日" },
+      { "code": "M2", "name": "方案会审通过",   "anchorStage": "S2", "anchor": "end",   "required": true, "hint": "QG2 通过之日" },
+      { "code": "M3", "name": "开工",           "anchorStage": "S4", "anchor": "start", "required": true, "hint": "开工报告批准之日" },
+      { "code": "M4", "name": "主体完工",       "anchorStage": "S4", "anchor": "end",   "required": true, "hint": "主体工程完工之日" },
+      { "code": "M5", "name": "竣工验收通过",   "anchorStage": "S5", "anchor": "mid",   "required": true, "hint": "验收报告签署之日" },
+      { "code": "M6", "name": "项目结项",       "anchorStage": "S5", "anchor": "end",   "required": true, "hint": "QG5 通过、项目转归档之日" }
+    ],
+    "reviews": [
+      { "key": "project_kickoff", "reviewType": "project",   "mode": "serial",        "refType": "project", "chain": ["pmo", "management"],              "title": "项目立项评审" },
+      { "key": "scheme_review",   "reviewType": "formal",    "mode": "parallel_veto", "refType": "gate",    "chain": ["tl", "qa", "customer_rep"],       "title": "方案会审（一票否决）" },
+      { "key": "start_check",     "reviewType": "technical", "mode": "single",        "refType": "gate",    "chain": ["qa"],                             "title": "开工条件核验" },
+      { "key": "ccb",             "reviewType": "ccb",       "mode": "serial",        "refType": "change",  "chain": ["pm", "tl", "pmo", "customer_rep"], "title": "变更控制委员会审批" },
+      { "key": "project_close",   "reviewType": "formal",    "mode": "parallel_veto", "refType": "gate",    "chain": ["pmo", "qa", "management"],        "title": "竣工结项评审（一票否决）" }
+    ]
+  }
+}

@@ -1,0 +1,100 @@
+%% M1 新建项目向导增量 · 类图
+%% 配套文档：docs/系统设计-M1向导增量v1.md §3.6
+classDiagram
+    class MilestoneDraft {
+        +string code?
+        +string name
+        +string target?
+        +string date
+    }
+    class MilestoneRow {
+        +string uid
+    }
+    class CreateProjectPayload {
+        +string name
+        +ProjectType type
+        +number contractAmount
+        +MemberDraft[] members
+        +MilestoneDraft[] milestones?
+    }
+    class MemberDraft {
+        +string userOpenId
+        +ProjectRole role
+        +comboKey() string
+    }
+    class Milestone {
+        +string id
+        +string projectId
+        +string code
+        +string name
+        +string target?
+        +string baselineDate
+        +string currentDate
+        +number delayDays
+        +MilestoneStatus status
+        +boolean done
+    }
+    class LifecycleTemplate {
+        +string id
+        +ProjectType projectType
+        +TemplateDefinition definition
+    }
+    class TemplateDefinition {
+        +StageDef[] stages
+        +MilestoneDef[] milestones
+        +string[] docs
+    }
+    class MilestoneDef {
+        +string code
+        +string name
+        +number offsetDays
+    }
+    class CreateForm {
+        +number contractAmount
+        +ProjectType type
+        +string planStart
+        +MemberDraft[] members
+        +MilestoneRow[] milestones
+    }
+    class ProjectCreatePage {
+        +number step
+        +CreateForm form
+        +boolean msTouched
+        +MilestoneDef[] tplMilestones
+        +renderBasic() JSX
+        +renderClassify() JSX
+        +renderMembers() JSX
+        +renderMilestones() JSX
+        +renderConfirm() JSX
+        +buildFromTemplate(defs, planStart) MilestoneRow[]
+        +normalizeMilestones() MilestoneDraft[]
+        +validateStep(target) boolean
+        +handleSubmit() Promise
+    }
+    class ApiClient {
+        <<interface>>
+        +getLifecycleTemplate(type) Promise~LifecycleTemplate~
+        +createProject(payload) Promise~Project~
+        +updateMilestone(id, payload) Promise~Milestone~
+    }
+    class MockClient {
+        +getLifecycleTemplate(type) Promise~LifecycleTemplate~
+        +createProject(payload) Promise~Project~
+    }
+    class HttpClient {
+        +getLifecycleTemplate(type) Promise~LifecycleTemplate~
+    }
+
+    MilestoneRow --|> MilestoneDraft : extends (UI only)
+    CreateProjectPayload "1" o-- "0..*" MilestoneDraft : milestones?
+    CreateProjectPayload "1" o-- "1..*" MemberDraft : members
+    CreateForm "1" *-- "0..*" MilestoneRow
+    CreateForm "1" *-- "0..*" MemberDraft
+    ProjectCreatePage "1" *-- "1" CreateForm
+    ProjectCreatePage ..> ApiClient : uses
+    LifecycleTemplate "1" *-- "1" TemplateDefinition
+    TemplateDefinition "1" o-- "0..*" MilestoneDef
+    MilestoneDef ..> MilestoneRow : buildFromTemplate()
+    MilestoneDraft ..> Milestone : mock createProject 映射
+    ApiClient <|.. MockClient
+    ApiClient <|.. HttpClient

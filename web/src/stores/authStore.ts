@@ -1,0 +1,88 @@
+import { create } from 'zustand';
+import type { User, ProjectRole } from '@/types/project';
+import { api, setToken, USE_MOCK } from '@/api/client';
+import { canDo } from '@/config/permissions';
+
+/**
+ * 认证与权限镜像 store
+ * @prd P0-11（飞书免登 / 开发登录） P0-10（角色体系与 RBAC 镜像）
+ * 注意：前端权限仅控制按钮可见性，最终以服务端判定为准
+ */
+interface AuthState {
+  user: User | null;
+  loading: boolean;
+  ready: boolean;
+  /** 当前项目内我的角色（进入项目详情时写入） */
+  projectRoles: ProjectRole[];
+  login: (openId: string) => Promise<User>;
+  loginByCode: (code: string) => Promise<User>;
+  bootstrap: () => Promise<void>;
+  logout: () => Promise<void>;
+  setProjectRoles: (roles: ProjectRole[]) => void;
+  can: (action: string) => boolean;
+}
+
+export const useAuthStore = create<AuthState>((set, get) => ({
+  user: null,
+  loading: false,
+  ready: false,
+  projectRoles: [],
+
+  async login(openId) {
+    set({ loading: true });
+    try {
+      const session = await api.devLogin(openId);
+      if (!USE_MOCK) setToken(session.token);
+      else localStorage.setItem('pm_token', session.token);
+      set({ user: session.user, ready: true });
+      return session.user;
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  async loginByCode(code) {
+    set({ loading: true });
+    try {
+      const session = await api.feishuLogin(code);
+      localStorage.setItem('pm_token', session.token);
+      set({ user: session.user, ready: true });
+      return session.user;
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  /** 应用启动时尝试恢复会话 */
+  async bootstrap() {
+    set({ loading: true });
+    try {
+      const user = await api.me();
+      set({ user });
+    } catch {
+      set({ user: null });
+    } finally {
+      set({ loading: false, ready: true });
+    }
+  },
+
+  async logout() {
+    try {
+      await api.logout();
+    } finally {
+      localStorage.removeItem('pm_token');
+      setToken('');
+      set({ user: null, projectRoles: [] });
+    }
+  },
+
+  setProjectRoles(roles) {
+    set({ projectRoles: roles });
+  },
+
+  can(action) {
+    const { user, projectRoles } = get();
+    if (!user) return false;
+    return canDo(user.globalRole, action, projectRoles);
+  },
+}));

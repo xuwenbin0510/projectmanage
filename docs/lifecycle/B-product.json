@@ -1,0 +1,138 @@
+{
+  "id": "LT-B-1",
+  "projectType": "B",
+  "version": 1,
+  "name": "B类（产品迭代）轻量生命周期 v1",
+  "isActive": true,
+  "definition": {
+    "meta": {
+      "prd": "P0-02 / P0-03 / P0-05",
+      "description": "面向自研产品迭代。四阶段四门，弱化文档、强化需求就绪与发布就绪，任务粒度更细。",
+      "status": "架构师草拟版（O9/O10），待 PMO + PO 确认后替换"
+    },
+    "roles": {
+      "required": ["pm", "tl", "po"],
+      "recommended": ["qa"],
+      "optional": ["cm", "pmo"],
+      "note": "B 类未指定 PO 不允许提交立项（E_PROJECT_PO_REQUIRED）"
+    },
+    "granularity": {
+      "maxLeafDays": 2,
+      "warnMessage": "B类迭代叶子任务建议不超过 2 人日，请继续拆分（非阻塞告警）"
+    },
+    "boardDefaults": {
+      "columns": [
+        { "key": "待办", "label": "待办" },
+        { "key": "进行中", "label": "进行中" },
+        { "key": "待评审", "label": "待评审" },
+        { "key": "完成", "label": "完成" }
+      ],
+      "wipLimits": { "进行中": 3 }
+    },
+    "changePolicy": {
+      "ccbTriggers": ["milestone_date", "requirement_baseline"],
+      "ccbEffortThresholdDays": 3,
+      "ccbChain": ["pm", "tl", "po"],
+      "pmOnlyChain": ["pm"],
+      "note": "B 类无客户代表，CCB 链去掉 customer_rep"
+    },
+    "stages": [
+      {
+        "seq": 1,
+        "code": "S1",
+        "name": "需求规划",
+        "description": "需求池梳理、迭代范围圈定、优先级排序与验收标准定义。",
+        "docs": ["迭代需求清单", "验收标准（AC）"],
+        "gate": {
+          "code": "QG1",
+          "name": "需求就绪门",
+          "ownerRole": "po",
+          "items": [
+            { "seq": 1, "content": "迭代目标明确，成功指标可量化（如转化率 / 时延 / 缺陷率）", "ownerRole": "po" },
+            { "seq": 2, "content": "需求条目均有唯一编号、优先级与验收标准（AC），无 TBD", "ownerRole": "po" },
+            { "seq": 3, "content": "需求已与研发共评，技术可行性无重大疑问", "ownerRole": "tl" },
+            { "seq": 4, "content": "迭代范围与容量匹配（估算总量 ≤ 团队可用人日 × 0.8）", "ownerRole": "pm" },
+            { "seq": 5, "content": "依赖的外部接口 / 第三方能力已确认可用", "ownerRole": "tl" },
+            { "seq": 6, "content": "需求清单已冻结形成迭代基线，后续插需求走变更", "ownerRole": "po" }
+          ]
+        }
+      },
+      {
+        "seq": 2,
+        "code": "S2",
+        "name": "设计与拆解",
+        "description": "技术方案设计、接口约定、WBS 拆解与排期。",
+        "docs": ["技术方案", "接口文档", "迭代计划"],
+        "gate": {
+          "code": "QG2",
+          "name": "方案就绪门",
+          "ownerRole": "tl",
+          "items": [
+            { "seq": 1, "content": "技术方案已通过技术评审（TL 决议），关键取舍有记录", "ownerRole": "tl" },
+            { "seq": 2, "content": "前后端接口已约定并文档化，字段与错误码明确", "ownerRole": "tl" },
+            { "seq": 3, "content": "WBS 拆解完成，叶子任务均 ≤2 人日且有负责人与估算", "ownerRole": "pm" },
+            { "seq": 4, "content": "数据库 / 数据结构变更已评估兼容性与迁移方案", "ownerRole": "tl" },
+            { "seq": 5, "content": "测试要点与回归范围已明确", "ownerRole": "qa" },
+            { "seq": 6, "content": "里程碑 M2~M5 日期已录入基线", "ownerRole": "pm" }
+          ]
+        }
+      },
+      {
+        "seq": 3,
+        "code": "S3",
+        "name": "开发与测试",
+        "description": "编码、代码评审、自测、提测与缺陷收敛。",
+        "docs": ["代码评审记录", "测试报告", "缺陷清单"],
+        "gate": {
+          "code": "QG3",
+          "name": "发布就绪门",
+          "ownerRole": "qa",
+          "items": [
+            { "seq": 1, "content": "所有需求条目开发完成并自测通过", "ownerRole": "tl" },
+            { "seq": 2, "content": "代码评审 100% 覆盖，无未闭环阻塞意见", "ownerRole": "tl" },
+            { "seq": 3, "content": "功能测试与回归测试通过率 ≥95%，P0/P1 缺陷清零", "ownerRole": "qa" },
+            { "seq": 4, "content": "验收标准（AC）逐条验证通过，PO 已确认", "ownerRole": "po" },
+            { "seq": 5, "content": "发布方案、回滚方案与灰度策略已确认", "ownerRole": "tl" },
+            { "seq": 6, "content": "监控告警与埋点已就位，可观测发布后指标", "ownerRole": "tl" }
+          ]
+        }
+      },
+      {
+        "seq": 4,
+        "code": "S4",
+        "name": "发布与复盘",
+        "description": "灰度、全量发布、线上观察与迭代复盘。",
+        "docs": ["发布记录", "线上观察报告", "迭代复盘报告"],
+        "gate": {
+          "code": "QG4",
+          "name": "迭代结项门",
+          "ownerRole": "pmo",
+          "items": [
+            { "seq": 1, "content": "已全量发布，线上观察期内无 P0/P1 线上问题", "ownerRole": "tl" },
+            { "seq": 2, "content": "迭代目标指标已采集，与预期对比有结论", "ownerRole": "po" },
+            { "seq": 3, "content": "所有变更单已闭环，无「审批中」状态", "ownerRole": "pm" },
+            { "seq": 4, "content": "遗留需求 / 缺陷已明确处置（转下迭代或关闭）", "ownerRole": "pm" },
+            { "seq": 5, "content": "迭代复盘完成，改进项有责任人与时限", "ownerRole": "pmo" },
+            { "seq": 6, "content": "文档与配置基线已更新归档", "ownerRole": "cm" }
+          ]
+        }
+      }
+    ],
+    "milestones": [
+      { "code": "M1", "name": "迭代启动",       "anchorStage": "S1", "anchor": "start", "required": true, "hint": "迭代 Kickoff 之日" },
+      { "code": "M2", "name": "需求冻结",       "anchorStage": "S1", "anchor": "end",   "required": true, "hint": "QG1 通过之日" },
+      { "code": "M3", "name": "提测",           "anchorStage": "S3", "anchor": "mid",   "required": true, "hint": "开发完成转测之日" },
+      { "code": "M4", "name": "灰度发布",       "anchorStage": "S4", "anchor": "start", "required": true, "hint": "首次灰度上线之日" },
+      { "code": "M5", "name": "全量发布",       "anchorStage": "S4", "anchor": "mid",   "required": true, "hint": "100% 流量之日" },
+      { "code": "M6", "name": "迭代复盘结项",   "anchorStage": "S4", "anchor": "end",   "required": true, "hint": "QG4 通过之日" }
+    ],
+    "reviews": [
+      { "key": "project_kickoff", "reviewType": "project",   "mode": "serial", "refType": "project", "chain": ["pmo"],           "title": "迭代立项评审（轻量）" },
+      { "key": "req_ready",       "reviewType": "formal",    "mode": "single", "refType": "gate",    "chain": ["po"],            "title": "需求就绪评审" },
+      { "key": "design_review",   "reviewType": "technical", "mode": "single", "refType": "gate",    "chain": ["tl"],            "title": "技术方案评审" },
+      { "key": "code_review",     "reviewType": "code",      "mode": "single", "refType": "pr",      "chain": ["tl"],            "title": "代码评审" },
+      { "key": "ccb",             "reviewType": "ccb",       "mode": "serial", "refType": "change",  "chain": ["pm", "tl", "po"], "title": "变更审批（无客户代表）" },
+      { "key": "project_close",   "reviewType": "formal",    "mode": "single", "refType": "gate",    "chain": ["pmo"],           "title": "迭代结项评审" }
+    ]
+  }
+}

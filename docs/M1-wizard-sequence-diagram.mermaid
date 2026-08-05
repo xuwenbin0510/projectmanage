@@ -1,0 +1,72 @@
+%% M1 新建项目向导增量 · 时序图（5 步向导全流程）
+%% 配套文档：docs/系统设计-M1向导增量v1.md §7.5
+sequenceDiagram
+    actor PM as 项目经理
+    participant W as ProjectCreatePage
+    participant API as api (client.ts)
+    participant M as MockClient
+    participant DB as MockDb
+    participant MP as MilestonesPage
+
+    Note over PM,W: Step0 基本信息
+    PM->>W: 输入合同额（删空「0」）
+    W->>W: patch({contractAmount: Number('')||0 = 0})
+    W-->>PM: value = 0 || '' → 显示空【改动A】
+
+    Note over PM,W: Step1 分类判定
+    W->>API: classify(classifyInput)
+    API->>M: classify()
+    M-->>W: {suggested, reasons}
+    W->>W: setForm({type: suggested})
+
+    Note over W,M: type 变化 → 拉模板【改动C】
+    W->>API: getLifecycleTemplate(type)
+    API->>M: getLifecycleTemplate(type)
+    M->>DB: templates.find(projectType===type && isActive)
+    DB-->>M: LifecycleTemplate
+    M-->>W: deepClone(tpl)
+    W->>W: setTplMilestones(tpl.definition.milestones)
+    W->>W: buildFromTemplate(defs, planStart) → milestones rows
+
+    Note over PM,W: Step2 团队组建【改动B】
+    PM->>W: addMember() ×2
+    W->>W: 找第一个空闲 userOpenId#role 组合
+    PM->>W: 两行都选「张三」，角色分别 pm / tl
+    W->>W: 下拉禁用键 = userOpenId#role → 允许
+    W->>W: validateStep(3): 组合去重 ✓ pmCount===1 ✓ tlCount===1 ✓
+
+    Note over PM,W: Step3 里程碑规划【新增】
+    W-->>PM: 展示模板预填 N 行（name + planStart+offsetDays）
+    PM->>W: 改名 / 填达成标准 / 改日期 / 新增 / 删除
+    W->>W: setMsTouched(true)
+    W->>W: validateStep(4): 名称非空 · 日期合法 · 不早于 planStart · 名称不重复
+
+    Note over PM,W: Step4 确认提交
+    PM->>W: 点击「创建项目」
+    W->>W: normalizeMilestones(): 按 date 升序 → 重编号 M1..Mn
+    W->>API: createProject({...form, members, milestones: MilestoneDraft[]})
+    API->>M: createProject(payload)
+    M->>M: 校验 override理由 / PO / pmCount·tlCount / 组合唯一 / 里程碑基础校验
+    M->>DB: projects.push(project)
+    M->>DB: stages + gates + gateItems ← 模板实例化（不变）
+
+    alt payload.milestones === undefined
+        M->>DB: milestones ← tpl.definition.milestones（回退分支）
+    else payload.milestones 为数组（含空数组）
+        M->>DB: milestones ← drafts.map(d => baselineDate = currentDate = d.date, delayDays = 0)
+    end
+
+    M->>DB: members.push(逐条，同人双角色写两行)
+    M->>DB: boardConfigs.push()
+    M->>DB: audit(create, diff += 里程碑「模板 N 条 → 自定义 K 条」)
+    M->>DB: saveDb() → sessionStorage
+    M-->>W: Project
+    W-->>PM: toast「项目已创建，编号 P-xxxx」→ navigate(概览页)
+
+    Note over PM,MP: 事后查看
+    PM->>MP: 打开里程碑页
+    MP->>API: listMilestones(projectId)
+    API->>M: listMilestones()
+    M->>DB: filter(projectId).sort(by currentDate)
+    M-->>MP: Milestone[]（含 target）
+    MP-->>PM: 表格：M1 名称 / 达成标准 / 基线 / 当前计划 / 偏差 / 状态

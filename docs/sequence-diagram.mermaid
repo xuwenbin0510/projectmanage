@@ -1,0 +1,247 @@
+%% 太空字节项目管理系统 · 关键流程时序图 v1.0
+%% 架构师 高见远 · 对应《架构设计-重构v1.md》第四章
+%% 本文件含 5 个流程，渲染时请分块使用
+
+%% ===== 流程一：飞书免登 + RBAC 判定（P0-10 / P0-11）=====
+sequenceDiagram
+  autonumber
+  participant U as 用户(飞书客户端)
+  participant W as web/ LoginPage
+  participant AS as authStore
+  participant R as auth.routes
+  participant SVC as auth.service
+  participant FS as 飞书开放平台
+  participant DAL as userRepo
+  participant RB as rbac.service
+
+  U->>W: 打开飞书工作台应用
+  W->>W: utils/feishu.isInFeishu()
+  alt 在飞书内
+    W->>FS: tt.requestAuthCode(appId)
+    FS-->>W: code
+    W->>R: POST /api/login {code}
+    R->>SVC: loginByFeishu(code)
+    SVC->>FS: app_access_token/internal
+    FS-->>SVC: app_access_token
+    SVC->>FS: authen/v1/oidc/access_token {code}
+    FS-->>SVC: {open_id, user_id, access_token}
+    SVC->>FS: contact/v3/users/{open_id}
+    FS-->>SVC: {name}
+    SVC->>DAL: upsertUser(open_id, employee_id, name)
+    DAL-->>SVC: user(含 global_role)
+    SVC-->>R: {token: signToken(user), user}
+  else 非飞书环境(本地开发)
+    W->>R: POST /api/devlogin {name, role}
+    R-->>W: {token, user}
+  end
+  R-->>W: {code:0, data:{token,user}}
+  W->>AS: setSession(token, user)
+  AS->>AS: localStorage.setItem('pm_token')
+
+  Note over W,RB: 后续任意请求
+  W->>R: GET /api/meta (Bearer token)
+  R-->>W: {roles, enums, permissions, templates}
+  W->>AS: metaStore.hydrate()
+
+  U->>W: 点击「编辑项目 P-0012」
+  W->>W: usePermission('project:edit', {projectId}) → 显隐按钮
+  W->>R: PUT /api/projects/P-0012 (Bearer)
+  R->>R: middleware/auth → req.user
+  R->>RB: assertPerm(user,'project:edit',{projectId})
+  RB->>DAL: projectMemberRepo.rolesOf(open_id, projectId)
+  DAL-->>RB: ['member']
+  RB-->>R: throw E_FORBIDDEN
+  R-->>W: 403 {code:'E_FORBIDDEN', message:'仅项目负责人或管理员可编辑'}
+  Note right of R: 直接调 API 绕过前端同样被拒
+
+
+%% ===== 流程二：正式评审（并行一票否决）+ 客户代表代录（P0-09）=====
+sequenceDiagram
+  autonumber
+  participant PM as PM(徐文斌)
+  participant W as ReviewsPage
+  participant RT as reviews.routes
+  participant RS as review.service
+  participant RB as rbac.service
+  participant DR as reviewRepo/reviewStepRepo/approvalRepo
+  participant AU as audit.service
+  participant TL as TL(王强)
+  participant MG as 管理层
+
+  PM->>W: 发起「设计评审」(formal)
+  W->>RT: POST /api/reviews {projectId, refType:'stage', refId:S3, reviewType:'formal'}
+  RT->>RS: start(user, spec)
+  RS->>RS: 读 REVIEW_TEMPLATES.formal → mode='parallel_veto'<br/>chain=[pmo, tl, management, customer_rep]
+  RS->>DR: insert review(status='审批中')
+  loop 每个角色
+    RS->>DR: insert review_step(status='current', role)
+  end
+  RS->>DR: insert approval(action='submit')
+  RS->>AU: log(entity='review', action='create')
+  RT-->>W: {review, steps[]}
+
+  Note over W,MG: 四方并行，互不阻塞
+  TL->>RT: POST /api/reviews/{id}/decide {action:'approve', comment:'方案可行'}
+  RT->>RS: decide(user, id, 'approve')
+  RS->>RB: assertStepApprover(user, step[role='tl'])
+  RS->>DR: update step(status='approved', decided_by, decided_at)
+  RS->>DR: insert approval(action='approve')
+  RS->>RS: evaluateVeto() → 仍有 pending，review 保持「审批中」
+  RT-->>TL: {review 进度}
+
+  MG->>RT: POST /api/reviews/{id}/decide {action:'reject', comment:'预算超标'}
+  RT->>RS: decide(user, id, 'reject')
+  RS->>DR: update step(status='rejected')
+  RS->>DR: insert approval(action='reject')
+  RS->>RS: evaluateVeto() → 存在 rejected → 一票否决
+  RS->>DR: update review(status='已驳回', closed_at)
+  RS->>RS: onClosed(passed=false) → 回调 ref 实体回到修改态
+  RS->>AU: log(action='reject', summary='设计评审被管理层否决')
+  RT-->>MG: {review status:'已驳回'}
+  Note over RS: 其余 pending 步骤置 skipped，PM 修改后可重新发起
+
+  Note over PM,RS: 客户代表由 PM 代录（Q7 方案A）
+  PM->>RT: POST /api/reviews/{id2}/decide {role:'customer_rep', action:'approve',<br/>comment:'客户已线下签字', evidenceUrl:'...'}
+  RT->>RS: decide(user, id2, 'approve', role='customer_rep')
+  RS->>RB: 仅项目 PM 可代录 + comment/evidence 必填
+  RS->>DR: insert approval(action='proxy_approve', evidence_url)
+
+
+%% ===== 流程三：里程碑延后 → 变更单 → CCB → 应用（P0-05 / P0-14）=====
+sequenceDiagram
+  autonumber
+  participant PM as PM
+  participant W as MilestonesPage
+  participant MR as milestones.routes
+  participant MS as milestone.service
+  participant CW as ChangeForm
+  participant CR as changes.routes
+  participant CS as change.service
+  participant RS as review.service
+  participant AU as audit.service
+  participant CCB as CCB(PM→TL→PO→客户代表)
+
+  PM->>W: 编辑 M3，把 03-20 改为 03-10（提前）
+  W->>MR: PUT /api/milestones/M3 {plannedDate:'2026-03-10'}
+  MR->>MS: update(user, M3, dto)
+  MS->>MS: assertDateRule(old='03-20', next='03-10') → next < old
+  MS-->>MR: throw E_MS_NO_ADVANCE
+  MR-->>W: 400 {code:'E_MS_NO_ADVANCE',<br/>message:'里程碑日期不可提前。如需调整请提交变更申请。'}
+  W-->>PM: Toast 红色拦截提示
+
+  PM->>W: 改为 03-30（延后 10 天）
+  W->>MR: PUT /api/milestones/M3 {plannedDate:'2026-03-30'}
+  MR->>MS: update(user, M3, dto)
+  MS->>MS: assertDateRule → next > old
+  MS-->>MR: throw E_MS_NEED_CHANGE + changeDraft
+  MR-->>W: 409 {code:'E_MS_NEED_CHANGE',<br/>data:{changeDraft:{changeType:'milestone_date',<br/>targetId:'M3', payload:{from:'2026-03-20', to:'2026-03-30'}}}}
+  W->>CW: 自动跳转「变更申请」并预填
+
+  PM->>CR: POST /api/changes {...预填 + impactAnalysis + effortDays}
+  CR->>CS: route(dto) → changeType='milestone_date' → CCB
+  CS-->>CR: {route:'ccb', chain:['pm','tl','po','customer_rep'], reasons:['里程碑日期变更强制走 CCB']}
+  CR->>CS: create(user, dto) → code='CR-003', status='草稿'
+  CS->>AU: log(entity='change', action='create')
+  CR-->>CW: {change}
+
+  PM->>CR: POST /api/changes/CR-003/submit
+  CR->>CS: submit(user, id)
+  CS->>RS: start({refType:'change', refId:'CR-003',<br/>reviewType:'ccb', mode:'serial', chain})
+  RS-->>CS: review(status='审批中', currentStep=0)
+  CS->>CS: update change(status='审批中', review_id)
+
+  loop 串行逐级 PM→TL→PO→客户代表
+    CCB->>RS: POST /api/reviews/{rid}/decide {action:'approve'}
+    RS->>RS: advanceSerial() → currentStep++
+  end
+  RS->>RS: currentStep >= chain.length → review='已通过'
+  RS->>CS: onReviewClosed(rid, passed=true)
+  CS->>MS: applyDateChange('CR-003')
+  MS->>MS: 写 planned_date='2026-03-30'（唯一合法写入路径）<br/>baseline_date 保持 '2026-03-20' 不变<br/>delay_days=10, last_change_id='CR-003'
+  MS->>AU: log(entity='milestone', action='apply',<br/>before={planned_date:'03-20'}, after={planned_date:'03-30'})
+  CS->>CS: update change(status='已实施', applied_at)
+  CS-->>W: 刷新里程碑表：M3 显示「03-30 (+10 变更#CR-003)」
+
+
+%% ===== 流程四：质量门门控 + 阶段推进硬拦截（P0-03 / P0-02）=====
+sequenceDiagram
+  autonumber
+  participant QA as QA
+  participant PM as PM
+  participant W as OverviewPage
+  participant GR as gates.routes
+  participant GS as gate.service
+  participant PR as projects.routes
+  participant LS as lifecycle.service
+  participant AU as audit.service
+
+  W->>GR: GET /api/gates/QG4
+  GR-->>W: {gate, items:[{content,ownerRole,checked}...]}
+  W-->>PM: 「进入集成测试」按钮 disabled（gate.status≠已通过）
+
+  QA->>GR: PUT /api/gates/QG4/items/I2 {checked:true}
+  GR->>GS: toggleItem(user, I2, true)
+  GS->>GS: 校验 user 角色 == item.owner_role 或 admin
+  GS->>AU: log(entity='gate_item', action='update')
+  GR-->>QA: {item}
+
+  PM->>PR: POST /api/projects/P-0012/advance
+  PR->>LS: advanceStage(user, projectId)
+  LS->>GS: isPassed(currentStage.gateId)
+  GS-->>LS: false（2 项检查项未确认，无结论）
+  LS-->>PR: throw E_GATE_NOT_PASSED + blockers[]
+  PR-->>PM: 403 {code:'E_GATE_NOT_PASSED',<br/>data:{blockers:['接口文档(ICD)已冻结 待确认','开发阶段文档齐套 待确认','尚未提交门控结论']}}
+
+  QA->>GR: POST /api/gates/QG4/decide {conclusion:'已通过', comment:'同意进入集成测试'}
+  GR->>GS: decide(user, QG4, ...)
+  GS->>GS: 校验 can(user,'gate:decide') && 所有 template 检查项已勾选
+  GS->>GS: update gate(status='已通过', decided_by, decided_at)
+  GS->>AU: log(entity='gate', action='decide', after={status:'已通过'})
+  GR-->>QA: {gate}
+
+  PM->>PR: POST /api/projects/P-0012/advance
+  PR->>LS: advanceStage(user, projectId)
+  LS->>GS: isPassed(QG4) → true
+  LS->>LS: currentStage.status='已完成'<br/>nextStage.status='进行中'<br/>project.current_stage_id=nextStage.id
+  LS->>AU: log(entity='project', action='status_change')
+  PR-->>PM: {stage:'集成测试'}
+
+
+%% ===== 流程五：新建项目（分类判定 + 模板实例化）（P0-01 / P0-02 / P0-04）=====
+sequenceDiagram
+  autonumber
+  participant PM as PM
+  participant W as ProjectCreatePage
+  participant PR as projects.routes
+  participant CL as classify.service
+  participant PS as project.service
+  participant LS as lifecycle.service
+  participant DAL as repos
+  participant AU as audit.service
+
+  PM->>W: 填写 合同额150万 / ☑硬件交付 / ☑客户验收
+  W->>PR: POST /api/projects/classify-suggest {amount:150, hasHardware:true, hasAcceptance:true}
+  PR->>CL: suggest(input)
+  CL-->>PR: {suggested:'A', reasons:['合同额>100万','涉及硬件交付']}
+  PR-->>W: 显示「💡 系统建议：A 类（交付型）」
+
+  PM->>W: 手动改选 B 类
+  W-->>PM: 「覆盖理由」输入框变为必填
+
+  PM->>W: 填理由 + 任命 PM/TL/QA/CM + ☑按模板生成 → 创建为草稿
+  W->>PR: POST /api/projects {..., type:'B', classifySuggested:'A',<br/>classifyOverrideReason:'...', members:[...], applyTemplate:true}
+  PR->>PS: create(user, dto)
+  PS->>CL: validateOverride('A','B',reason) → OK（有理由）
+  PS->>DAL: projectRepo.insert(project, code='P-0019', status='草稿')
+  PS->>PS: assignRoles → 校验 PM/TL 各 1 人；B 类必须有 PO
+  PS->>DAL: projectMemberRepo.bulkInsert(members)
+  PS->>LS: instantiate(project, template['B'])
+  LS->>DAL: stageRepo.bulkInsert(阶段序列)
+  LS->>DAL: gateRepo.bulkInsert(各阶段末门)
+  LS->>DAL: gateItemRepo.bulkInsert(检查项 source='template')
+  LS->>DAL: milestoneRepo.bulkInsert(骨架, baseline_date=planned_date)
+  LS->>DAL: boardConfigRepo.insert({wip_limits:{'进行中':5}})
+  LS->>DAL: wbsNodeRepo.insert(根节点 wbs_code='1')
+  PS->>AU: log(entity='project', action='create', summary='新建B类项目并实例化模板')
+  PR-->>W: {project 含 stages/gates/milestones}
+  W-->>PM: 跳转项目详情 · 概览

@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * 双主题 CSS 变量 · 单一真源镜像
+ * ─────────────────────────────────────────────────
+ * 这 12 个变量与 src/theme/tokens.ts 的 ThemePalette / CSS_VAR_NAME 一一对应。
+ * `:root`                     → 浅色（默认，「太空实验室明亮控制台」）
+ * `:root[data-theme='dark']`  → 深空暗色（保留原视觉）
+ * 主题切换只改 <html data-theme>，组件层 sx 中的 var() 自动跟随，无需重渲染。
+ */
+
+:root {
+  /* 背景 */
+  --space-bg: #f5f7fa;
+  --space-card: #ffffff;
+  --space-elevated: #ffffff;
+  /* 描边 */
+  --space-border: #dce5e9;
+  /* 文字 */
+  --space-text: #101b22;
+  --space-muted: #5a6b75;
+  /* 品牌（primary 为交互色 #2E7D87，白字 4.77:1 达 WCAG AA；accent 仅作装饰） */
+  --brand-primary: #2e7d87;
+  --brand-accent: #6da8ae;
+  /* 语义状态 */
+  --status-warning: #b45309;
+  --status-danger: #dc2626;
+  --status-success: #047857;
+  --status-neutral: #546174;
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --space-bg: #0b1020;
+  --space-card: #141a2e;
+  --space-elevated: #1b2340;
+  --space-border: #243056;
+  --space-text: #e6eaf5;
+  --space-muted: #8b96b8;
+  --brand-primary: #3b82f6;
+  --brand-accent: #60a5fa;
+  --status-warning: #f59e0b;
+  --status-danger: #ef4444;
+  --status-success: #10b981;
+  --status-neutral: #64748b;
+
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--space-bg);
+  color: var(--space-text);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+/* 滚动条（随主题变化） */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--space-border);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--space-muted);
+}
+
+/* 移动端底部安全区 */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* 品牌底纹（登录页 / 应用壳背景）：浅色为极浅青光晕，深色为星空辉光 */
+.space-gradient {
+  background:
+    radial-gradient(
+      1200px 600px at 15% -10%,
+      color-mix(in srgb, var(--brand-accent) 24%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 500px at 90% 0%,
+      color-mix(in srgb, var(--brand-primary) 14%, transparent),
+      transparent 55%
+    ),
+    var(--space-bg);
+}
+
+/* 拖拽中的看板卡片 */
+.kanban-dragging {
+  opacity: 0.45;
+}

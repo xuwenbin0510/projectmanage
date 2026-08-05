@@ -1,0 +1,119 @@
+%% 太空字节项目管理系统 · 服务层类图 v1.0
+%% 架构师 高见远 · 对应《架构设计-重构v1.md》3.2 节
+classDiagram
+  class BaseRepository {
+    +String table
+    +findById(id) Row
+    +findAll(where, order, page) Row[]
+    +insert(data) Row
+    +update(id, patch) Row
+    +remove(id) bool
+    +withAudit(ctx, entityType) BaseRepository
+  }
+  class ProjectRepository
+  class WbsNodeRepository {
+    +findTree(projectId) Node[]
+    +findChildren(parentId) Node[]
+    +maxSiblingSeq(parentId) int
+  }
+  class ReviewRepository
+  BaseRepository <|-- ProjectRepository
+  BaseRepository <|-- WbsNodeRepository
+  BaseRepository <|-- ReviewRepository
+
+  class RbacService {
+    +can(user, action, ctx) bool
+    +projectRolesOf(openId, projectId) String[]
+    +assertPerm(user, action, ctx) void
+  }
+  class ClassifyService {
+    +suggest(input) ClassifyResult
+    +validateOverride(suggested, chosen, reason) void
+  }
+  class LifecycleService {
+    +instantiate(project, templateId) void
+    +advanceStage(user, projectId) Stage
+    +assertGatePassed(stageId) void
+  }
+  class GateService {
+    +toggleItem(user, itemId, checked) Item
+    +addCustomItem(user, gateId, content) Item
+    +decide(user, gateId, conclusion, comment) Gate
+    +isPassed(gateId) bool
+  }
+  class MilestoneService {
+    +create(user, dto) Milestone
+    +update(user, id, dto) Milestone
+    +assertDateRule(old, next) void
+    +applyDateChange(changeId) Milestone
+  }
+  class WbsService {
+    +getTree(projectId) TreeNode[]
+    +createNode(user, dto) Node
+    +moveNode(user, id, newParentId, index) Node
+    +reindexCodes(projectId) void
+    +checkGranularity(node, projectType) Warning[]
+  }
+  class BoardService {
+    +getBoard(projectId) Column[]
+    +changeStatus(user, nodeId, toStatus) Node
+    +assertWip(projectId, toStatus) void
+    +setWipLimit(user, projectId, limits) Config
+  }
+  class ReportService {
+    +draft(user, projectId, week) Report
+    +autoFillTasks(projectId, week, author) Task[]
+    +validate(dto) void
+    +submit(user, id) Report
+  }
+  class ReviewService {
+    +start(user, spec) Review
+    +decide(user, reviewId, action, comment) Review
+    +resolveApprovers(step) User[]
+    +myPending(openId) Review[]
+    -advanceSerial(review) void
+    -evaluateVeto(review) void
+  }
+  class ChangeService {
+    +route(dto) RouteResult
+    +create(user, dto) Change
+    +submit(user, id) Change
+    +onReviewClosed(reviewId, passed) void
+    +apply(change) void
+  }
+  class ProjectService {
+    +create(user, dto) Project
+    +transition(user, id, toStatus) Project
+    +assertClosable(id) Blocker[]
+    +assignRoles(user, id, roles) Member[]
+    +health(id) String
+  }
+  class AuditService {
+    +log(entry) void
+    +timeline(entityType, entityId) Log[]
+  }
+  class WorkbenchService {
+    +myProjects(openId) Project[]
+    +myTasks(openId) Node[]
+    +myApprovals(openId) Review[]
+    +reportReminders(openId) Reminder[]
+  }
+
+  ProjectService --> ClassifyService
+  ProjectService --> LifecycleService
+  ProjectService --> RbacService
+  LifecycleService --> GateService
+  MilestoneService --> ChangeService
+  ChangeService --> ReviewService
+  ChangeService --> MilestoneService
+  ReviewService --> RbacService
+  BoardService --> WbsService
+  ReportService --> WbsService
+  ProjectService --> AuditService
+  GateService --> AuditService
+  MilestoneService --> AuditService
+  ReviewService --> AuditService
+  ChangeService --> AuditService
+  ProjectService --> ProjectRepository
+  WbsService --> WbsNodeRepository
+  ReviewService --> ReviewRepository
