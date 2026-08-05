@@ -328,6 +328,10 @@ export function createProjects(users: User[], templates: LifecycleTemplate[]): P
         code: md.code,
         name: md.name,
         target: '',
+        // Q-1 安全默认：仅模板带 anchorStage 的（A 类）回填真实 stageId/anchor，
+        // B/C 类模板未预置 → null，由 PM 手工补锚。stageId 拼法与上方阶段循环一致（spec.id + 阶段 code）
+        stageId: md.anchorStage ? `${spec.id}-${md.anchorStage}` : null,
+        anchor: md.anchor ?? null,
         baselineDate,
         currentDate,
         delayDays,

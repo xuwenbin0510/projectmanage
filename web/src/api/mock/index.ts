@@ -14,6 +14,7 @@ import type {
   LifecycleTemplate,
   StageWithGate,
   Milestone,
+  MilestoneAnchor,
   CloseBlocker,
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView, BoardColumn } from '@/types/wbs';
@@ -51,6 +52,9 @@ import {
   closeBlockers,
   computeHealth,
   rollupProjectProgress,
+  resolveWbsRules,
+  validateWbsPlacement,
+  subtreeRelativeDepth,
 } from './rules';
 import {
   PROJECT_TRANSITIONS,
@@ -125,6 +129,34 @@ function assertWritable(db: MockDb, projectId: string): Project {
     throw new ApiError(ErrorCode.E_PROJECT_ARCHIVED);
   }
   return p;
+}
+
+/** 取项目生效的生命周期模板（WBS 规则解析用）；找不到返回 null，调用方回落 DEFAULT_WBS_RULES */
+function projectTemplateOf(db: MockDb, projectId: string): LifecycleTemplate | null {
+  const p = db.projects.find((x) => x.id === projectId);
+  if (!p) return null;
+  return db.templates.find((t) => t.id === p.templateId) ?? null;
+}
+
+/** 校验引用的阶段 / 里程碑属于同一项目，否则抛 E_VALIDATION */
+function assertSameProjectRef(
+  db: MockDb,
+  projectId: string,
+  refKind: 'stage' | 'milestone',
+  refId: string | null | undefined,
+): void {
+  if (!refId) return;
+  if (refKind === 'stage') {
+    const st = db.stages.find((s) => s.id === refId);
+    if (!st || st.projectId !== projectId) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '归属阶段不存在或不属于当前项目', { refKind, refId });
+    }
+  } else {
+    const ms = db.milestones.find((m) => m.id === refId);
+    if (!ms || ms.projectId !== projectId) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '关联里程碑不存在或不属于当前项目', { refKind, refId });
+    }
+  }
 }
 
 /** 写审计日志 */
@@ -537,8 +569,35 @@ export class MockApiClient implements ApiClient {
 
     /* ── 里程碑：用户覆盖优先，否则回退模板 ─────────────────
      * payload.milestones 三态：undefined = 按模板 / [] = 显式清空 / 非空 = 完全覆盖
+     *
+     * WBS 重构 D-1：里程碑落锚到生命周期阶段。
+     *   模板分支取 `md.anchorStage`（模板阶段 code），向导分支取 `d.stageCode`；
+     *   两者都拼成真实 stageId = `${projectId}-${stageCode}`，且**必须存在**才写入，
+     *   否则一律降级为 null（Q-1 安全默认：宁可不锚，也不写错锚脏数据）。
      */
-    const pushMs = (seq: number, code: string, name: string, target: string, date: string): void => {
+    /** 模板阶段 code → 已实例化的 stage id；用于里程碑落锚与骨架生成 */
+    const stageIdByCode = new Map<string, string>(
+      db.stages.filter((s) => s.projectId === id).map((s) => [s.code, s.id]),
+    );
+    /** 把「模板阶段 code」解析成真实 stageId + anchor；解析不出来则整体置 null */
+    const resolveAnchor = (
+      stageCode: string | null | undefined,
+      anchor: MilestoneAnchor | null | undefined,
+    ): { stageId: string | null; anchor: MilestoneAnchor | null } => {
+      if (!stageCode) return { stageId: null, anchor: null };
+      const stageId = stageIdByCode.get(stageCode) ?? null;
+      if (!stageId) return { stageId: null, anchor: null };
+      return { stageId, anchor: anchor ?? 'end' };
+    };
+
+    const pushMs = (
+      seq: number,
+      code: string,
+      name: string,
+      target: string,
+      date: string,
+      bind: { stageId: string | null; anchor: MilestoneAnchor | null },
+    ): void => {
       db.milestones.push({
         // 用索引拼 id，不用 code —— 用户可能造出重复 code
         id: `${id}-MS${seq}`,
@@ -546,6 +605,8 @@ export class MockApiClient implements ApiClient {
         code,
         name,
         target,
+        stageId: bind.stageId,
+        anchor: bind.anchor,
         baselineDate: date, // 创建即基线
         currentDate: date,
         delayDays: 0,
@@ -563,7 +624,14 @@ export class MockApiClient implements ApiClient {
     if (drafts === undefined) {
       // 分支 1：兼容既有调用（测试 / 种子数据）→ 按模板实例化
       tpl.definition.milestones.forEach((md, i) =>
-        pushMs(i + 1, md.code, md.name, '', addDays(payload.planStart, md.offsetDays)),
+        pushMs(
+          i + 1,
+          md.code,
+          md.name,
+          '',
+          addDays(payload.planStart, md.offsetDays),
+          resolveAnchor(md.anchorStage, md.anchor),
+        ),
       );
     } else {
       // 分支 2：用户覆盖（[] 天然什么都不生成 —— 即「显式清空」）；脏数据兜底修补，不抛错
@@ -571,7 +639,45 @@ export class MockApiClient implements ApiClient {
         const code = (d.code || `M${i + 1}`).trim();
         const name = (d.name || `里程碑 ${i + 1}`).trim();
         const date = d.date || payload.planStart;
-        pushMs(i + 1, code, name, (d.target ?? '').trim(), date);
+        pushMs(i + 1, code, name, (d.target ?? '').trim(), date, resolveAnchor(d.stageCode, d.anchor));
+      });
+    }
+
+    /* ── WBS 骨架预生成（决策 D-3 方案丙 + Q-2 per-stage） ──────
+     * 建项事务内按模板阶段逐个生成 `nodeType:'stage'` 根节点（前端文案「工作分区」），
+     * 并回填 lifecycleStageId，使新项目一进 WBS 页就有「阶段为脊」的骨架，
+     * 而不是空树 + 用户自由建根导致的结构漂移。
+     * 三类项目统一 per-stage（含 B 类，Q-2）；B 类仅是 requireStageBinding=false。
+     */
+    const wbsRules = resolveWbsRules(tpl);
+    if (wbsRules.skeleton === 'per-stage') {
+      tpl.definition.stages.forEach((sd, idx) => {
+        const stageId = stageIdByCode.get(sd.code) ?? null;
+        db.wbsNodes.push({
+          id: `${id}-WS${idx + 1}`,
+          projectId: id,
+          parentId: null,
+          wbsCode: String(idx + 1),
+          level: 1,
+          nodeType: 'stage',
+          lifecycleStageId: stageId,
+          name: sd.name,
+          description: `由 ${tpl.name} 模板阶段「${sd.code} ${sd.name}」自动生成`,
+          owner: '',
+          ownerName: '',
+          estimateDays: 0,
+          actualDays: 0,
+          startDate: '',
+          dueDate: '',
+          status: '待办',
+          progress: 0,
+          boardOrder: idx,
+          isCritical: false,
+          milestoneId: null,
+          createdBy: me.openId,
+          createdAt: ts,
+          updatedAt: ts,
+        });
       });
     }
 
@@ -843,6 +949,27 @@ export class MockApiClient implements ApiClient {
       ]);
     }
 
+    // 归属阶段 / 锚点：补选或改锚，不触发单向日期约束；stageId 须属于同一项目
+    if (payload.stageId !== undefined || payload.anchor !== undefined) {
+      if (payload.stageId !== undefined) {
+        assertSameProjectRef(db, ms.projectId, 'stage', payload.stageId);
+      }
+      const nextStage = payload.stageId !== undefined ? payload.stageId : ms.stageId;
+      const nextAnchor = nextStage
+        ? payload.anchor !== undefined
+          ? payload.anchor
+          : ms.anchor
+        : null;
+      if (nextStage !== ms.stageId || nextAnchor !== ms.anchor) {
+        const before = `${ms.stageId ?? ''}${ms.anchor ? `/${ms.anchor}` : ''}`;
+        ms.stageId = nextStage;
+        ms.anchor = nextAnchor;
+        audit(db, me, 'milestone', id, 'update', ms.projectId, `里程碑 ${ms.code} 归属阶段调整`, [
+          { field: 'stageId', label: '归属阶段', before, after: `${ms.stageId ?? ''}${ms.anchor ? `/${ms.anchor}` : ''}` },
+        ]);
+      }
+    }
+
     if (payload.done !== undefined && payload.done !== ms.done) {
       ms.done = payload.done;
       ms.doneAt = payload.done ? today() : null;
@@ -875,19 +1002,42 @@ export class MockApiClient implements ApiClient {
     );
   }
 
-  /** @prd P0-06 新建 WBS 节点（自动编码） */
+  /** @prd P0-06 新建 WBS 节点（自动编码 + 层级校验 R-1/R-2/R-6） */
   async createWbsNode(projectId: string, payload: WbsNodePayload): Promise<WbsNode> {
     await delay();
     const db = getDb();
     assertWritable(db, projectId);
     const me = assertCan(db, 'wbs.edit', projectId);
 
+    // 父节点先解析（跨项目引用直接拒）
+    const parent = payload.parentId ? (db.wbsNodes.find((n) => n.id === payload.parentId) ?? null) : null;
+    if (payload.parentId && !parent) throw new ApiError(ErrorCode.E_NOT_FOUND, '父节点不存在');
+    if (parent && parent.projectId !== projectId) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '父节点不属于当前项目', { parentId: parent.id });
+    }
+
+    // R-2 父子类型 / R-1 深度 / R-6 stage 绑定 —— fail-fast，先于 R-5 叶子完整性
+    const rules = resolveWbsRules(projectTemplateOf(db, projectId));
+    const placementError = validateWbsPlacement(
+      { nodeType: payload.nodeType, parent, lifecycleStageId: payload.lifecycleStageId ?? null },
+      rules,
+    );
+    if (placementError) {
+      throw new ApiError(placementError.code, placementError.message, placementError.data);
+    }
+
+    // R-5 叶子完整性（位置后移到结构校验之后）
     if (payload.nodeType === 'task' && (!payload.owner || !payload.estimateDays)) {
       throw new ApiError(ErrorCode.E_WBS_LEAF_INCOMPLETE);
     }
 
+    // 归属阶段 / 关联里程碑 须属于同一项目（跨项目一律 E_VALIDATION）
+    const lifecycleStageId = payload.nodeType === 'stage' ? (payload.lifecycleStageId ?? null) : null;
+    assertSameProjectRef(db, projectId, 'stage', lifecycleStageId);
+    const milestoneId = payload.nodeType === 'stage' ? null : (payload.milestoneId ?? null);
+    assertSameProjectRef(db, projectId, 'milestone', milestoneId);
+
     const siblings = db.wbsNodes.filter((n) => n.projectId === projectId && n.parentId === payload.parentId);
-    const parent = payload.parentId ? db.wbsNodes.find((n) => n.id === payload.parentId) : null;
     const wbsCode = nextChildCode(parent?.wbsCode ?? null, siblings.map((s) => s.wbsCode));
     const owner = payload.owner ?? '';
     const u = db.users.find((x) => x.openId === owner);
@@ -900,6 +1050,8 @@ export class MockApiClient implements ApiClient {
       wbsCode,
       level: wbsCode.split('.').length,
       nodeType: payload.nodeType,
+      // 仅工作分区（stage）可绑定生命周期阶段；其余类型强制 null
+      lifecycleStageId,
       name: payload.name,
       description: payload.description ?? '',
       owner,
@@ -912,7 +1064,7 @@ export class MockApiClient implements ApiClient {
       progress: payload.progress ?? 0,
       boardOrder: db.wbsNodes.filter((n) => n.projectId === projectId).length,
       isCritical: false,
-      milestoneId: null,
+      milestoneId,
       createdBy: me.openId,
       createdAt: ts,
       updatedAt: ts,
@@ -931,6 +1083,34 @@ export class MockApiClient implements ApiClient {
     const me = assertCan(db, 'wbs.edit', node.projectId);
 
     const diff: AuditDiffEntry[] = [];
+
+    // R-4 类型锁：已有子节点的节点不可改 nodeType
+    const children = db.wbsNodes.filter((n) => n.parentId === node.id);
+    if (payload.nodeType !== undefined && payload.nodeType !== node.nodeType) {
+      if (children.length > 0) {
+        throw new ApiError(ErrorCode.E_WBS_TYPE_LOCKED, undefined, { nodeId: id, childCount: children.length });
+      }
+      // 无子节点时允许改类型，但须重新满足父子白名单（对其父重校验）
+      const rules = resolveWbsRules(projectTemplateOf(db, node.projectId));
+      const parent = node.parentId ? (db.wbsNodes.find((n) => n.id === node.parentId) ?? null) : null;
+      const placementError = validateWbsPlacement(
+        {
+          nodeType: payload.nodeType,
+          parent,
+          lifecycleStageId: payload.nodeType === 'stage' ? node.lifecycleStageId : null,
+        },
+        rules,
+      );
+      if (placementError) {
+        throw new ApiError(placementError.code, placementError.message, placementError.data);
+      }
+      const beforeType = node.nodeType;
+      node.nodeType = payload.nodeType;
+      // 类型变更后旧绑定若不再适用则清空
+      if (node.nodeType !== 'stage') node.lifecycleStageId = null;
+      diff.push({ field: 'nodeType', label: '节点类型', before: beforeType, after: node.nodeType });
+    }
+
     if (payload.name !== undefined && payload.name !== node.name) {
       diff.push({ field: 'name', label: '名称', before: node.name, after: payload.name });
       node.name = payload.name;
@@ -961,6 +1141,37 @@ export class MockApiClient implements ApiClient {
       node.progress = Math.max(0, Math.min(100, payload.progress));
       node.actualDays = Number(((node.estimateDays * node.progress) / 100).toFixed(1));
     }
+
+    // lifecycleStageId：仅 stage 可绑定；跨项目引用拒；非 stage 强制 null
+    if (payload.lifecycleStageId !== undefined) {
+      const nextStage = node.nodeType === 'stage' ? (payload.lifecycleStageId ?? null) : null;
+      if (nextStage !== node.lifecycleStageId) {
+        assertSameProjectRef(db, node.projectId, 'stage', nextStage);
+        diff.push({
+          field: 'lifecycleStageId',
+          label: '归属阶段',
+          before: node.lifecycleStageId ?? '',
+          after: nextStage ?? '',
+        });
+        node.lifecycleStageId = nextStage;
+      }
+    }
+
+    // milestoneId：package / task 可挂；跨项目引用拒；stage 强制 null
+    if (payload.milestoneId !== undefined) {
+      const nextMs = node.nodeType === 'stage' ? null : (payload.milestoneId ?? null);
+      if (nextMs !== node.milestoneId) {
+        assertSameProjectRef(db, node.projectId, 'milestone', nextMs);
+        diff.push({
+          field: 'milestoneId',
+          label: '关联里程碑',
+          before: node.milestoneId ?? '',
+          after: nextMs ?? '',
+        });
+        node.milestoneId = nextMs;
+      }
+    }
+
     if (node.nodeType === 'task' && (!node.owner || !node.estimateDays)) {
       throw new ApiError(ErrorCode.E_WBS_LEAF_INCOMPLETE);
     }
@@ -976,6 +1187,16 @@ export class MockApiClient implements ApiClient {
     const node = db.wbsNodes.find((n) => n.id === id) ?? nf();
     assertWritable(db, node.projectId);
     const me = assertCan(db, 'wbs.edit', node.projectId);
+
+    // 已绑定生命周期阶段的非空工作分区禁止删除（骨架保护）
+    const children = db.wbsNodes.filter((n) => n.parentId === node.id);
+    if (node.nodeType === 'stage' && node.lifecycleStageId && children.length > 0) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '该工作分区已绑定生命周期阶段且仍有子节点，不能删除', {
+        reason: 'stage_not_empty',
+        nodeId: node.id,
+        childCount: children.length,
+      });
+    }
 
     const toDelete = new Set<string>([id]);
     let grew = true;
@@ -993,7 +1214,7 @@ export class MockApiClient implements ApiClient {
     saveDb();
   }
 
-  /** @prd P0-06 拖拽移动节点（防循环引用 + 重排编码） */
+  /** @prd P0-06 拖拽移动节点（防循环 + 父子类型 + 子树整体深度校验 + 重排编码） */
   async moveWbsNode(id: string, newParentId: string | null, index: number): Promise<WbsNode[]> {
     await delay();
     const db = getDb();
@@ -1008,8 +1229,25 @@ export class MockApiClient implements ApiClient {
       cursor = db.wbsNodes.find((n) => n.id === cursor)?.parentId ?? null;
     }
 
+    // 目标父节点归属校验
+    const parent = newParentId ? (db.wbsNodes.find((n) => n.id === newParentId) ?? null) : null;
+    if (newParentId && !parent) throw new ApiError(ErrorCode.E_NOT_FOUND, '目标父节点不存在');
+    if (parent && parent.projectId !== node.projectId) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '目标父节点不属于当前项目', { parentId: parent.id });
+    }
+
+    // R-2 父子类型 + R-1 子树整体深度（把深树搬到深处绕过 maxDepth 的路径被显式拦截）
+    const rules = resolveWbsRules(projectTemplateOf(db, node.projectId));
+    const subDepth = subtreeRelativeDepth(db.wbsNodes, node.id);
+    const placementError = validateWbsPlacement(
+      { nodeType: node.nodeType, parent, lifecycleStageId: node.lifecycleStageId, subtreeDepth: subDepth },
+      rules,
+    );
+    if (placementError) {
+      throw new ApiError(placementError.code, placementError.message, placementError.data);
+    }
+
     node.parentId = newParentId;
-    const parent = newParentId ? db.wbsNodes.find((n) => n.id === newParentId) : null;
     const siblings = db.wbsNodes
       .filter((n) => n.projectId === node.projectId && n.parentId === newParentId && n.id !== id)
       .sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode));

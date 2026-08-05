@@ -1,4 +1,5 @@
 {
+  "_note": "本文件为草拟版，非运行时生效模板；运行时以 web/src/api/mock/fixtures/templates.ts 为准（勿据此文件写代码）",
   "id": "LT-A-1",
   "projectType": "A",
   "version": 1,

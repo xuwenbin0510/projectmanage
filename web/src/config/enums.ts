@@ -11,7 +11,8 @@ import type {
   MilestoneStatus,
   Health,
 } from '@/types/project';
-import type { TaskStatus, WbsNodeType } from '@/types/wbs';
+import type { TaskStatus, WbsNodeType, WbsRules } from '@/types/wbs';
+import type { MilestoneAnchor } from '@/types/project';
 import type { ReviewType, ReviewMode, ReviewStatus, ReviewStepStatus } from '@/types/review';
 import type { ChangeType, ChangeRoute, ChangeStatus } from '@/types/change';
 import type { AuditAction, AuditEntityType } from '@/types/audit';
@@ -132,14 +133,46 @@ export const GATE_ICON: Record<GateStatus, string> = {
 
 export const MILESTONE_STATUSES: MilestoneStatus[] = ['未开始', '进行中', '已达成', '已逾期'];
 
+/** 里程碑阶段锚点文案（WBS 重构 D-1） */
+export const MILESTONE_ANCHOR_LABEL: Record<MilestoneAnchor, string> = {
+  start: '阶段启动',
+  mid: '阶段中段',
+  end: '阶段收口',
+};
+
+export const MILESTONE_ANCHORS: MilestoneAnchor[] = ['start', 'mid', 'end'];
+
 /* ── WBS / 看板 ───────────────────────────────────── */
 
 export const TASK_STATUSES: TaskStatus[] = ['待办', '进行中', '待评审', '完成', '阻塞'];
 
+/**
+ * WBS 节点类型文案。
+ * ⚠️ 决策 D-4：`stage` 前端一律显示「工作分区」，与「生命周期阶段（project_stages）」
+ * 在语义上区分开；枚举值 `'stage'` 本身不改，避免存量数据与接口契约破坏。
+ */
 export const WBS_NODE_TYPE_LABEL: Record<WbsNodeType, string> = {
-  stage: '阶段',
+  stage: '工作分区',
   package: '工作包',
   task: '任务',
+};
+
+/**
+ * WBS 层级规则缺省值（决策 D-2：三类项目一致强制，模板只覆盖差异项）
+ * - `requireStageBinding` 缺省 true；B 类模板覆盖为 false
+ * - 任何业务代码都应通过 `resolveWbsRules(template)` 取值，不要直接读本常量做判断
+ */
+export const DEFAULT_WBS_RULES: WbsRules = {
+  maxDepth: 4,
+  allowRootTask: false,
+  requireStageBinding: true,
+  skeleton: 'per-stage',
+  childTypes: {
+    root: ['stage', 'package'],
+    stage: ['package', 'task'],
+    package: ['task'],
+    task: [],
+  },
 };
 
 /** 粒度上限（人日）：A 类 >5 告警，B 类 >2 告警，C 类沿用 A */

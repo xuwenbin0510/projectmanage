@@ -1,4 +1,5 @@
 {
+  "_note": "本文件为草拟版，非运行时生效模板；运行时以 web/src/api/mock/fixtures/templates.ts 为准（本文件 5 阶段 6 里程碑，运行时为 5 阶段 5 里程碑，已分叉，勿据此文件写代码）",
   "id": "LT-C-1",
   "projectType": "C",
   "version": 1,

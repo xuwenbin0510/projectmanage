@@ -168,15 +168,23 @@ CREATE TABLE IF NOT EXISTS gate_checklist_items (
 --    PRD: P0-05 / P0-14
 --    ⚠️ baseline_date 建表后任何路径不可 UPDATE（Repository 字段白名单强制）
 --    ⚠️ planned_date 仅 change.service.applyDateChange() 可写
+--    ⚠️ WBS 重构 D-1（方案 B）：里程碑锚定到生命周期阶段 —— 新增 stage_id / anchor
+--    ⚠️ WBS 重构：原 `CHECK (planned_date >= baseline_date)` 已删除。
+--       方向规则的真实语义是「延期(晚于基线)必须走变更单，提前(早于基线)可直接改」，
+--       DB 层硬拦提前与服务层实现冲突（PRD 三层矛盾之一），故下沉由服务层单点裁决。
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS milestones (
   id             TEXT PRIMARY KEY,                         -- M + base36
   project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   code           TEXT NOT NULL,                            -- M1..M7
   name           TEXT NOT NULL,
+  stage_id       TEXT REFERENCES project_stages(id) ON DELETE SET NULL,
+                                                           -- 所属生命周期阶段；NULL = 未锚定（B/C 类模板缺省、存量数据）
+  anchor         TEXT CHECK (anchor IN ('start','mid','end')),
+                                                           -- 阶段内锚点位置；stage_id 为 NULL 时必为 NULL
   baseline_date  TEXT NOT NULL,                            -- 原始基线，永不修改
   planned_date   TEXT NOT NULL,                            -- 当前计划；建表时 = baseline_date
-  delay_days     INTEGER NOT NULL DEFAULT 0,               -- planned_date - baseline_date（服务层派生写入，永远 >= 0）
+  delay_days     INTEGER NOT NULL DEFAULT 0,               -- planned_date - baseline_date（服务层派生写入；正数=延期，负数=提前）
   status         TEXT NOT NULL DEFAULT '未开始'
                  CHECK (status IN ('未开始','进行中','已达成','已逾期')),
   done           INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0,1)),
@@ -184,13 +192,16 @@ CREATE TABLE IF NOT EXISTS milestones (
   last_change_id TEXT REFERENCES changes(id),              -- 最近一次改动 planned_date 的变更单
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL,
-  deleted_at     TEXT,
-  CHECK (planned_date >= baseline_date)                    -- 数据库层兜底：不可提前（服务层已拦，此为最后一道）
+  deleted_at     TEXT
 );
 
 -- =============================================================================
 -- 9. wbs_nodes —— WBS 树（原 tasks 表升级；自引用；看板 = 叶子节点按 status 分组视图）
 --    PRD: P0-06 / P0-07
+--    ⚠️ WBS 重构 D-1（方案 B）：node_type='stage' 的节点（前端文案「工作分区」）
+--       通过 lifecycle_stage_id 绑定到 project_stages，形成「阶段为脊」的结构。
+--    ⚠️ WBS 重构 D-2：层级规则（父子类型 / 最大深度 / 是否必须绑阶段）由
+--       lifecycle_templates.definition.wbsRules 驱动，DDL 不表达，服务层 R11 强制。
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS wbs_nodes (
   id           TEXT PRIMARY KEY,                           -- W + base36
@@ -200,6 +211,8 @@ CREATE TABLE IF NOT EXISTS wbs_nodes (
   level        INTEGER NOT NULL,                           -- 1..n，= wbs_code 段数
   node_type    TEXT NOT NULL DEFAULT 'task'
                CHECK (node_type IN ('stage','package','task')),
+  lifecycle_stage_id TEXT REFERENCES project_stages(id) ON DELETE SET NULL,
+                                                           -- 仅 node_type='stage' 可有值；其余类型服务层强制置 NULL
   name         TEXT NOT NULL,
   description  TEXT,
   owner        TEXT,                                       -- users.open_id；叶子必填（服务层强制）
@@ -434,8 +447,11 @@ CREATE INDEX IF NOT EXISTS idx_gate_project   ON quality_gates(project_id);
 CREATE INDEX IF NOT EXISTS idx_gate_stage     ON quality_gates(stage_id);
 CREATE INDEX IF NOT EXISTS idx_item_gate      ON gate_checklist_items(gate_id, seq);
 CREATE INDEX IF NOT EXISTS idx_ms_project     ON milestones(project_id, planned_date);
+CREATE INDEX IF NOT EXISTS idx_ms_stage       ON milestones(stage_id);
 CREATE INDEX IF NOT EXISTS idx_wbs_project    ON wbs_nodes(project_id, wbs_code);
 CREATE INDEX IF NOT EXISTS idx_wbs_parent     ON wbs_nodes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_wbs_lcstage    ON wbs_nodes(lifecycle_stage_id);
+CREATE INDEX IF NOT EXISTS idx_wbs_milestone  ON wbs_nodes(milestone_id);
 CREATE INDEX IF NOT EXISTS idx_wbs_owner      ON wbs_nodes(owner, status);
 CREATE INDEX IF NOT EXISTS idx_wbs_board      ON wbs_nodes(project_id, status, board_order);
 CREATE INDEX IF NOT EXISTS idx_report_project ON reports(project_id, week);
@@ -470,4 +486,65 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_change_code ON changes(project_id, code);
 --    R8  wbs_nodes 移动不得成环                        → wbs.service.move() 祖先链校验
 --    R9  WIP 上限                                     → board.service.assertWip()
 --    R10 一票否决 / 结项拦截 / 结项后只读              → review.service / project.service / rbac 中间件
+--    R11 WBS 父子类型 / 最大深度 / 根层类型            → wbs.service.validatePlacement()（读 wbsRules）
+--    R12 node_type='stage' 必绑 lifecycle_stage_id     → 同上；A/C 强制，B 由 wbsRules.requireStageBinding=false 放行
+--    R13 里程碑方向：晚于基线必须走变更单，早于基线直改  → milestone.service.reschedule()
+--        （原 DB CHECK (planned_date >= baseline_date) 已删，见第 8 表注释）
+-- =============================================================================
+
+-- =============================================================================
+--  ⚙️ 迁移脚本片段 —— v2 → v3（WBS / 阶段 / 里程碑关系重构）
+--     SQLite 不支持 DROP CONSTRAINT，删 CHECK 必须「重建表」；
+--     加列可用 ALTER TABLE ADD COLUMN（SQLite 支持，且新列必须可空 / 有常量默认值）。
+--     ⚠️ 执行前务必先备份 .db 文件（回滚窗口 = 备份文件本身）。
+-- =============================================================================
+-- PRAGMA wal_checkpoint(TRUNCATE);          -- 1) 落盘 WAL，确保备份文件自洽
+-- .backup 'pm.db.bak-YYYYMMDD'              -- 2) 冷备（回滚窗口）
+-- PRAGMA foreign_keys = OFF;                -- 3) 重建表期间关外键（SQLite 要求在事务外设置）
+-- BEGIN IMMEDIATE;
+--
+-- -- 3.1 wbs_nodes：仅加列，无需重建
+-- ALTER TABLE wbs_nodes ADD COLUMN lifecycle_stage_id TEXT REFERENCES project_stages(id) ON DELETE SET NULL;
+--
+-- -- 3.2 milestones：需删 CHECK → 重建表
+-- CREATE TABLE milestones__new (
+--   id             TEXT PRIMARY KEY,
+--   project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+--   code           TEXT NOT NULL,
+--   name           TEXT NOT NULL,
+--   stage_id       TEXT REFERENCES project_stages(id) ON DELETE SET NULL,
+--   anchor         TEXT CHECK (anchor IN ('start','mid','end')),
+--   baseline_date  TEXT NOT NULL,
+--   planned_date   TEXT NOT NULL,
+--   delay_days     INTEGER NOT NULL DEFAULT 0,
+--   status         TEXT NOT NULL DEFAULT '未开始'
+--                  CHECK (status IN ('未开始','进行中','已达成','已逾期')),
+--   done           INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0,1)),
+--   done_at        TEXT,
+--   last_change_id TEXT REFERENCES changes(id),
+--   created_at     TEXT NOT NULL,
+--   updated_at     TEXT NOT NULL,
+--   deleted_at     TEXT
+-- );
+-- INSERT INTO milestones__new
+--   (id, project_id, code, name, stage_id, anchor, baseline_date, planned_date,
+--    delay_days, status, done, done_at, last_change_id, created_at, updated_at, deleted_at)
+-- SELECT
+--    id, project_id, code, name, NULL,     NULL,   baseline_date, planned_date,
+--    delay_days, status, done, done_at, last_change_id, created_at, updated_at, deleted_at
+-- FROM milestones;                          -- 存量一律 stage_id / anchor = NULL（Q-1 安全默认，由 PM 手工补锚）
+-- DROP TABLE milestones;
+-- ALTER TABLE milestones__new RENAME TO milestones;
+--
+-- -- 3.3 重建索引（DROP TABLE 会连带删除其索引）
+-- CREATE INDEX IF NOT EXISTS idx_ms_project ON milestones(project_id, planned_date);
+-- CREATE INDEX IF NOT EXISTS idx_ms_stage   ON milestones(stage_id);
+-- CREATE UNIQUE INDEX IF NOT EXISTS uq_ms_code ON milestones(project_id, code);
+-- CREATE INDEX IF NOT EXISTS idx_wbs_lcstage   ON wbs_nodes(lifecycle_stage_id);
+-- CREATE INDEX IF NOT EXISTS idx_wbs_milestone ON wbs_nodes(milestone_id);
+--
+-- COMMIT;
+-- PRAGMA foreign_key_check;                 -- 4) 必须返回空结果集，否则立刻用备份回滚
+-- PRAGMA foreign_keys = ON;
+-- PRAGMA wal_checkpoint(TRUNCATE);          -- 5) 再次落盘
 -- =============================================================================

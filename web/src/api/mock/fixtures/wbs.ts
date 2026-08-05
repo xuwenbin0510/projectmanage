@@ -30,17 +30,19 @@ const P0012: NodeSpec[] = [
   ['1.2.2', '硬件接口 ICD 定义', 'task', OPEN_IDS.wangqiang, 8, 40, '待评审', -4],
   ['1.2.3', '详细设计评审准备', 'task', OPEN_IDS.wudi, 2, 100, '完成', -8],
   ['1.3', '开发实施', 'package', '', 0, 0, '进行中', 60],
-  ['1.3.1', '数据接入模块', 'package', '', 0, 0, '进行中', 20],
-  ['1.3.1.1', '采集协议解析', 'task', OPEN_IDS.wudi, 4, 60, '进行中', 5],
-  ['1.3.1.2', '数据入库服务', 'task', OPEN_IDS.zhengshuang, 3, 30, '进行中', 7],
-  ['1.3.2', '采集模块开发', 'task', OPEN_IDS.wudi, 5, 0, '待办', 12],
-  ['1.3.3', '告警引擎开发', 'task', OPEN_IDS.zhengshuang, 4, 0, '待办', 16],
-  ['1.3.4', '前端可视化开发', 'task', '', 0, 0, '待办', 20],
-  ['1.3.5', '联调脚本编写', 'task', OPEN_IDS.wudi, 2, 20, '进行中', 9],
-  ['1.3.6', '性能压测准备', 'task', OPEN_IDS.xuwenbin, 3, 10, '进行中', -3],
-  ['1.4', '集成测试', 'package', '', 0, 0, '未开始' as TaskStatus extends never ? never : TaskStatus, 90],
-  ['1.4.1', '集成测试用例编写', 'task', OPEN_IDS.xuwenbin, 3, 0, '待办', 4],
-  ['1.4.2', '缺陷回归', 'task', OPEN_IDS.xuwenbin, 2, 0, '待办', -1],
+  // 存量违规修正（WBS 重构 D-2）：原 1.3.1「数据接入模块」package 挂在 package(1.3) 下违反
+  // 「package→task」白名单；提升为根级 package（根节点 1 为 stage，允许挂 package），顺延集成测试编码
+  ['1.4', '数据接入模块', 'package', '', 0, 0, '进行中', 20],
+  ['1.4.1', '采集协议解析', 'task', OPEN_IDS.wudi, 4, 60, '进行中', 5],
+  ['1.4.2', '数据入库服务', 'task', OPEN_IDS.zhengshuang, 3, 30, '进行中', 7],
+  ['1.3.1', '采集模块开发', 'task', OPEN_IDS.wudi, 5, 0, '待办', 12],
+  ['1.3.2', '告警引擎开发', 'task', OPEN_IDS.zhengshuang, 4, 0, '待办', 16],
+  ['1.3.3', '前端可视化开发', 'task', '', 0, 0, '待办', 20],
+  ['1.3.4', '联调脚本编写', 'task', OPEN_IDS.wudi, 2, 20, '进行中', 9],
+  ['1.3.5', '性能压测准备', 'task', OPEN_IDS.xuwenbin, 3, 10, '进行中', -3],
+  ['1.5', '集成测试', 'package', '', 0, 0, '未开始' as TaskStatus extends never ? never : TaskStatus, 90],
+  ['1.5.1', '集成测试用例编写', 'task', OPEN_IDS.xuwenbin, 3, 0, '待办', 4],
+  ['1.5.2', '缺陷回归', 'task', OPEN_IDS.xuwenbin, 2, 0, '待办', -1],
 ];
 
 const P0015: NodeSpec[] = [
@@ -116,6 +118,8 @@ export function createWbs(users: User[]): WbsBundle {
         wbsCode: code,
         level: code.split('.').length,
         nodeType,
+        // 存量种子节点名称不可靠，不按名称猜测阶段归属；统一 null，由 UI 提示补选
+        lifecycleStageId: null,
         name,
         description: '',
         owner,
@@ -127,7 +131,7 @@ export function createWbs(users: User[]): WbsBundle {
         status,
         progress,
         boardOrder: i,
-        isCritical: code.startsWith('1.2') || code.startsWith('1.3.1'),
+        isCritical: code.startsWith('1.2') || code.startsWith('1.4'),
         milestoneId: null,
         createdBy: OPEN_IDS.xuwenbin,
         createdAt: ts,

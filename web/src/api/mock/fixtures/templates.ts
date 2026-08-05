@@ -2,8 +2,21 @@ import type { LifecycleTemplate } from '@/types/project';
 import { nowIso } from '@/utils/date';
 
 /**
- * A / B / C 三套生命周期模板（阶段 + 质量门 + 检查项 + 里程碑骨架 + 文档清单）
- * @prd P0-02 P0-03
+ * A / B / C 三套生命周期模板（阶段 + 质量门 + 检查项 + 里程碑骨架 + WBS 规则 + 文档清单）
+ * @prd P0-02 P0-03 P0-05 P0-06
+ *
+ * ⚠️ 本文件是**运行时生效**的模板定义。`docs/lifecycle/*.json` 为架构师草拟版，
+ *    阶段数与里程碑数与此处已发生分叉（B: 5阶段3碑 vs 草拟 4阶段6碑；C: 5阶段5碑 vs 草拟 5阶段6碑），
+ *    以本文件为准。
+ *
+ * 【里程碑锚点 · 决策 Q-1「安全默认」】
+ *    仅 A 类填 `anchorStage` / `anchor`（映射见架构 §2.4）。B / C 类刻意留空，
+ *    实例化后 `stageId = null`、`anchor = null`，由 PM 在里程碑页手工补锚。
+ *    原因：草拟版 json 与运行时阶段集合不一致，硬填会静默产生错锚脏数据。
+ *
+ * 【WBS 规则 · 决策 D-2】
+ *    三类项目层级规则一致强制，模板只声明**差异项**，其余（尤其是 childTypes）
+ *    由 `DEFAULT_WBS_RULES` 兜底，禁止在业务代码里散落 `if (type === 'B')`。
  */
 export function createTemplates(): LifecycleTemplate[] {
   const ts = nowIso();
@@ -103,15 +116,23 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
       ],
+      // 锚点映射见架构 §2.4：M1..M5 逐阶段收口，M6/M7 同落 S6（验收 → 结项）
       milestones: [
-        { code: 'M1', name: '项目启动', offsetDays: 0 },
-        { code: 'M2', name: '需求基线冻结', offsetDays: 30 },
-        { code: 'M3', name: '设计评审通过', offsetDays: 70 },
-        { code: 'M4', name: '首件调试完成', offsetDays: 125 },
-        { code: 'M5', name: '集成测试通过', offsetDays: 170 },
-        { code: 'M6', name: '客户验收通过', offsetDays: 210 },
-        { code: 'M7', name: '项目结项', offsetDays: 232 },
+        { code: 'M1', name: '项目启动', offsetDays: 0, anchorStage: 'S1', anchor: 'end' },
+        { code: 'M2', name: '需求基线冻结', offsetDays: 30, anchorStage: 'S2', anchor: 'end' },
+        { code: 'M3', name: '设计评审通过', offsetDays: 70, anchorStage: 'S3', anchor: 'end' },
+        { code: 'M4', name: '首件调试完成', offsetDays: 125, anchorStage: 'S4', anchor: 'end' },
+        { code: 'M5', name: '集成测试通过', offsetDays: 170, anchorStage: 'S5', anchor: 'end' },
+        { code: 'M6', name: '客户验收通过', offsetDays: 210, anchorStage: 'S6', anchor: 'mid' },
+        { code: 'M7', name: '项目结项', offsetDays: 232, anchorStage: 'S6', anchor: 'end' },
       ],
+      // childTypes / maxDepth 之外的项由 DEFAULT_WBS_RULES 兜底
+      wbsRules: {
+        maxDepth: 4,
+        allowRootTask: false,
+        requireStageBinding: true,
+        skeleton: 'per-stage',
+      },
       docs: [
         '立项申请表',
         '项目章程',
@@ -200,11 +221,20 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
       ],
+      // Q-1 安全默认：B 类不预置 anchorStage，实例化后由 PM 手工补锚
       milestones: [
         { code: 'M1', name: 'Sprint 启动', offsetDays: 0 },
         { code: 'M2', name: '特性冻结', offsetDays: 8 },
         { code: 'M3', name: '版本发布', offsetDays: 14 },
       ],
+      // D-2：B 类**不豁免**层级规则，唯一差异是工作分区可不绑生命周期阶段
+      // Q-2：骨架仍按 5 个阶段全量预生成（skeleton='per-stage'）
+      wbsRules: {
+        maxDepth: 4,
+        allowRootTask: false,
+        requireStageBinding: false,
+        skeleton: 'per-stage',
+      },
       docs: ['产品需求文档 PRD', 'Sprint 计划', '发布说明', 'Sprint 回顾纪要'],
     },
   };
@@ -284,6 +314,7 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
       ],
+      // Q-1 安全默认：C 类运行时阶段集合与草拟版 json 不一致，暂不预置 anchorStage
       milestones: [
         { code: 'M1', name: '项目启动', offsetDays: 0 },
         { code: 'M2', name: '方案定稿', offsetDays: 25 },
@@ -291,6 +322,12 @@ export function createTemplates(): LifecycleTemplate[] {
         { code: 'M4', name: '施工完成', offsetDays: 100 },
         { code: 'M5', name: '验收移交', offsetDays: 130 },
       ],
+      wbsRules: {
+        maxDepth: 4,
+        allowRootTask: false,
+        requireStageBinding: true,
+        skeleton: 'per-stage',
+      },
       docs: ['立项申请表', '施工方案', '设备清单', '验收报告', '运维手册'],
     },
   };

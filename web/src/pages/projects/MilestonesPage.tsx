@@ -4,6 +4,8 @@ import {
   Box,
   Checkbox,
   Chip,
+  MenuItem,
+  Select,
   Stack,
   Tooltip,
   Typography,
@@ -17,9 +19,10 @@ import type { Column } from '@/components/common';
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
 import { usePermission, useToast } from '@/hooks';
-import type { Milestone } from '@/types/project';
+import type { Milestone, MilestoneAnchor } from '@/types/project';
 import type { ChangeDraft } from '@/types/change';
 import { ROUTES } from '@/config/routes';
+import { MILESTONE_ANCHOR_LABEL } from '@/config/enums';
 import { isApiError, ErrorCode } from '@/types/api';
 import { dayjs, fmtDate, isOverdue, DATE_FMT } from '@/utils/date';
 import type { Dayjs } from 'dayjs';
@@ -42,6 +45,7 @@ export function MilestonesPage(): JSX.Element {
   const { can } = usePermission();
 
   const project = useProjectStore((s) => s.current);
+  const stages = useProjectStore((s) => s.stages);
   const milestones = useProjectStore((s) => s.milestones);
   const refreshMilestones = useProjectStore((s) => s.refreshMilestones);
 
@@ -52,6 +56,21 @@ export function MilestonesPage(): JSX.Element {
 
   const archived = project?.status === '已结项' || project?.status === '已终止';
   const editable = can('milestone:edit') && !archived;
+
+  /** U-9 补选 / 改选归属阶段（stageId + anchor 同生同灭，anchor 缺省 end） */
+  const handleBindStage = async (ms: Milestone, stageId: string): Promise<void> => {
+    try {
+      const next = stageId || null;
+      await api.updateMilestone(ms.id, {
+        stageId: next,
+        anchor: next ? (ms.anchor ?? 'end') : null,
+      });
+      toast.success(`「${ms.code} ${ms.name}」${next ? '已归属阶段' : '已解除归属'}`);
+      await refreshMilestones(id);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
 
   /* ── 改期 ─────────────────────────────────────────
    * 原实现把 api 调用挂在 DatePicker 的 onChange 上：
@@ -145,6 +164,73 @@ export function MilestonesPage(): JSX.Element {
           )}
         </Box>
       ),
+    },
+    {
+      key: 'stage',
+      label: '所属阶段',
+      width: 170,
+      render: (m) => {
+        const st = m.stageId ? stages.find((s) => s.id === m.stageId) ?? null : null;
+        if (!m.stageId || !st) {
+          return (
+            <Select
+              size="small"
+              value=""
+              displayEmpty
+              disabled={!editable}
+              onChange={(e) => void handleBindStage(m, e.target.value)}
+              sx={{ fontSize: 13, minWidth: 132, '& .MuiSelect-select': { py: 0.5 } }}
+              renderValue={() => (
+                <Typography sx={{ fontSize: 13, color: 'text.disabled' }}>未归属 · 补选</Typography>
+              )}
+            >
+              <MenuItem value="">
+                <Typography sx={{ fontSize: 13, color: 'text.disabled' }}>未归属</Typography>
+              </MenuItem>
+              {stages.map((s) => (
+                <MenuItem key={s.id} value={s.id}>
+                  {s.code} {s.name}
+                </MenuItem>
+              ))}
+            </Select>
+          );
+        }
+        return (
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+            <Chip
+              size="small"
+              label={`${st.code} ${st.name}`}
+              sx={{ height: 20, bgcolor: alphaOf(tokens.brand.primary, 0.08), color: tokens.brand.primary }}
+            />
+            {m.anchor && (
+              <Tooltip title={MILESTONE_ANCHOR_LABEL[m.anchor as MilestoneAnchor]} arrow>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={m.anchor === 'start' ? '启动' : m.anchor === 'mid' ? '中段' : '收口'}
+                  sx={{ height: 20 }}
+                />
+              </Tooltip>
+            )}
+            {editable && (
+              <Select
+                size="small"
+                value={m.stageId}
+                onChange={(e) => void handleBindStage(m, e.target.value)}
+                sx={{ fontSize: 12, minWidth: 0, '& .MuiSelect-select': { py: 0.25, pr: 2.5 } }}
+              >
+                <MenuItem value={m.stageId}>{st.code} {st.name}</MenuItem>
+                <MenuItem value="">解除归属</MenuItem>
+                {stages.filter((s) => s.id !== m.stageId).map((s) => (
+                  <MenuItem key={s.id} value={s.id}>
+                    {s.code} {s.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            )}
+          </Stack>
+        );
+      },
     },
     {
       key: 'target',

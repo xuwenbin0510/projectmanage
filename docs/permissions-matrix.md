@@ -208,7 +208,7 @@ graph LR
 | `review:proxy` | 步骤 `role='customer_rep'` 且调用者是项目 pm，且 `comment` 或 `evidence_url` 非空 | `E_PROXY_EVIDENCE_REQUIRED` |
 | `user:role:assign` | 目标 ≠ 自己；且不得降级最后一名 admin | `E_SELF_ROLE` / `E_LAST_ADMIN` |
 | **任何写操作** | 项目 `status ∉ {已结项, 已终止}` | `E_PROJECT_ARCHIVED` |
-| `milestone:update` 改 `planned_date` | 只能走变更单 | `E_MS_NO_ADVANCE` / `E_MS_NEED_CHANGE` |
+| `milestone:update` 改 `planned_date` | **提前** → 直接生效并记审计（`delayDays` 可为负）；**延后** → 只能走变更单 | `E_MS_NEED_CHANGE`（仅延后路径） |
 
 ---
 

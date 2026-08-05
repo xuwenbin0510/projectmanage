@@ -8,8 +8,9 @@ import type {
   GateChecklistItem,
   CloseBlocker,
   Health,
+  LifecycleTemplate,
 } from '@/types/project';
-import type { WbsNode, TaskStatus, BoardConfig } from '@/types/wbs';
+import type { WbsNode, WbsNodeType, WbsRules, TaskStatus, BoardConfig } from '@/types/wbs';
 import type { Change, ChangeType, ChangeRoute, RouteResult } from '@/types/change';
 import type { Review } from '@/types/review';
 import type { ReportPayload } from '../contract';
@@ -19,6 +20,8 @@ import {
   CLASSIFY_AMOUNT_THRESHOLD,
   REVIEW_TEMPLATES,
   GRANULARITY_LIMIT,
+  DEFAULT_WBS_RULES,
+  WBS_NODE_TYPE_LABEL,
 } from '@/config/enums';
 import { diffDays, today } from '@/utils/date';
 
@@ -268,6 +271,142 @@ export function granularityWarn(node: WbsNode, projectType: ProjectType): string
   if (node.estimateDays > limit) {
     return `任务估算 ${node.estimateDays} 人日超过 ${projectType} 类上限 ${limit} 人日，建议继续拆分`;
   }
+  return null;
+}
+
+/* ═══════════════════════════════════════════════════
+ * WBS 层级规则（重构 D-2）—— Mock 引擎与 WbsPage 共用同一份纯函数
+ *   引擎侧：createWbsNode / updateWbsNode / moveWbsNode 落地拦截
+ *   页面侧：类型下拉动态过滤 + 提交前预校验，避免「先弹错再改」
+ * ═══════════════════════════════════════════════════ */
+
+/**
+ * 取项目实际生效的 WBS 规则：`DEFAULT_WBS_RULES` 兜底 + 模板差异覆盖。
+ * 传 null / undefined（模板缺失）时退化为纯缺省，保证任何调用点都拿得到完整规则。
+ * @prd P0-06
+ */
+export function resolveWbsRules(template?: LifecycleTemplate | null): WbsRules {
+  const override = template?.definition?.wbsRules;
+  if (!override) return { ...DEFAULT_WBS_RULES, childTypes: { ...DEFAULT_WBS_RULES.childTypes } };
+  return {
+    maxDepth: override.maxDepth ?? DEFAULT_WBS_RULES.maxDepth,
+    allowRootTask: override.allowRootTask ?? DEFAULT_WBS_RULES.allowRootTask,
+    requireStageBinding: override.requireStageBinding ?? DEFAULT_WBS_RULES.requireStageBinding,
+    skeleton: override.skeleton ?? DEFAULT_WBS_RULES.skeleton,
+    childTypes: { ...DEFAULT_WBS_RULES.childTypes, ...(override.childTypes ?? {}) },
+  };
+}
+
+/**
+ * 某父节点下允许挂哪些子节点类型（页面类型下拉的唯一数据源）。
+ * - `parent === null` 视为根层，额外受 `allowRootTask` 收敛
+ * - 已达 `maxDepth` 时返回空数组（下拉为空 → 页面据此禁用「新建子节点」）
+ */
+export function allowedChildTypes(parent: WbsNode | null, rules: WbsRules): WbsNodeType[] {
+  const targetLevel = parent ? parent.level + 1 : 1;
+  if (targetLevel > rules.maxDepth) return [];
+  const key: 'root' | WbsNodeType = parent ? parent.nodeType : 'root';
+  const list = rules.childTypes[key] ?? [];
+  if (!parent && !rules.allowRootTask) return list.filter((t) => t !== 'task');
+  return [...list];
+}
+
+/**
+ * 子树相对深度：节点自身记 0，其最深后代记 n。
+ * 移动校验必须用它——否则「把 3 层子树移到第 3 层」可绕过 maxDepth。
+ */
+export function subtreeRelativeDepth(nodes: WbsNode[], nodeId: string): number {
+  const childrenOf = new Map<string, WbsNode[]>();
+  for (const n of nodes) {
+    const key = n.parentId ?? '__root__';
+    const arr = childrenOf.get(key);
+    if (arr) arr.push(n);
+    else childrenOf.set(key, [n]);
+  }
+  const walk = (id: string, guard: number): number => {
+    if (guard > 64) return 0; // 防御性：脏数据成环时兜底，不递归爆栈
+    const kids = childrenOf.get(id) ?? [];
+    if (!kids.length) return 0;
+    return 1 + Math.max(...kids.map((k) => walk(k.id, guard + 1)));
+  };
+  return walk(nodeId, 0);
+}
+
+/** 层级校验失败结果；`code` 直接对应 `ErrorCode` 中的四个新码 */
+export interface WbsPlacementError {
+  code: 'E_WBS_PARENT_TYPE' | 'E_WBS_DEPTH' | 'E_WBS_STAGE_UNBOUND';
+  message: string;
+  data: Record<string, unknown>;
+}
+
+export interface WbsPlacementInput {
+  /** 待落位的节点类型 */
+  nodeType: WbsNodeType;
+  /** 目标父节点；null = 挂在根层 */
+  parent: WbsNode | null;
+  /** 工作分区绑定的生命周期阶段；仅 `nodeType==='stage'` 参与校验 */
+  lifecycleStageId?: string | null;
+  /** 被落位节点自身的子树相对深度（新建恒为 0；移动时传 subtreeRelativeDepth 结果） */
+  subtreeDepth?: number;
+}
+
+/**
+ * WBS 落位三连校验（R-1 深度 / R-2 父子类型 / R-6 工作分区绑阶段）。
+ * 返回 null 表示放行；否则返回首个命中的错误。
+ *
+ * ⚠️ R-1 深度**先于** R-2 父子类型判定：`allowedChildTypes` 在达 `maxDepth` 时会返回空数组，
+ *    若 R-2 先判会把「层级超限」误报为「父类型非法」。先判深度可保证 V-06/V-08
+ *    深度违规稳定返回 `E_WBS_DEPTH`（含 move 的子树整体判定）。
+ *
+ * ⚠️ 规则**全部**来自 `rules` 参数（由 `resolveWbsRules(template)` 得到），
+ *    本函数内不出现任何按项目类型分支的硬编码（决策 D-2）。
+ * @prd P0-06
+ */
+export function validateWbsPlacement(
+  input: WbsPlacementInput,
+  rules: WbsRules,
+): WbsPlacementError | null {
+  const { nodeType, parent } = input;
+  const subtreeDepth = input.subtreeDepth ?? 0;
+  const targetLevel = parent ? parent.level + 1 : 1;
+  const label = (t: WbsNodeType): string => WBS_NODE_TYPE_LABEL[t];
+
+  /* ── R-1 最大深度（含被移动子树的整体高度） ─────── */
+  const resultDepth = targetLevel + subtreeDepth;
+  if (resultDepth > rules.maxDepth) {
+    return {
+      code: 'E_WBS_DEPTH',
+      message: `层级将达到第 ${resultDepth} 层，超过上限 ${rules.maxDepth} 层`,
+      data: { targetLevel, subtreeDepth, resultDepth, maxDepth: rules.maxDepth },
+    };
+  }
+
+  /* ── R-2 父子类型 ─────────────────────────────── */
+  const allowed = allowedChildTypes(parent, rules);
+  if (!allowed.includes(nodeType)) {
+    const parentDesc = parent ? `「${parent.wbsCode} ${parent.name}」(${label(parent.nodeType)})` : '根层';
+    const allowDesc = allowed.length ? allowed.map(label).join(' / ') : '（无，已达层级上限）';
+    return {
+      code: 'E_WBS_PARENT_TYPE',
+      message: `${parentDesc}下不允许创建「${label(nodeType)}」，允许的类型：${allowDesc}`,
+      data: {
+        parentId: parent?.id ?? null,
+        parentType: parent?.nodeType ?? 'root',
+        nodeType,
+        allowed,
+      },
+    };
+  }
+
+  /* ── R-6 工作分区必须绑定生命周期阶段 ───────────── */
+  if (nodeType === 'stage' && rules.requireStageBinding && !input.lifecycleStageId) {
+    return {
+      code: 'E_WBS_STAGE_UNBOUND',
+      message: '工作分区必须选择「归属阶段」',
+      data: { nodeType, lifecycleStageId: input.lifecycleStageId ?? null },
+    };
+  }
+
   return null;
 }
 

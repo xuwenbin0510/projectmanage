@@ -13,6 +13,7 @@ import type {
   LifecycleTemplate,
   StageWithGate,
   Milestone,
+  MilestoneAnchor,
   MilestoneDraft,
   CloseBlocker,
 } from '@/types/project';
@@ -82,6 +83,10 @@ export interface MilestoneUpdatePayload {
   name?: string;
   /** 目标 / 达成标准（里程碑页可编辑，不触发单向日期约束） */
   target?: string;
+  /** 补锚 / 改锚：所属生命周期阶段 id；显式传 null 表示解除锚定 */
+  stageId?: string | null;
+  /** 阶段内锚点；stageId 为 null 时服务端强制置 null */
+  anchor?: MilestoneAnchor | null;
 }
 
 export interface WbsNodePayload {
@@ -95,6 +100,10 @@ export interface WbsNodePayload {
   dueDate?: string;
   status?: TaskStatus;
   progress?: number;
+  /** 工作分区绑定的生命周期阶段；nodeType!=='stage' 时服务端强制置 null */
+  lifecycleStageId?: string | null;
+  /** 关联里程碑（package / task 可选）；跨项目引用一律 E_VALIDATION */
+  milestoneId?: string | null;
 }
 
 export interface ReportPayload {

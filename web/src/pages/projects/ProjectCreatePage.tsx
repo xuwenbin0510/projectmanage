@@ -32,6 +32,7 @@ import type { CreateProjectPayload } from '@/api/contract';
 import type {
   ClassifyInput,
   ClassifyResult,
+  MilestoneAnchor,
   MilestoneDraft,
   ProjectRole,
   ProjectType,
@@ -43,6 +44,8 @@ import {
   PROJECT_TYPES,
   PROJECT_TYPE_LABEL,
   PROJECT_TYPE_SHORT,
+  MILESTONE_ANCHOR_LABEL,
+  MILESTONE_ANCHORS,
 } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
 import { useAsync, useToast } from '@/hooks';
@@ -132,6 +135,8 @@ export function ProjectCreatePage(): JSX.Element {
   /** 用户是否动过里程碑（动过之后模板预填不再覆盖） */
   const [msTouched, setMsTouched] = useState<boolean>(false);
   const [msLoading, setMsLoading] = useState<boolean>(false);
+  /** 当前分类模板的阶段（U-13：里程碑「归属阶段」下拉选项 = 模板 stage code） */
+  const [tplStages, setTplStages] = useState<Array<{ code: string; name: string }>>([]);
   const [classifyResult, setClassifyResult] = useState<ClassifyResult>(() =>
     classifyProject({
       contractAmount: 0,
@@ -196,6 +201,7 @@ export function ProjectCreatePage(): JSX.Element {
       .then((tpl) => {
         if (!alive) return;
         const defs = tpl?.definition.milestones ?? [];
+        setTplStages((tpl?.definition.stages ?? []).map((s) => ({ code: s.code, name: s.name })));
         setForm((f) => ({
           ...f,
           milestones: defs.map((d) => ({
@@ -203,6 +209,9 @@ export function ProjectCreatePage(): JSX.Element {
             name: d.name,
             target: '',
             date: addDays(f.planStart, d.offsetDays),
+            // U-12 模板预填带出锚点：A 类模板有 anchorStage/anchor，B/C 无则留空（安全默认）
+            stageCode: d.anchorStage ?? null,
+            anchor: d.anchor ?? null,
           })),
         }));
       })
@@ -356,7 +365,15 @@ export function ProjectCreatePage(): JSX.Element {
         ...f,
         milestones: [
           ...f.milestones,
-          { code: nextMilestoneCode(f.milestones), name: '', target: '', date: last?.date || f.planStart },
+          {
+            code: nextMilestoneCode(f.milestones),
+            name: '',
+            target: '',
+            date: last?.date || f.planStart,
+            // U-15 用户新增里程碑默认不锚定，可稍后在里程碑页补选
+            stageCode: null,
+            anchor: null,
+          },
         ],
       };
     });
@@ -673,6 +690,7 @@ export function ProjectCreatePage(): JSX.Element {
         <Alert severity="info" variant="outlined">
           日期已按「计划开始 + <strong>{PROJECT_TYPE_SHORT[form.type]}</strong>模板偏移」预填，可自由增删改。
           全部删除则<strong>创建后不生成里程碑</strong>，可稍后在里程碑页补充。
+          每条可选「归属阶段 + 锚点」（A 类模板自动带出；留空不阻断向导，可稍后补选）。
           创建后日期即成为基线，延后需走变更单。
         </Alert>
 
@@ -741,6 +759,51 @@ export function ProjectCreatePage(): JSX.Element {
                     },
                   }}
                 />
+                {/* U-13 归属阶段 + 锚点：选项 = 所选分类模板的阶段 code；留空不阻断向导 */}
+                <TextField
+                  select
+                  size="small"
+                  label="归属阶段（可选）"
+                  value={d.stageCode ?? ''}
+                  onChange={(e) =>
+                    updateMilestoneDraft(i, {
+                      stageCode: e.target.value || null,
+                      anchor: e.target.value ? d.anchor : null,
+                    })
+                  }
+                  helperText={d.stageCode ? ' ' : '可稍后在里程碑页补选'}
+                  sx={{ width: { xs: '100%', md: 148 }, flexShrink: 0 }}
+                >
+                  <MenuItem value="">
+                    <Typography variant="body2" color="text.secondary">未归属</Typography>
+                  </MenuItem>
+                  {tplStages.map((s) => (
+                    <MenuItem key={s.code} value={s.code}>
+                      {s.code} {s.name}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  select
+                  size="small"
+                  label="锚点（可选）"
+                  value={d.anchor ?? ''}
+                  disabled={!d.stageCode}
+                  onChange={(e) =>
+                    updateMilestoneDraft(i, { anchor: (e.target.value as MilestoneAnchor) || null })
+                  }
+                  helperText={!d.stageCode ? '先选归属阶段' : ' '}
+                  sx={{ width: { xs: '100%', md: 148 }, flexShrink: 0 }}
+                >
+                  <MenuItem value="">
+                    <Typography variant="body2" color="text.secondary">未指定</Typography>
+                  </MenuItem>
+                  {MILESTONE_ANCHORS.map((a) => (
+                    <MenuItem key={a} value={a}>
+                      {MILESTONE_ANCHOR_LABEL[a]}
+                    </MenuItem>
+                  ))}
+                </TextField>
                 <IconButton
                   size="small"
                   onClick={() => removeMilestoneDraft(i)}
@@ -816,6 +879,7 @@ export function ProjectCreatePage(): JSX.Element {
             {form.milestones.map((d, i) => (
               <Typography key={`${d.code}-${i}`} variant="body2">
                 {d.code || `M${i + 1}`} {d.name || `里程碑 ${i + 1}`} · {d.date}
+                {d.stageCode ? ` · ${d.stageCode}${d.anchor ? `（${MILESTONE_ANCHOR_LABEL[d.anchor]}）` : ''}` : ' · 未归属阶段'}
                 {d.target ? ` · 目标：${d.target}` : ''}
               </Typography>
             ))}

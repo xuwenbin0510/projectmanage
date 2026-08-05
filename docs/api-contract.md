@@ -92,7 +92,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 
 | HTTP | 语义 | 典型错误码 |
 |---|---|---|
-| 400 | 参数/业务校验失败 | `E_VALIDATION`、`E_MS_NO_ADVANCE`、`E_WBS_LEAF_INCOMPLETE` |
+| 400 | 参数/业务校验失败 | `E_VALIDATION`、`E_WBS_LEAF_INCOMPLETE`、`E_WBS_PARENT_TYPE`、`E_WBS_DEPTH`、`E_WBS_STAGE_UNBOUND`、`E_WBS_TYPE_LOCKED` |
 | 401 | 未登录/过期 | `E_UNAUTHORIZED` |
 | 403 | 已登录但无权限 / 被规则硬拦截 | `E_FORBIDDEN`、`E_GATE_NOT_PASSED`、`E_PROJECT_ARCHIVED` |
 | 404 | 资源不存在 | `E_NOT_FOUND` |
@@ -314,7 +314,10 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
     ],
     "errorMessages": {
       "E_GATE_NOT_PASSED": "质量门未通过，无法进入下一阶段",
-      "E_MS_NO_ADVANCE": "里程碑日期不可提前"
+      "E_WBS_PARENT_TYPE": "该节点类型不允许挂在此父节点下",
+      "E_WBS_DEPTH": "WBS 层级已达上限，请先拆分或上移",
+      "E_WBS_STAGE_UNBOUND": "工作分区必须绑定所属生命周期阶段",
+      "E_WBS_TYPE_LOCKED": "该节点已有子节点，不能再修改节点类型"
     }
   },
   "message": "ok"
@@ -613,7 +616,9 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 
 ### 4.3 `POST /api/projects` ♻️ 新建项目（含模板实例化）
 
-> **单事务**：项目 + 阶段 + 门 + 检查项 + 里程碑 + 看板配置 + WBS 根节点 + 角色任命，任一失败整体回滚。
+> **单事务**：项目 + 阶段 + 门 + 检查项 + 里程碑（含 `stage_id`/`anchor` 锚定） + 看板配置 + **WBS 阶段骨架节点** + 角色任命，任一失败整体回滚。
+>
+> **WBS 骨架预生成（WBS 重构 D-3 丙）**：按模板 `wbsRules.skeleton === 'per-stage'` 为每个阶段生成一个 `nodeType:'stage'` 根级节点（前端文案「工作分区」），`wbsCode` 为根级顺序号 `'1'..'n'`、`level=1`、`lifecycleStageId` 绑定对应 `project_stages.id`；`skeleton:'none'` 时不生成。新建 A 类项目即得 6 个已绑定的工作分区，空态不再出现。
 
 **请求**
 ```jsonc
@@ -651,7 +656,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
     "project": { /* §4.0 全量形态，status="草稿" */ },
     "instantiated": {
       "stages": 6, "gates": 6, "checklistItems": 38, "milestones": 7,
-      "boardConfig": true, "wbsRoot": "Wr00"
+      "boardConfig": true, "wbsRoot": "Wr00", "wbsSkeleton": 6
     },
     "warnings": []
   },
@@ -920,7 +925,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 | HTTP | code | 场景 |
 |---|---|---|
 | 403 | `E_GATE_NOT_PASSED` | 当前阶段门 ∉ {已通过, 有条件通过} |
-| 400 | `E_STAGE_SEQUENCE` | 已是最后一个阶段（`{seq:6,total:6}`） |
+| 400 | `E_STAGE_SEQUENCE` | 已是最后一个阶段（`{seq:6,total:6}`）—— ⚠️ **契约已定义，实现未落地（计划下轮，WBS 重构 D-5）**；当前实际以 `E_GATE_NOT_PASSED` 拦截越阶推进 |
 | 403 | `E_FORBIDDEN` | 无 `stage:advance` |
 
 > `blockers` 是**结构化数组**（不是字符串数组），前端可以点击 `checklist_item` 直接跳到该检查项。§5.1 的 `advanceBlockers` 为便于展示用的字符串版，两者并存。
@@ -1152,7 +1157,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 
 ## 7. 里程碑（P0-05）
 
-> **单向约束核心域**：`planned_date` 只允许「延后」且必须经变更单驱动写入（D5）。直接 `PUT` 提前 → `E_MS_NO_ADVANCE`；直接 `PUT` 延后 → `E_MS_NEED_CHANGE` 并回传预填变更单草稿。这是与 §12 变更强耦合的关键交互点。
+> **单向约束核心域（WBS 重构后对齐实现）**：`planned_date` **提前可直接改**（`delayDays` 可为负，写审计「日期提前」）；**延后必须经变更单驱动写入**（直接 `PUT` 延后 → `E_MS_NEED_CHANGE` 并回传预填变更单草稿）。**不存在「提前被拒」路径**（旧的「不可提前」死码已随 WBS 重构删除）。`baseline_date` 任何路径不可写。这是与 §12 变更强耦合的关键交互点。
 
 ### 7.1 `GET /api/milestones` ♻️ 里程碑列表
 
@@ -1174,6 +1179,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
       {
         "id": "M3", "projectId": "P1a2b", "code": "M3", "name": "设计评审通过",
         "plannedDate": "2026-02-28", "baselineDate": "2026-02-28", "delayDays": 0,
+        "stageId": "STc3", "anchor": "end",
         "status": "已达成", "achievedAt": "2026-02-26T17:00:00+08:00",
         "lastChangeId": null, "changeCount": 0,
         "category": "required", "source": "template"
@@ -1181,6 +1187,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
       {
         "id": "M4", "projectId": "P1a2b", "code": "M4", "name": "首件调试完成",
         "plannedDate": "2026-03-30", "baselineDate": "2026-03-20", "delayDays": 10,
+        "stageId": null, "anchor": null,
         "status": "进行中", "achievedAt": null,
         "lastChangeId": "CR-003", "changeCount": 1, "delayReason": "客户场地未就绪",
         "category": "required", "source": "template"
@@ -1197,7 +1204,10 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 | `delayDays` | `plannedDate − baselineDate`（天，可正/0/负）。负 = 提前 |
 | `status` | 有 `achievedAt` → `已达成`；`plannedDate < 今天` 且无 `achievedAt` → `已逾期`；其余 → `进行中`/`未开始` |
 | `baselineDate` | 首次写入值，**任何路径不可改**（Repository 白名单丢弃 + 审计告警） |
+| `stageId` / `anchor` | **WBS 重构新增**：里程碑锚定的生命周期阶段 id + 阶段内锚点（`start`/`mid`/`end`）；`stageId===null` 表示未归属（UI 灰色可补选），`anchor` 随 `stageId` 同生同灭 |
 | 前端展示 | `M4 · 03-30 (+10 变更#CR-003)` 由前端拼装，`delayDays` + `lastChangeId` 已给足原料 |
+
+> ⚠️ **命名映射（WBS 重构 T-08）**：API/TS 层里程碑当前计划日期字段为 **`currentDate`**（mock 实现），契约文档统一写作 **`plannedDate`**（DB `planned_date`），二者同指一列。S2 落库时须显式转换，勿混用。
 
 ### 7.2 `POST /api/milestones` ♻️ 新建里程碑（写入 baseline_date）
 
@@ -1251,12 +1261,8 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 
 **错误 —— 单向约束（核心）**
 ```jsonc
-// HTTP 400 —— 试图「提前」（requested < 当前 planned）
-{
-  "code": "E_MS_NO_ADVANCE",
-  "data": { "milestoneId":"M3", "currentDate":"2026-03-20", "requestedDate":"2026-03-10", "baselineDate":"2026-03-20" },
-  "message": "里程碑日期不可提前。如需调整请提交变更申请。"
-}
+// HTTP 200 —— 试图「提前」（requested < 当前 planned）→ 直接生效
+// 提前允许直接改，delayDays 可为负，写审计「日期提前」（无「提前被拒」路径）
 
 // HTTP 409 —— 试图「延后」（requested > 当前 planned）→ 必须走变更单
 {
@@ -1277,8 +1283,18 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 }
 ```
 
-> 前端判定：收到 `E_MS_NEED_CHANGE` 时**自动跳转「变更申请」页并填入 `data.changeDraft`**（见 §12.2），形成「改期 → 变更」闭环。收到 `E_MS_NO_ADVANCE` 时直接红色 Toast 拦截，不进变更流程。
-> `requested === current` 视为空操作，正常返回 200（不报错、不触发变更）。
+> **方向判定表**（`requested` vs 当前 `plannedDate`）：
+>
+> | 输入 | 判定 | 响应 |
+> |---|---|---|
+> | 提前（requested < current） | 直接生效 | `200` + 审计「里程碑 Mx 日期提前」，`delay_days` 可为负 |
+> | 相同（requested === current） | 空操作 | `200`，不报错、不记审计 |
+> | 延后（requested > current） | 拒绝 | `400/409 E_MS_NEED_CHANGE` + `data.changeDraft` 预填变更单 |
+> | `baselineDate` | 任何路径不可写 | 维持既有 |
+>
+> 前端判定：收到 `E_MS_NEED_CHANGE` 时**自动跳转「变更申请」页并填入 `data.changeDraft`**（见 §12.2），形成「改期 → 变更」闭环；**提前路径直接成功**，弹绿色提示「已提前并记录审计」，不进变更流程。
+>
+> **补锚 / 改锚**（`stageId` + `anchor`）不触发方向判定，走普通审计；`stageId` 须属于同一项目。
 
 ### 7.4 `DELETE /api/milestones/:id` ♻️ 删除里程碑
 
@@ -1300,6 +1316,23 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 
 > **单表自引用树**（`wbs_nodes`：`parent_id` + `wbs_code` + `level`）。服务端负责编码生成与重排；看板（§9）与树（本域）共用同一批叶子节点。旧 `/api/tasks` 作兼容别名保留（§8.6–§8.7）。
 
+### 8.0 层级校验规则 R-1~R-6（WBS 重构 D-2 · 模板驱动）
+
+> 规则源 = `lifecycle_templates.definition.wbsRules`，经 `resolveWbsRules(template)` 与 `DEFAULT_WBS_RULES` 合并后生效（三类项目层级规则**一致强制**；差异仅 `requireStageBinding`：A/C=true、B=false）。`validateWbsPlacement` 为引擎与前端共用同一纯函数。
+
+| 规则 | 内容 | 违反错误码 |
+|---|---|---|
+| **R-1 深度** | 节点层级 ≤ `maxDepth`（缺省 4；`level` 从 1 起算） | `E_WBS_DEPTH` |
+| **R-2 父子类型** | `nodeType ∈ childTypes[parent.nodeType ?? 'root']`（白名单：root→stage/package、stage→package/task、package→task、task→[] 必为叶） | `E_WBS_PARENT_TYPE` |
+| **R-3 编码** | `wbs_code` 由服务端生成，前端只读 | `E_WBS_CODE_FROZEN` |
+| **R-4 类型锁** | 已有子节点的节点**不可改** `nodeType` | `E_WBS_TYPE_LOCKED` |
+| **R-5 叶子完整** | `task` 必填 `owner` + `estimateDays` | `E_WBS_LEAF_INCOMPLETE` |
+| **R-6 stage 绑定** | `nodeType==='stage'` 且 `requireStageBinding=true` 时必填 `lifecycleStageId`（B 类 false 可空） | `E_WBS_STAGE_UNBOUND` |
+
+**跨项目引用**：`lifecycleStageId` / `milestoneId` / `parentId` 所引用的对象必须属于同一 `projectId`，否则 `E_VALIDATION`（mock 引擎与 S2 一致）。
+
+**移动独有（§8.5）**：目标父类型合法（R-2）且**移动后整棵子树**深度不超限（R-1 子树整体判定，`subtreeRelativeDepth`），否则 `E_WBS_PARENT_TYPE` / `E_WBS_DEPTH`。
+
 ### 8.1 `GET /api/wbs` 🆕 WBS 树（嵌套）
 
 > **特例说明**：本接口返回「项目 WBS 单棵层级资源」，不使用 §0.1 的 `items` 分页包络（扁平列表接口仍遵守）。`GET /api/tasks`（§8.6）才是扁平分页列表别名。
@@ -1315,6 +1348,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
     "tree": {
       "id":"Wr00","parentId":null,"wbsCode":"0","level":0,
       "name":"XX型号地面测试设备","nodeType":"stage","status":null,
+      "lifecycleStageId": null, "milestoneId": null,
       "ownerOpenId":null,"ownerName":null,"assigneeOpenId":null,"assigneeName":null,
       "estimateDays":null,"actualDays":null,"progress":62,
       "startDate":null,"dueDate":null,"leaf":false,"childCount":3,"descendantTaskCount":30,
@@ -1322,12 +1356,14 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
         {
           "id":"Wp12","parentId":"Wr00","wbsCode":"1","level":1,"name":"硬件研制","nodeType":"package",
           "status":null,"ownerOpenId":"ou_lisi","ownerName":"李四",
+          "lifecycleStageId": null, "milestoneId": null,
           "assigneeOpenId":null,"assigneeName":null,
           "estimateDays":null,"actualDays":null,"progress":55,"leaf":false,"childCount":2,
           "children": [
             {
               "id":"We5f","parentId":"Wp12","wbsCode":"1.2.3","level":2,"name":"电源模块联调",
               "nodeType":"task","status":"进行中",
+              "lifecycleStageId": null, "milestoneId":"M4",
               "ownerOpenId":"ou_lisi","ownerName":"李四",
               "assigneeOpenId":"ou_zhangsan","assigneeName":"张三",
               "estimateDays":3,"actualDays":1,"progress":40,
@@ -1369,11 +1405,22 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 **错误**
 | HTTP | code | 场景 | data |
 |---|---|---|---|
-| 400 | `E_VALIDATION` | 缺 `parentId`/`name`/`nodeType` | `{fields:[…]}` |
-| 400 | `E_WBS_LEAF_INCOMPLETE` | 叶子任务缺 `owner` 或 `estimateDays` | `{missing:["ownerOpenId","estimateDays"]}` |
+| 400 | `E_VALIDATION` | 缺 `parentId`/`name`/`nodeType`；或 `parentId`/`lifecycleStageId`/`milestoneId` 跨项目引用 | `{fields:[…]}` |
+| 400 | `E_WBS_PARENT_TYPE` | 子类型不在父节点白名单（R-2，含 `task` 下挂子节点、根下挂 `task`） | `{parentNodeType, childNodeType, allowed[]}` |
+| 400 | `E_WBS_DEPTH` | 超过 `maxDepth`（R-1） | `{depth, maxDepth}` |
+| 400 | `E_WBS_STAGE_UNBOUND` | `stage` 未绑 `lifecycleStageId` 且 `requireStageBinding=true`（R-6） | `{nodeType:"stage"}` |
+| 400 | `E_WBS_LEAF_INCOMPLETE` | 叶子任务缺 `owner` 或 `estimateDays`（R-5，位置在结构校验之后） | `{missing:["ownerOpenId","estimateDays"]}` |
 | 400 | `E_WBS_GRANULARITY` | 叶子 `estimateDays` 超模板上限 | `{estimateDays:8, maxLeafDays:5}` |
-| 400 | `E_WBS_PARENT_TYPE` | 往 `task` 下挂子节点 | `{parentNodeType:"task"}` |
 | 403 | `E_FORBIDDEN` | 无 `wbs:edit` | 见 §0.7 |
+
+**请求 payload 扩展（WBS 重构）**
+```json
+{
+  "projectId": "P1a2b", "parentId": "Wr00", "name": "设计工作分区", "nodeType": "stage",
+  "lifecycleStageId": "STc3",     // 仅 nodeType='stage' 有意义；A/C 必填、B 可空
+  "milestoneId": null             // 仅 package/task 可挂；跨项目引用一律 E_VALIDATION
+}
+```
 
 ### 8.3 `PUT /api/wbs/:id` 🆕 编辑节点
 
@@ -1386,7 +1433,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 
 > `wbsCode`/`parentId`/`level` 为系统字段：请求带 `parentId` 视为无效（改父用 §8.5 `/move`），其余忽略静默。
 
-**错误**：`E_WBS_LEAF_INCOMPLETE`、`E_WBS_GRANULARITY`、`E_FORBIDDEN`、`E_VALIDATION`（同 §8.2）。
+**错误**：`E_WBS_LEAF_INCOMPLETE`、`E_WBS_GRANULARITY`、`E_WBS_TYPE_LOCKED`（R-4：有子节点改 `nodeType`）、`E_WBS_PARENT_TYPE`（改类型后对其父重校验）、`E_VALIDATION`（`lifecycleStageId`/`milestoneId` 跨项目引用）、`E_FORBIDDEN`（同 §8.2）。
 
 ### 8.4 `DELETE /api/wbs/:id` 🆕 删除（级联需确认）
 
@@ -1403,6 +1450,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 | HTTP | code | 场景 |
 |---|---|---|
 | 409 | `E_WBS_HAS_CHILDREN` | 有子节点未确认级联 |
+| 400 | `E_VALIDATION` | 删除**已绑定 `lifecycleStageId` 且非空**的工作分区（`{reason:'stage_not_empty', childCount}`，骨架保护） |
 | 403 | `E_FORBIDDEN` | 无 `wbs:edit` |
 
 ### 8.5 `POST /api/wbs/:id/move` 🆕 移动并重排编码
@@ -1431,7 +1479,8 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 | HTTP | code | 场景 | data |
 |---|---|---|---|
 | 400 | `E_WBS_MOVE_CYCLE` | 移动到自己的子孙下 | `{targetParentId:"We5f"}` |
-| 400 | `E_WBS_PARENT_TYPE` | 目标父非 `stage`/`package` | `{targetParentId:"We5f"}` |
+| 400 | `E_WBS_PARENT_TYPE` | 目标父类型不在白名单（R-2，含 `stage` 移入非根） | `{targetParentId, parentNodeType, nodeType, allowed[]}` |
+| 400 | `E_WBS_DEPTH` | 移动后**整棵子树**深度超限（R-1 子树整体判定） | `{targetLevel, subtreeDepth, resultDepth, maxDepth}` |
 | 403 | `E_FORBIDDEN` | 无 `wbs:edit` | 见 §0.7 |
 
 ### 8.6 `GET /api/tasks` ♻️ 兼容别名（扁平任务列表）
@@ -2062,14 +2111,16 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 | `E_PROJECT_NOT_DRAFT` | 409 | 仅草稿可删 | `{status, suggestion:"transition"}` |
 | `E_SELF_ROLE` | 403 | 改自己角色 | `{userId}` |
 | `E_LAST_ADMIN` | 403 | 降级最后一名管理员 | `{adminCount}` |
-| `E_MS_NO_ADVANCE` | 400 | 里程碑提前（见 §7.3） | `{milestoneId, currentDate, requestedDate, baselineDate}` |
-| `E_MS_NEED_CHANGE` | 409 | 里程碑延后须走变更（见 §7.3） | `{milestoneId, diffDays, changeDraft{…}}` |
+| `E_MS_NEED_CHANGE` | 409 | 里程碑延后须走变更（见 §7.3）；**提前不再有拦截码** | `{milestoneId, diffDays, changeDraft{…}}` |
 | `E_MS_DUP_CODE` | 409 | 里程碑编号重复 | `{code}` |
 | `E_MS_DELETE_REQUIRED` | 400 | 删模板必需里程碑 | `{category, name}` |
 | `E_MS_LINKED_WBS` | 409 | 里程碑被 WBS 关联 | `{refNodes[]}` |
-| `E_WBS_LEAF_INCOMPLETE` | 400 | 叶子任务缺 owner/estimateDays | `{missing[]}` |
+| `E_WBS_LEAF_INCOMPLETE` | 400 | 叶子任务缺 owner/estimateDays（R-5） | `{missing[]}` |
 | `E_WBS_GRANULARITY` | 400 | 叶子粒度超限 | `{estimateDays, maxLeafDays}` |
-| `E_WBS_PARENT_TYPE` | 400 | 父节点类型非法 | `{parentNodeType}` |
+| `E_WBS_PARENT_TYPE` | 400 | 子类型不在父节点白名单（R-2） | `{parentNodeType, childNodeType, allowed[]}` |
+| `E_WBS_DEPTH` | 400 | 超过层级上限（R-1，含 move 子树整体判定） | `{depth, maxDepth}` |
+| `E_WBS_STAGE_UNBOUND` | 400 | stage 未绑生命周期阶段（R-6） | `{nodeType:"stage"}` |
+| `E_WBS_TYPE_LOCKED` | 400 | 有子节点改 nodeType（R-4） | `{nodeId, childCount}` |
 | `E_WBS_CODE_FROZEN` | 400 | 试图改系统字段 wbsCode 等 | `{field}` |
 | `E_WBS_HAS_CHILDREN` | 409 | 删有子节点未级联 | `{childCount}` |
 | `E_WBS_MOVE_CYCLE` | 400 | 移动到自身子孙 | `{targetParentId}` |

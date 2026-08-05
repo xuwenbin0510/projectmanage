@@ -1,5 +1,7 @@
 /** 用户 / 项目 / 成员 / 生命周期 / 阶段 / 质量门 / 里程碑（对齐架构 3.1 ER 图） */
 
+import type { WbsRules } from '@/types/wbs';
+
 export type GlobalRole =
   | 'admin'
   | 'management'
@@ -117,8 +119,17 @@ export interface LifecycleTemplate {
   name: string;
   definition: {
     stages: Array<{ code: string; name: string; gate: { code: string; name: string; ownerRole: string; items: Array<{ content: string; ownerRole: string }> } }>;
-    milestones: Array<{ code: string; name: string; offsetDays: number }>;
+    /**
+     * 里程碑骨架。
+     * - `anchorStage`：锚定的模板阶段 code（S1..S6）；缺省 = 不锚定（实例化后 stageId 为 null）
+     * - `anchor`：阶段内锚点位置；仅在 anchorStage 有值时有意义
+     * - 决策 Q-1「安全默认」：当前仅 A 类模板填锚，B/C 保持缺省（运行时模板与
+     *   `docs/lifecycle/*.json` 草拟版阶段数不一致，硬填会产生错锚脏数据）
+     */
+    milestones: Array<{ code: string; name: string; offsetDays: number; anchorStage?: string; anchor?: MilestoneAnchor }>;
     docs: string[];
+    /** WBS 层级规则；只写差异项，其余由 `DEFAULT_WBS_RULES` 兜底（决策 D-2） */
+    wbsRules?: Partial<WbsRules>;
   };
   isActive: boolean;
   createdAt: string;
@@ -169,6 +180,12 @@ export interface StageWithGate extends ProjectStage {
   gateItems: GateChecklistItem[];
 }
 
+/**
+ * 里程碑在所属阶段内的锚点位置（WBS 重构 D-1 · 方案 B）
+ * - `start` 阶段启动点 / `mid` 阶段中段 / `end` 阶段收口点（多数里程碑落此）
+ */
+export type MilestoneAnchor = 'start' | 'mid' | 'end';
+
 export interface Milestone {
   id: string;
   projectId: string;
@@ -176,10 +193,15 @@ export interface Milestone {
   name: string;
   /** 目标 / 达成标准（交付物）；模板生成时为 ''，允许空串但不为 null */
   target: string;
+  /** 所属生命周期阶段 id（project_stages.id）；null = 未锚定，可后补 */
+  stageId: string | null;
+  /** 阶段内锚点；stageId 为 null 时恒为 null */
+  anchor: MilestoneAnchor | null;
   /** 原始基线，永不修改 */
   baselineDate: string;
   /** 当前计划，仅变更单可改 */
   currentDate: string;
+  /** currentDate - baselineDate（天）；正数 = 延期，负数 = 提前 */
   delayDays: number;
   status: MilestoneStatus;
   done: boolean;
@@ -193,12 +215,16 @@ export interface Milestone {
  * 创建向导中的里程碑草稿（未落库）
  * - `code`：M1/M2…，模板带来或前端补号 `M{max+1}`
  * - `date`：计划日期，`YYYY-MM-DD`（复用 DATE_FMT）
+ * - `stageCode`：锚定的模板阶段 code（S1..S6）；向导里选的是**模板阶段 code**，
+ *   落库时由 createProject 事务拼成真实 `stageId`。null = 不锚定（允许，不阻塞向导）
  */
 export interface MilestoneDraft {
   code: string;
   name: string;
   target: string;
   date: string;
+  stageCode?: string | null;
+  anchor?: MilestoneAnchor | null;
 }
 
 /** 结项阻塞项（P0-17） */

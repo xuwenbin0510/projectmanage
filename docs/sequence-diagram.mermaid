@@ -125,9 +125,10 @@ sequenceDiagram
   W->>MR: PUT /api/milestones/M3 {plannedDate:'2026-03-10'}
   MR->>MS: update(user, M3, dto)
   MS->>MS: assertDateRule(old='03-20', next='03-10') → next < old
-  MS-->>MR: throw E_MS_NO_ADVANCE
-  MR-->>W: 400 {code:'E_MS_NO_ADVANCE',<br/>message:'里程碑日期不可提前。如需调整请提交变更申请。'}
-  W-->>PM: Toast 红色拦截提示
+  MS->>AU: 审计「里程碑 M3 日期提前」；delayDays=-10
+  MS-->>MR: 200 直接生效（无「提前被拒」路径）
+  MR-->>W: 200 {milestone:{..., delayDays:-10}}
+  W-->>PM: 绿色提示「已提前并记录审计」
 
   PM->>W: 改为 03-30（延后 10 天）
   W->>MR: PUT /api/milestones/M3 {plannedDate:'2026-03-30'}

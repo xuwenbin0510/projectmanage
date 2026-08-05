@@ -42,8 +42,9 @@ export interface MockDb {
   sessionOpenId: string | null;
 }
 
-// v2：Milestone 新增必填字段 target，旧缓存缺字段会导致运行时 undefined，故升版强制刷新
-const STORAGE_KEY = 'pm_mock_db_v2';
+// v3：Milestone 新增必填字段 stageId/anchor、WbsNode 新增必填字段 lifecycleStageId，
+// 旧缓存缺字段会导致运行时 undefined，故升版强制刷新
+const STORAGE_KEY = 'pm_mock_db_v3';
 
 let instance: MockDb | null = null;
 

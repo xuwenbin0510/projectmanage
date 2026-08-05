@@ -60,6 +60,7 @@ export function isLeaf(node: WbsTreeNode): boolean {
 
 /**
  * 节点告警（非阻塞）：
+ * - 工作分区未绑定生命周期阶段（U-6，宽松期仅提示）
  * - 粒度超限（A/C >5 人日、B >2 人日）
  * - 叶子缺负责人 / 缺估算
  */
@@ -67,6 +68,9 @@ export function nodeWarnings(node: WbsTreeNode, projectType: ProjectType): strin
   const out: string[] = [];
   const leaf = node.children.length === 0;
   const limit = GRANULARITY_LIMIT[projectType];
+  if (node.nodeType === 'stage' && !node.lifecycleStageId) {
+    out.push('未绑定生命周期阶段，点击编辑补选');
+  }
   if (leaf) {
     if (!node.owner) out.push('缺负责人');
     if (!node.estimateDays || node.estimateDays <= 0) out.push('缺工时估算');
