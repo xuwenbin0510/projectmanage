@@ -34,6 +34,7 @@ interface FlowState {
   fetchReports: (projectId: string) => Promise<void>;
   saveReport: (payload: ReportPayload) => Promise<Report>;
   submitReport: (payload: ReportPayload) => Promise<Report>;
+  updateReport: (id: string, payload: ReportPayload) => Promise<Report>;
 
   fetchAudit: (query: AuditQuery) => Promise<void>;
 }
@@ -137,6 +138,12 @@ export const useFlowStore = create<FlowState>((set, get) => ({
 
   async submitReport(payload) {
     const report = await api.submitReport(payload);
+    set({ reports: await api.listReports(payload.projectId) });
+    return report;
+  },
+
+  async updateReport(id, payload) {
+    const report = await api.updateReport(id, payload);
     set({ reports: await api.listReports(payload.projectId) });
     return report;
   },

@@ -3,8 +3,7 @@ import type {
   Project,
   ProjectListItem,
   ProjectMember,
-  StageWithGate,
-  Milestone,
+  MilestoneWithGate,
 } from '@/types/project';
 import type { ProjectQuery } from '@/api/contract';
 import { api } from '@/api/client';
@@ -12,6 +11,10 @@ import { useAuthStore } from './authStore';
 
 /**
  * 项目域 store：列表筛选 + 当前项目详情聚合
+ *
+ * ⚠️ 方案一（Q-1）已删除阶段实体：详情态不再有 `stages`，
+ * 里程碑（含挂载的质量门与关联任务统计）是概览页 / 里程碑页的唯一数据源。
+ *
  * @prd P0-01 P0-02 P0-03 P0-04 P0-05 P0-17
  */
 interface ProjectState {
@@ -24,15 +27,16 @@ interface ProjectState {
   /* 详情 */
   current: Project | null;
   members: ProjectMember[];
-  stages: StageWithGate[];
-  milestones: Milestone[];
+  /** 里程碑 + 门 + 门检查项 + 关联任务统计（取代原 stages） */
+  milestones: MilestoneWithGate[];
   detailLoading: boolean;
 
   setQuery: (patch: Partial<ProjectQuery>) => void;
   fetchList: () => Promise<void>;
   fetchDetail: (id: string) => Promise<void>;
-  refreshStages: (id: string) => Promise<void>;
   refreshMilestones: (id: string) => Promise<void>;
+  /** 里程碑变动会连带影响项目健康度 / 进度，需要一并刷新项目主体 */
+  refreshProject: (id: string) => Promise<void>;
   clearDetail: () => void;
 }
 
@@ -53,7 +57,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   listLoading: false,
   current: null,
   members: [],
-  stages: [],
   milestones: [],
   detailLoading: false,
 
@@ -76,13 +79,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   async fetchDetail(id) {
     set({ detailLoading: true });
     try {
-      const [project, members, stages, milestones] = await Promise.all([
+      const [project, members, milestones] = await Promise.all([
         api.getProject(id),
         api.listMembers(id),
-        api.listStages(id),
         api.listMilestones(id),
       ]);
-      set({ current: project, members, stages, milestones });
+      set({ current: project, members, milestones });
       const me = useAuthStore.getState().user;
       if (me) {
         useAuthStore
@@ -94,16 +96,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  async refreshStages(id) {
-    set({ stages: await api.listStages(id) });
-  },
-
   async refreshMilestones(id) {
     set({ milestones: await api.listMilestones(id) });
   },
 
+  async refreshProject(id) {
+    const [project, milestones] = await Promise.all([api.getProject(id), api.listMilestones(id)]);
+    set({ current: project, milestones });
+  },
+
   clearDetail() {
-    set({ current: null, members: [], stages: [], milestones: [] });
+    set({ current: null, members: [], milestones: [] });
     useAuthStore.getState().setProjectRoles([]);
   },
 }));

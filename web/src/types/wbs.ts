@@ -1,24 +1,33 @@
 /** WBS 节点 / 看板配置（P0-06 / P0-07） */
 
-export type WbsNodeType = 'stage' | 'package' | 'task';
+/**
+ * WBS 节点类型（简化方案一 · Q-3）
+ * - `task` 任务：可作为容器（下挂任务 / 子任务），也可自身就是干活单元
+ * - `subtask` 子任务：恒为叶子，不可再挂子节点
+ *
+ * ⚠️ SK-4：判断「是不是干活单元（叶子）」一律用 `utils/wbs.ts` 的
+ * `leafNodesOf` / `isLeafNode`（口径 = `children.length === 0`），
+ * **禁止**再写 `nodeType === 'task'`。
+ */
+export type WbsNodeType = 'task' | 'subtask';
 
 /**
  * WBS 层级规则（模板驱动 · 引擎与页面共用同一份）
  *
  * - 落库位置：`lifecycle_templates.definition.wbsRules`
  * - 模板只写「与缺省不同」的项，其余由 `DEFAULT_WBS_RULES` 兜底
- *   （禁止在业务代码里散落 `if (projectType === 'B')` 之类的分支 · 决策 D-2）
+ *   （禁止在业务代码里散落 `if (projectType === 'B')` 之类的分支 · 决策 D-2 / SK-5）
  * @prd P0-06
  */
 export interface WbsRules {
-  /** 最大层级（含）。level 从 1 起算，缺省 4 = 工作分区/工作包/任务/子任务 */
+  /** 最大层级（含）。level 从 1 起算，缺省 4 */
   maxDepth: number;
-  /** 是否允许根层直接挂 task（缺省 false：根层只能是工作分区或工作包） */
-  allowRootTask: boolean;
-  /** `nodeType==='stage'` 的 WBS 节点是否必须绑定生命周期阶段（A/C=true，B=false） */
-  requireStageBinding: boolean;
-  /** 建项时 WBS 骨架预生成策略：per-stage=按模板阶段逐个生成工作分区根节点；none=不生成 */
-  skeleton: 'per-stage' | 'none';
+  /**
+   * 建项时 WBS 骨架预生成策略（决策 D-B）：
+   * - `per-milestone` 为每个必备里程碑生成 1 个顶层任务，`milestoneId` 自动绑定
+   * - `none` 不生成，新项目为空树
+   */
+  skeleton: 'none' | 'per-milestone';
   /** 父类型 → 允许的子节点类型；键 `root` 表示「无父节点」的根层 */
   childTypes: Record<'root' | WbsNodeType, WbsNodeType[]>;
 }
@@ -34,15 +43,9 @@ export interface WbsNode {
   wbsCode: string;
   level: number;
   nodeType: WbsNodeType;
-  /**
-   * 绑定的生命周期阶段 id（project_stages.id）。
-   * 仅 `nodeType==='stage'`（工作分区）可有值；其余类型恒为 null。
-   * A/C 类必填（wbsRules.requireStageBinding=true），B 类可为 null。
-   */
-  lifecycleStageId: string | null;
   name: string;
   description: string;
-  /** 负责人 openId（叶子必填） */
+  /** 负责人 openId（叶子必填；SK-13：仅 subtask 强制，无子 task 降级为告警） */
   owner: string;
   /** 负责人姓名（服务端派生的展示字段） */
   ownerName: string;
@@ -54,6 +57,7 @@ export interface WbsNode {
   progress: number;
   boardOrder: number;
   isCritical: boolean;
+  /** 关联里程碑；该节点子树内的叶子会计入该里程碑的完成度 */
   milestoneId: string | null;
   createdBy: string;
   createdAt: string;

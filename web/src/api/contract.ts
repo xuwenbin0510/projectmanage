@@ -11,10 +11,8 @@ import type {
   ClassifyInput,
   ClassifyResult,
   LifecycleTemplate,
-  StageWithGate,
-  Milestone,
-  MilestoneAnchor,
-  MilestoneDraft,
+  MilestoneWithGate,
+  MilestoneOverride,
   CloseBlocker,
 } from '@/types/project';
 import type { WbsNode, WbsNodeType, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
@@ -52,12 +50,11 @@ export interface CreateProjectPayload {
   classifyOverrideReason: string;
   members: Array<{ userOpenId: string; role: ProjectRole }>;
   /**
-   * 里程碑（三态语义，任何中间层禁止把 `[]` 归一成 undefined / null）：
-   * - `undefined` → 按生命周期模板生成（既有调用方行为不变）
-   * - `[]`        → 显式清空，不生成任何里程碑
-   * - 非空数组    → 完全覆盖模板
+   * 新建项目时随项目一起提交的里程碑规格（取代静默生成）。
+   * 为空时服务端回退到模板静默生成（向后兼容）。
+   * 向导中由模板带出、用户可改名称 / 日期、可新增（非必备）、必备锁删（Q-2 / 用户反馈①）。
    */
-  milestones?: MilestoneDraft[];
+  milestones?: CreateMilestoneSpec[];
 }
 
 export interface UpdateProjectPayload {
@@ -77,16 +74,57 @@ export interface GateDecisionPayload {
   comment: string;
 }
 
+/** 新建里程碑入参（Q-2）：`code` 由服务端按 `M{max+1}` 生成，`required=false`，无门 */
+export interface MilestoneCreatePayload {
+  name: string;
+  /** 目标 / 达成标准；缺省 '' */
+  target?: string;
+  /** 计划日期 `YYYY-MM-DD`，同时作为 baselineDate 与 currentDate */
+  date: string;
+}
+
+/** 新建项目随项目提交的里程碑门规格（对应模板 gate 结构） */
+export interface CreateMilestoneGateSpec {
+  code: string;
+  name: string;
+  ownerRole: string;
+  items: Array<{ content: string; ownerRole: string }>;
+}
+
+/**
+ * 新建项目时提交的里程碑规格（取代静默生成 · 用户反馈①）。
+ * 向导由模板带出，用户可改 `name` / `date`，可新增（默认 `required=false`）。
+ * `gate` 为 null 表示无门；必备里程碑带门，且锁删仅可改期。
+ */
+export interface CreateMilestoneSpec {
+  code: string;
+  name: string;
+  /** 目标 / 达成标准 */
+  target?: string;
+  /** 计划日期 `YYYY-MM-DD`（绝对日期，向导用 planStart + 模板偏移预填，用户可改） */
+  date: string;
+  /** 模板必备（锁删，仅可改期） */
+  required: boolean;
+  /** 质量门规格；null = 该里程碑无门 */
+  gate: CreateMilestoneGateSpec | null;
+}
+
 export interface MilestoneUpdatePayload {
-  currentDate?: string;
-  done?: boolean;
   name?: string;
   /** 目标 / 达成标准（里程碑页可编辑，不触发单向日期约束） */
   target?: string;
-  /** 补锚 / 改锚：所属生命周期阶段 id；显式传 null 表示解除锚定 */
-  stageId?: string | null;
-  /** 阶段内锚点；stageId 为 null 时服务端强制置 null */
-  anchor?: MilestoneAnchor | null;
+  /** 提前可直接改；延后抛 `E_MS_NEED_CHANGE`。改期后清空 override 三元组（SK-7） */
+  currentDate?: string;
+  /**
+   * 标记 / 取消达成（替代原 `done`，消除双轨命名歧义）。
+   * `true` 时校验 C-G4：有门且门未过 → `E_GATE_NOT_PASSED`
+   */
+  achieved?: boolean;
+  /**
+   * 人工覆盖状态；`null` = 撤销覆盖。
+   * ⚠️ SK-7b：类型层已排除「已达成」，不允许绕过门控达成。
+   */
+  statusOverride?: MilestoneOverride | null;
 }
 
 export interface WbsNodePayload {
@@ -100,9 +138,7 @@ export interface WbsNodePayload {
   dueDate?: string;
   status?: TaskStatus;
   progress?: number;
-  /** 工作分区绑定的生命周期阶段；nodeType!=='stage' 时服务端强制置 null */
-  lifecycleStageId?: string | null;
-  /** 关联里程碑（package / task 可选）；跨项目引用一律 E_VALIDATION */
+  /** 关联里程碑（任务 / 子任务均可）；跨项目引用一律 E_VALIDATION */
   milestoneId?: string | null;
 }
 
@@ -192,14 +228,16 @@ export interface ApiClient {
   addMember(projectId: string, userOpenId: string, role: ProjectRole): Promise<ProjectMember>;
   removeMember(projectId: string, memberId: string): Promise<void>;
 
-  /* 阶段 / 质量门 P0-05 P0-06 */
-  listStages(projectId: string): Promise<StageWithGate[]>;
-  toggleGateItem(itemId: string, checked: boolean): Promise<StageWithGate[]>;
-  decideGate(projectId: string, payload: GateDecisionPayload): Promise<StageWithGate[]>;
+  /* 质量门 P0-05 P0-06（挂在里程碑上 · 决策 D-A） */
+  toggleGateItem(itemId: string, checked: boolean): Promise<MilestoneWithGate[]>;
+  decideGate(projectId: string, payload: GateDecisionPayload): Promise<MilestoneWithGate[]>;
 
-  /* 里程碑 P0-07 */
-  listMilestones(projectId: string): Promise<Milestone[]>;
-  updateMilestone(id: string, payload: MilestoneUpdatePayload): Promise<Milestone>;
+  /* 里程碑 P0-07（唯一时间轴：一次带出门 + 检查项 + 关联任务统计） */
+  listMilestones(projectId: string): Promise<MilestoneWithGate[]>;
+  createMilestone(projectId: string, payload: MilestoneCreatePayload): Promise<MilestoneWithGate>;
+  updateMilestone(id: string, payload: MilestoneUpdatePayload): Promise<MilestoneWithGate>;
+  /** 必备碑抛 `E_MS_REQUIRED_LOCKED`；级联删门与检查项，关联 WBS 节点解绑（SK-12） */
+  deleteMilestone(id: string): Promise<void>;
 
   /* WBS P0-11 */
   listWbs(projectId: string): Promise<WbsNode[]>;
@@ -218,6 +256,7 @@ export interface ApiClient {
   getReport(projectId: string, week: string): Promise<Report | null>;
   saveReport(payload: ReportPayload): Promise<Report>;
   submitReport(payload: ReportPayload): Promise<Report>;
+  updateReport(id: string, payload: ReportPayload): Promise<Report>;
 
   /* 评审 P0-09 P0-10 */
   listReviews(projectId?: string): Promise<Review[]>;

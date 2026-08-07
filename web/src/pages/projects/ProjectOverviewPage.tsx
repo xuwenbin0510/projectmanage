@@ -22,7 +22,7 @@ import {
   Typography,
 } from '@mui/material';
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useParams } from 'react-router-dom';
 
 import {
@@ -39,7 +39,7 @@ import {
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
 import { useAsync, useToast } from '@/hooks';
-import type { CloseBlocker, GateChecklistItem, ProjectStatus, StageWithGate } from '@/types/project';
+import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectStatus } from '@/types/project';
 import {
   GATE_CONCLUSIONS,
   GATE_ICON,
@@ -56,16 +56,18 @@ import type { WbsNode } from '@/types/wbs';
 
 type Conclusion = '已通过' | '有条件通过' | '不通过';
 
-/** 阶段推进受阻项（对应契约 E_GATE_NOT_PASSED.blockers[]） */
-interface StageBlocker {
-  /** 归类：检查项未确认 / 门未决议 / 阶段顺序 */
-  kind: 'gate_item' | 'gate_status' | 'sequence';
+/** 门控受阻项（对应契约 E_GATE_NOT_PASSED.blockers[]） */
+interface GateBlocker {
+  /** 归类：检查项未确认 / 门未决议 */
+  kind: 'gate_item' | 'gate_status';
   message: string;
   hint?: string;
 }
 
 /**
- * 项目概览：阶段条 + 质量门检查清单 + 关键信息 + 状态流转
+ * 项目概览：里程碑时间轴 + 质量门检查清单 + 关键信息 + 状态流转
+ * 方案一（Q-1）：删除阶段实体，里程碑（含挂载质量门）是唯一时间轴。
+ * 门控结论为「通过 / 有条件通过」时引擎自动把该里程碑标记为已达成（§4.3），无需单独的推进动作。
  * @prd P0-04 P0-05 P0-06 P0-17
  */
 export function ProjectOverviewPage(): JSX.Element {
@@ -73,46 +75,39 @@ export function ProjectOverviewPage(): JSX.Element {
   const toast = useToast();
 
   const project = useProjectStore((s) => s.current);
-  const stages = useProjectStore((s) => s.stages);
   const members = useProjectStore((s) => s.members);
   const milestones = useProjectStore((s) => s.milestones);
-  const refreshStages = useProjectStore((s) => s.refreshStages);
+  const refreshProject = useProjectStore((s) => s.refreshProject);
   const fetchDetail = useProjectStore((s) => s.fetchDetail);
 
-  const [activeStageId, setActiveStageId] = useState<string>('');
+  const [activeMsId, setActiveMsId] = useState<string>('');
   const [gateOpen, setGateOpen] = useState<boolean>(false);
   const [conclusion, setConclusion] = useState<Conclusion>('已通过');
   const [gateComment, setGateComment] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [transitionTo, setTransitionTo] = useState<ProjectStatus | ''>('');
   const [blockers, setBlockers] = useState<CloseBlocker[]>([]);
-  const [advancing, setAdvancing] = useState<boolean>(false);
-  const [stageBlockers, setStageBlockers] = useState<StageBlocker[] | null>(null);
+  const [gateBlockers, setGateBlockers] = useState<GateBlocker[] | null>(null);
 
   const { data: nodes } = useAsync<WbsNode[]>(() => (id ? api.listWbs(id) : Promise.resolve([])), [id]);
 
-  /** 默认选中当前阶段 */
+  /** 默认选中第一个未达成里程碑（按 store 既定顺序，引擎已排序） */
   useEffect(() => {
-    if (!stages.length) return;
-    const fallback = project?.currentStageId ?? stages[0].id;
-    setActiveStageId((prev) => (stages.some((s) => s.id === prev) ? prev : fallback));
-  }, [stages, project?.currentStageId]);
+    const firstUndone = milestones.find((m) => !m.done);
+    setActiveMsId((prev) =>
+      milestones.some((m) => m.id === prev) ? prev : (firstUndone ?? milestones[0])?.id ?? '',
+    );
+  }, [milestones]);
 
-  const activeStage: StageWithGate | undefined = useMemo(
-    () => stages.find((s) => s.id === activeStageId),
-    [stages, activeStageId],
+  const activeMs: MilestoneWithGate | undefined = useMemo(
+    () => milestones.find((m) => m.id === activeMsId),
+    [milestones, activeMsId],
   );
 
   const progress = useMemo(() => rollupProjectProgress(nodes ?? []), [nodes]);
-  const uncheckedCount = (activeStage?.gateItems ?? []).filter((i) => !i.checked).length;
+  const uncheckedCount = (activeMs?.gateItems ?? []).filter((i) => !i.checked).length;
   const allowedTransitions: ProjectStatus[] = project ? PROJECT_TRANSITIONS[project.status] ?? [] : [];
   const archived = project?.status === '已结项' || project?.status === '已终止';
-
-  /** 下一阶段（按 seq 顺序，阶段不可跳阶） */
-  const nextStage: StageWithGate | null = activeStage
-    ? stages.find((s) => s.seq === activeStage.seq + 1) ?? null
-    : null;
-  const isCurrentStage = Boolean(activeStage && project?.currentStageId === activeStage.id);
 
   if (!project) return <EmptyState title="项目不存在" description="请返回项目列表重新选择" />;
 
@@ -121,27 +116,27 @@ export function ProjectOverviewPage(): JSX.Element {
   const handleToggleItem = async (item: GateChecklistItem, checked: boolean): Promise<void> => {
     try {
       await api.toggleGateItem(item.id, checked);
-      await refreshStages(id);
+      await refreshProject(id);
     } catch (e) {
       toast.error(e);
     }
   };
 
-  /* ── 阶段推进（B3：受阻时必须列出 blockers） ────────
+  /* ── 门控决议 ──────────────────────────────────
    * 契约里没有独立的 advanceStage：门控结论为「已通过 / 有条件通过」时，
-   * mock 会在 decideGate 内部调用 advanceStage 自动推进。
-   * 因此"进入下一阶段"= 先做本地门禁体检，全通过才提交通过结论；
+   * mock 会在 decideGate 内部自动把该里程碑标记为已达成（§4.3）。
+   * 因此"推进"= 先做本地门禁体检，全通过才提交通过结论；
    * 任何一项不满足都把未通过检查项**逐条列出来**，而不是静默或只弹一句 toast。
    */
 
   /** 把服务端返回的结构化拦截数据翻译成 blockers 列表 */
-  const blockersFromError = (e: unknown): StageBlocker[] | null => {
+  const blockersFromError = (e: unknown): GateBlocker[] | null => {
     if (!isApiError(e)) return null;
     if (e.code !== ErrorCode.E_GATE_NOT_PASSED && e.code !== ErrorCode.E_GATE_ITEM_INCOMPLETE) return null;
     const data = e.data as
       | { unchecked?: Array<{ id: string; content: string }>; blockers?: Array<{ message: string }> }
       | undefined;
-    const list: StageBlocker[] = [];
+    const list: GateBlocker[] = [];
     (data?.unchecked ?? []).forEach((u) =>
       list.push({ kind: 'gate_item', message: `检查项未确认：${u.content}` }),
     );
@@ -149,29 +144,11 @@ export function ProjectOverviewPage(): JSX.Element {
     return list.length ? list : [{ kind: 'gate_status', message: e.message }];
   };
 
-  /** 本地门禁体检：返回全部未通过项（空数组 = 可推进） */
-  const collectStageBlockers = (): StageBlocker[] => {
-    const list: StageBlocker[] = [];
-    if (!activeStage) return [{ kind: 'sequence', message: '未选择阶段' }];
-
-    if (!isCurrentStage) {
-      list.push({
-        kind: 'sequence',
-        message: `「${activeStage.seq}. ${activeStage.name}」不是当前阶段，阶段只能顺序推进、不可跳阶`,
-        hint: '请先回到当前阶段完成推进',
-      });
-    }
-
-    if (!activeStage.gate) {
-      list.push({
-        kind: 'gate_status',
-        message: `阶段「${activeStage.name}」未配置质量门，无法通过门控推进`,
-        hint: '请在生命周期模板中为该阶段配置质量门',
-      });
-      return list;
-    }
-
-    activeStage.gateItems
+  /** 本地门禁体检：返回全部未通过项（空数组 = 可提交通过） */
+  const collectGateBlockers = (): GateBlocker[] => {
+    const list: GateBlocker[] = [];
+    if (!activeMs?.gate) return list;
+    activeMs.gateItems
       .filter((i) => !i.checked)
       .forEach((i) =>
         list.push({
@@ -180,67 +157,50 @@ export function ProjectOverviewPage(): JSX.Element {
           hint: `责任角色 ${i.ownerRole.toUpperCase()}`,
         }),
       );
-
-    if (activeStage.gate.status === '不通过') {
+    if (activeMs.gate.status === '不通过') {
       list.push({
         kind: 'gate_status',
-        message: `质量门 ${activeStage.gate.code} 结论为「不通过」`,
+        message: `质量门 ${activeMs.gate.code} 结论为「不通过」`,
         hint: '需整改后重新提交门控结论',
       });
     }
-
     return list;
   };
 
-  const handleAdvance = async (): Promise<void> => {
-    const found = collectStageBlockers();
-    if (found.length) {
-      // 受阻：把未通过检查项清单摆到台面上（E_GATE_NOT_PASSED.blockers[]）
-      setStageBlockers(found);
-      return;
-    }
-    if (!activeStage?.gate) return;
-
-    // 已是「有条件通过」的门保持原结论，避免推进动作偷偷把结论升级为「已通过」
-    const advanceConclusion: Conclusion =
-      activeStage.gate.conclusion === '有条件通过' ? '有条件通过' : '已通过';
-
-    setAdvancing(true);
+  /** 直接标记选中里程碑达成（仅对无门的自建里程碑有效；有门走门控） */
+  const handleAchieve = async (): Promise<void> => {
+    if (!activeMs) return;
+    setSubmitting(true);
     try {
-      await api.decideGate(id, {
-        gateId: activeStage.gate.id,
-        conclusion: advanceConclusion,
-        comment: activeStage.gate.comment || '阶段推进：质量门检查项已全部确认',
-      });
-      toast.success(nextStage ? `已推进到「${nextStage.seq}. ${nextStage.name}」` : '本阶段已完成');
-      await fetchDetail(id);
+      await api.updateMilestone(activeMs.id, { achieved: true });
+      toast.success(`「${activeMs.code} ${activeMs.name}」已标记达成`);
+      await refreshProject(id);
     } catch (e) {
-      const fromServer = blockersFromError(e);
-      if (fromServer) {
-        setStageBlockers(fromServer);
+      if (isApiError(e) && e.code === ErrorCode.E_GATE_NOT_PASSED) {
+        toast.error('该里程碑已挂质量门，需门控结论为「通过 / 有条件通过」后方可标记达成');
         return;
       }
       toast.error(e);
     } finally {
-      setAdvancing(false);
+      setSubmitting(false);
     }
   };
 
   const handleDecide = async (): Promise<void> => {
-    if (!activeStage?.gate) return;
+    if (!activeMs?.gate) return;
     setSubmitting(true);
     try {
-      await api.decideGate(id, { gateId: activeStage.gate.id, conclusion, comment: gateComment.trim() });
-      toast.success(`门控结论已记录：${conclusion}`);
+      await api.decideGate(id, { gateId: activeMs.gate.id, conclusion, comment: gateComment.trim() });
+      toast.success(`门控结论已记录：${conclusion}${conclusion !== '不通过' ? '，里程碑已自动达成' : ''}`);
       setGateOpen(false);
       setGateComment('');
-      await fetchDetail(id);
+      await refreshProject(id);
     } catch (e) {
       // 门检查项不齐备：同样列出未通过项，而不是只弹一句「存在未确认的检查项」
       const fromServer = blockersFromError(e);
       if (fromServer) {
         setGateOpen(false);
-        setStageBlockers(fromServer);
+        setGateBlockers(fromServer);
         return;
       }
       toast.error(e);
@@ -280,34 +240,35 @@ export function ProjectOverviewPage(): JSX.Element {
         </Alert>
       )}
 
-      {/* 阶段条 */}
+      {/* 里程碑时间轴 */}
       <SectionCard
-        title="生命周期阶段"
-        subtitle={`${PROJECT_TYPE_LABEL[project.type]} · 阶段只能顺序推进，质量门通过后才进入下一阶段`}
+        title="里程碑时间轴"
+        subtitle={`${PROJECT_TYPE_LABEL[project.type]} · 共 ${milestones.length} 个里程碑，已达成 ${milestones.filter((m) => m.done).length} 个`}
         actions={
-          <PermissionButton
-            action="stage:advance"
-            size="small"
-            variant="contained"
-            disabled={archived || advancing || !activeStage}
-            disabledReason={archived ? '项目已归档' : ''}
-            endIcon={<ArrowForwardIcon sx={{ fontSize: 16 }} />}
-            onClick={() => void handleAdvance()}
-          >
-            {advancing ? '推进中…' : nextStage ? `进入「${nextStage.name}」` : '完成本阶段'}
-          </PermissionButton>
+          activeMs && !activeMs.done && !activeMs.gate ? (
+            <PermissionButton
+              action="milestone:edit"
+              size="small"
+              variant="contained"
+              disabled={archived || submitting}
+              disabledReason={archived ? '项目已归档' : ''}
+              startIcon={<CheckCircleOutlineIcon sx={{ fontSize: 16 }} />}
+              onClick={() => void handleAchieve()}
+            >
+              标记「{activeMs.code}」达成
+            </PermissionButton>
+          ) : undefined
         }
       >
         <Stack direction="row" spacing={1.25} sx={{ overflowX: 'auto', pb: 1 }}>
-          {stages.map((s) => {
-            const gateStatus = s.gate?.status ?? '未开始';
-            const isActive = s.id === activeStageId;
-            const isCurrent = s.id === project.currentStageId;
-            const color = colorOf(s.status === '已完成' ? '已通过' : s.status);
+          {milestones.map((m) => {
+            const gateStatus = m.gate?.status ?? '未开始';
+            const isActive = m.id === activeMsId;
+            const color = colorOf(m.status);
             return (
               <Box
-                key={s.id}
-                onClick={() => setActiveStageId(s.id)}
+                key={m.id}
+                onClick={() => setActiveMsId(m.id)}
                 sx={{
                   minWidth: 168,
                   flexShrink: 0,
@@ -323,14 +284,17 @@ export function ProjectOverviewPage(): JSX.Element {
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
                   <Typography sx={{ color, fontSize: 15, lineHeight: 1 }}>{GATE_ICON[gateStatus]}</Typography>
                   <Typography sx={{ fontSize: 13, fontWeight: 600 }} noWrap>
-                    {s.seq}. {s.name}
+                    {m.code} {m.name}
                   </Typography>
-                  {isCurrent && <Chip size="small" label="当前" sx={{ height: 18, fontSize: 11 }} />}
+                  {m.done && <Chip size="small" label="已达成" sx={{ height: 18, fontSize: 11 }} />}
+                  {m.required && !m.done && (
+                    <Chip size="small" label="必备" sx={{ height: 18, fontSize: 11 }} />
+                  )}
                 </Stack>
                 <Stack direction="row" spacing={0.75} alignItems="center">
-                  <StatusChip status={s.status} />
-                  {s.gate && (
-                    <Tooltip title={`${s.gate.code} ${s.gate.name}`} arrow>
+                  <StatusChip status={m.status} />
+                  {m.gate && (
+                    <Tooltip title={`${m.gate.code} ${m.gate.name}`} arrow>
                       <Box>
                         <StatusChip status={gateStatus} variant="outlined" />
                       </Box>
@@ -344,16 +308,18 @@ export function ProjectOverviewPage(): JSX.Element {
       </SectionCard>
 
       <Box sx={{ display: 'grid', gap: 2.5, gridTemplateColumns: { xs: '1fr', lg: '1.35fr 1fr' } }}>
-        {/* 质量门检查清单 */}
+        {/* 质量门检查清单（绑定选中里程碑的门） */}
         <SectionCard
-          title={activeStage?.gate ? `${activeStage.gate.code} ${activeStage.gate.name}` : '质量门'}
+          title={activeMs?.gate ? `${activeMs.gate.code} ${activeMs.gate.name}` : '质量门'}
           subtitle={
-            activeStage?.gate
-              ? `责任角色 ${activeStage.gate.ownerRole.toUpperCase()} · 全部检查项确认后方可提交结论`
-              : '该阶段未配置质量门'
+            activeMs?.gate
+              ? `责任角色 ${activeMs.gate.ownerRole.toUpperCase()} · 全部检查项确认后方可提交结论`
+              : activeMs
+                ? '该里程碑未挂载质量门'
+                : '请选择一个里程碑'
           }
           actions={
-            activeStage?.gate ? (
+            activeMs?.gate ? (
               <PermissionButton
                 action="gate:decide"
                 size="small"
@@ -367,20 +333,28 @@ export function ProjectOverviewPage(): JSX.Element {
             ) : undefined
           }
         >
-          {!activeStage?.gate ? (
-            <EmptyState title="该阶段无质量门" description="生命周期模板未为此阶段配置质量门" dense />
+          {!activeMs?.gate ? (
+            <EmptyState
+              title="该里程碑无质量门"
+              description={
+                activeMs?.done
+                  ? '里程碑已达成'
+                  : '无门里程碑可直接在里程碑页或上方「标记达成」触发达成，无需门控'
+              }
+              dense
+            />
           ) : (
             <>
               <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
-                <StatusChip status={activeStage.gate.status} />
+                <StatusChip status={activeMs.gate.status} />
                 <Typography variant="caption" color="text.secondary">
-                  {activeStage.gateItems.filter((i) => i.checked).length} / {activeStage.gateItems.length} 项已确认
-                  {activeStage.gate.decidedAt ? ` · 决议于 ${fmtDate(activeStage.gate.decidedAt)}` : ''}
+                  {activeMs.gateItems.filter((i) => i.checked).length} / {activeMs.gateItems.length} 项已确认
+                  {activeMs.gate.decidedAt ? ` · 决议于 ${fmtDate(activeMs.gate.decidedAt)}` : ''}
                 </Typography>
               </Stack>
 
               <List dense disablePadding>
-                {activeStage.gateItems.map((item) => (
+                {activeMs.gateItems.map((item) => (
                   <ListItem key={item.id} disableGutters sx={{ alignItems: 'flex-start' }}>
                     <ListItemIcon sx={{ minWidth: 34, mt: 0.25 }}>
                       <Checkbox
@@ -414,10 +388,10 @@ export function ProjectOverviewPage(): JSX.Element {
                 ))}
               </List>
 
-              {activeStage.gate.comment && (
+              {activeMs.gate.comment && (
                 <Alert severity="info" variant="outlined" sx={{ mt: 1.5 }}>
-                  <AlertTitle sx={{ mb: 0.25 }}>门控结论：{activeStage.gate.conclusion}</AlertTitle>
-                  {activeStage.gate.comment}
+                  <AlertTitle sx={{ mb: 0.25 }}>门控结论：{activeMs.gate.conclusion}</AlertTitle>
+                  {activeMs.gate.comment}
                 </Alert>
               )}
             </>
@@ -433,6 +407,10 @@ export function ProjectOverviewPage(): JSX.Element {
               </FieldRow>
               <FieldRow label="里程碑">
                 {milestones.filter((m) => m.done).length} / {milestones.length} 已达成
+              </FieldRow>
+              <FieldRow label="质量门">
+                已过 {milestones.filter((m) => m.gate && (m.gate.status === '已通过' || m.gate.status === '有条件通过')).length} /{' '}
+                {milestones.filter((m) => m.gate).length} 道门
               </FieldRow>
               <FieldRow label="客户">{project.customer || '内部项目'}</FieldRow>
               <FieldRow label="合同额">{fmtAmount(project.contractAmount)}</FieldRow>
@@ -514,7 +492,7 @@ export function ProjectOverviewPage(): JSX.Element {
       {/* 门控结论对话框 */}
       <FormDialog
         open={gateOpen}
-        title={`提交门控结论 · ${activeStage?.gate?.code ?? ''}`}
+        title={`提交门控结论 · ${activeMs?.gate?.code ?? ''}`}
         submitText="提交结论"
         submitting={submitting}
         onClose={() => setGateOpen(false)}
@@ -549,30 +527,24 @@ export function ProjectOverviewPage(): JSX.Element {
         />
         <Divider />
         <Typography variant="caption" color="text.secondary">
-          通过 / 有条件通过后，系统会自动完成本阶段并推进到下一阶段，同时写入审计日志。
+          通过 / 有条件通过后，系统会自动将该里程碑标记为已达成，同时写入审计日志。
         </Typography>
       </FormDialog>
 
-      {/* 阶段推进受阻：逐条列出未通过检查项（E_GATE_NOT_PASSED.blockers[]） */}
-      <Dialog
-        open={Boolean(stageBlockers)}
-        onClose={() => setStageBlockers(null)}
-        maxWidth="sm"
-        fullWidth
-      >
+      {/* 门控受阻：逐条列出未通过检查项（E_GATE_NOT_PASSED.blockers[]） */}
+      <Dialog open={Boolean(gateBlockers)} onClose={() => setGateBlockers(null)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ pb: 1 }}>
           <Stack direction="row" spacing={1} alignItems="center">
             <BlockOutlinedIcon sx={{ color: toneColor.danger, fontSize: 20 }} />
-            <span>质量门未通过，无法进入下一阶段</span>
+            <span>质量门未通过，无法标记达成</span>
           </Stack>
         </DialogTitle>
         <DialogContent>
           <Alert severity="error" variant="outlined" sx={{ mb: 1.5 }}>
-            共 <strong>{stageBlockers?.length ?? 0}</strong> 项未通过，全部处理完成后才可推进
-            {nextStage ? `到「${nextStage.seq}. ${nextStage.name}」` : ''}。
+            共 <strong>{gateBlockers?.length ?? 0}</strong> 项未通过，全部处理完成后才可提交通过结论。
           </Alert>
           <List dense disablePadding>
-            {(stageBlockers ?? []).map((b, i) => (
+            {(gateBlockers ?? []).map((b, i) => (
               <ListItem
                 key={`${b.kind}-${i}`}
                 disableGutters
@@ -605,12 +577,11 @@ export function ProjectOverviewPage(): JSX.Element {
             ))}
           </List>
           <Typography variant="caption" color="text.secondary">
-            提示：在左侧「质量门」清单勾选完全部检查项后，再点击「
-            {nextStage ? `进入「${nextStage.name}」` : '完成本阶段'}」即可推进。
+            提示：在左侧「质量门」清单勾选完全部检查项后，再点击「提交门控结论」即可。
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setStageBlockers(null)} variant="contained">
+          <Button onClick={() => setGateBlockers(null)} variant="contained">
             我知道了
           </Button>
         </DialogActions>

@@ -20,12 +20,11 @@ export const PERMISSIONS: Record<string, PermRule> = {
   'project:transition': { global: ['admin', 'pmo'], project: ['pm'] },
   'project:close': { global: ['admin', 'pmo'], project: ['pm'] },
   'project:member:assign': { global: ['admin', 'pmo'], project: ['pm'] },
-  // 阶段 / 质量门
-  'stage:advance': { global: ['admin', 'pmo'], project: ['pm'] },
+  // 质量门（挂在里程碑上 · 决策 D-A）
   'gate:decide': { global: ['admin', 'pmo', 'qa', 'tl'], project: ['qa', 'tl', 'pmo'] },
   'gate:item:check': { global: ['admin', 'pmo', 'qa', 'tl', 'cm'], project: ['qa', 'tl', 'cm', 'pmo'] },
   'gate:item:add': { global: ['admin', 'pmo'], project: ['pm', 'qa'] },
-  // 里程碑
+  // 里程碑（本轮启用增删改与状态覆盖）
   'milestone:create': { global: ['admin', 'pmo'], project: ['pm'] },
   'milestone:edit': { global: ['admin', 'pmo'], project: ['pm'] },
   'milestone:delete': { global: ['admin'], project: ['pm'] },

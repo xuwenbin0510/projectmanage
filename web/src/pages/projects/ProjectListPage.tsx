@@ -96,18 +96,20 @@ export function ProjectListPage(): JSX.Element {
     },
     { key: 'status', label: '状态', width: 92, render: (r) => <StatusChip status={r.status} /> },
     {
-      key: 'stage',
-      label: '当前阶段 / 门',
+      /* N-5：项目「走到第几步」= 下一里程碑 + 已过 N/M 道门（不再有「当前阶段」） */
+      key: 'nextMilestone',
+      label: '下一里程碑 / 门',
       width: 190,
       hideOnMobile: true,
       render: (r) => (
         <Box>
-          <Typography sx={{ fontSize: 13 }}>{r.currentStageName}</Typography>
-          {r.currentGateCode && (
-            <Typography variant="caption" color="text.secondary">
-              {r.currentGateCode} · {r.currentGateStatus}
-            </Typography>
-          )}
+          <Typography sx={{ fontSize: 13 }} noWrap>
+            {r.nextMilestoneCode ? `${r.nextMilestoneCode} ${r.nextMilestoneName}` : '全部里程碑已达成'}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            已过 {r.gatePassed}/{r.gateTotal} 道门
+            {r.currentGateCode ? ` · ${r.currentGateCode} ${r.currentGateStatus}` : ''}
+          </Typography>
         </Box>
       ),
     },

@@ -81,7 +81,7 @@ export function DocumentsPage(): JSX.Element {
 
   return (
     <Stack spacing={2.5}>
-      <PageHeader title="文档清单" subtitle="P1 二期能力：按阶段模板自动派生交付物清单与基线管控（本期为占位）" />
+      <PageHeader title="文档清单" subtitle="P1 二期能力：按生命周期模板自动派生交付物清单与基线管控（本期为占位）" />
       <SectionCard flush>
         {loading ? (
           <LoadingState variant="skeleton" rows={4} height={48} />

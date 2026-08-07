@@ -2,7 +2,6 @@
 
 export type AuditEntityType =
   | 'project'
-  | 'stage'
   | 'gate'
   | 'gate_item'
   | 'milestone'
@@ -65,7 +64,8 @@ export interface Risk {
 export interface ProjectDocument {
   id: string;
   projectId: string;
-  stageId: string;
+  /** 关联里程碑 id；'' = 不关联 */
+  milestoneId: string;
   templateKey: string;
   name: string;
   status: string;

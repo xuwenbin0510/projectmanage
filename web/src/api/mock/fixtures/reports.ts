@@ -1,5 +1,6 @@
 import type { Report, ReportTaskRow, ReportRisk } from '@/types/report';
 import type { WbsNode } from '@/types/wbs';
+import { leafNodesOf } from '@/utils/wbs';
 import type { User } from '@/types/project';
 import { weekCode, weekRange, shiftWeek, today, addDays } from '@/utils/date';
 import { OPEN_IDS, nameOf } from './users';
@@ -94,9 +95,10 @@ export function createReports(users: User[], wbsNodes: WbsNode[]): Report[] {
   return SPECS.map((spec) => {
     const week = shiftWeek(weekCode(today()), spec.weekOffset);
     const range = weekRange(week);
-    const leaves = wbsNodes
-      .filter((n) => n.projectId === spec.projectId && n.nodeType === 'task')
-      .slice(0, spec.taskCount);
+    // SK-4：周报关联任务取「真叶子」（无子节点者），不再用 nodeType === 'task' 近似
+    const leaves = leafNodesOf(
+      wbsNodes.filter((n) => n.projectId === spec.projectId),
+    ).slice(0, spec.taskCount);
 
     const tasks: ReportTaskRow[] = leaves.map((n) => ({
       reportId: spec.id,

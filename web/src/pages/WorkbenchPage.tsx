@@ -317,8 +317,8 @@ export function WorkbenchPage(): JSX.Element {
                   </Stack>
                   <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mt: 1 }}>
                     <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }} noWrap>
-                      {p.currentStageName}
-                      {p.currentGateCode ? ` · ${p.currentGateCode} ${p.currentGateStatus}` : ''}
+                      {p.nextMilestoneCode ? `${p.nextMilestoneCode} ${p.nextMilestoneName}` : '里程碑已全部达成'}
+                      {` · 已过 ${p.gatePassed}/${p.gateTotal} 道门`}
                     </Typography>
                     <ProgressBar value={p.progress} tone={p.health === 'red' ? 'danger' : 'brand'} />
                   </Stack>

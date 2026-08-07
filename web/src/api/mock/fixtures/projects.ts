@@ -1,8 +1,8 @@
 import type {
   Project,
   ProjectMember,
-  ProjectStage,
   QualityGate,
+  GateStatus,
   GateChecklistItem,
   Milestone,
   LifecycleTemplate,
@@ -18,8 +18,10 @@ import { OPEN_IDS, nameOf } from './users';
 /**
  * 演示项目集（T19）：A/B/C 各 1 个进行中项目 + 1 个审批中 + 1 个已结项归档
  * @prd P0-01 P0-02 P0-03 P0-04 P0-05
+ *
+ * ⚠️ 方案一（极简）：阶段实体已删除。实例化逻辑改为「按里程碑生成门」，
+ * `currentStageSeq` 概念改为 `currentGateSeq`（第几道门在检）。
  */
-
 interface ProjectSpec {
   id: string;
   code: string;
@@ -34,11 +36,11 @@ interface ProjectSpec {
   health: Health;
   planStartOffset: number;
   planEndOffset: number;
-  /** 当前阶段序号（1-based）；已结项项目填阶段总数 */
-  currentStageSeq: number;
-  /** 当前阶段的门已勾选的检查项数量 */
+  /** 当前在检的门序号（1-based）；已结项项目填里程碑总数 */
+  currentGateSeq: number;
+  /** 当前在检门已勾选的检查项数量 */
   currentGateChecked: number;
-  /** 前 n 个里程碑已达成 */
+  /** 前 n 个里程碑已达成（写入 doneAt，状态派生为「已达成」） */
   milestonesDone: number;
   members: Array<[string, ProjectRole]>;
   createdBy: string;
@@ -65,7 +67,7 @@ const SPECS: ProjectSpec[] = [
     health: 'yellow',
     planStartOffset: -70,
     planEndOffset: 165,
-    currentStageSeq: 4,
+    currentGateSeq: 4,
     currentGateChecked: 2,
     milestonesDone: 2,
     members: [
@@ -103,7 +105,7 @@ const SPECS: ProjectSpec[] = [
     health: 'green',
     planStartOffset: -6,
     planEndOffset: 8,
-    currentStageSeq: 2,
+    currentGateSeq: 2,
     currentGateChecked: 1,
     milestonesDone: 1,
     members: [
@@ -138,7 +140,7 @@ const SPECS: ProjectSpec[] = [
     health: 'red',
     planStartOffset: -90,
     planEndOffset: 60,
-    currentStageSeq: 3,
+    currentGateSeq: 3,
     currentGateChecked: 1,
     milestonesDone: 2,
     members: [
@@ -173,7 +175,7 @@ const SPECS: ProjectSpec[] = [
     health: 'green',
     planStartOffset: 7,
     planEndOffset: 220,
-    currentStageSeq: 1,
+    currentGateSeq: 1,
     currentGateChecked: 0,
     milestonesDone: 0,
     members: [
@@ -207,7 +209,7 @@ const SPECS: ProjectSpec[] = [
     health: 'green',
     planStartOffset: -300,
     planEndOffset: -150,
-    currentStageSeq: 5,
+    currentGateSeq: 5,
     currentGateChecked: 2,
     milestonesDone: 5,
     actualEndOffset: -150,
@@ -232,22 +234,20 @@ const SPECS: ProjectSpec[] = [
 export interface ProjectBundle {
   projects: Project[];
   members: ProjectMember[];
-  stages: ProjectStage[];
   gates: QualityGate[];
   gateItems: GateChecklistItem[];
   milestones: Milestone[];
 }
 
 /**
- * 按生命周期模板实例化项目的阶段 / 门 / 检查项 / 里程碑
- * @prd P0-02
+ * 按生命周期模板实例化项目的里程碑 + 门 + 检查项（方案一：一碑一门，无阶段）
+ * @prd P0-02 P0-05
  */
 export function createProjects(users: User[], templates: LifecycleTemplate[]): ProjectBundle {
   const ts = nowIso();
   const bundle: ProjectBundle = {
     projects: [],
     members: [],
-    stages: [],
     gates: [],
     gateItems: [],
     milestones: [],
@@ -259,90 +259,9 @@ export function createProjects(users: User[], templates: LifecycleTemplate[]): P
     const planEnd = addDays(today(), spec.planEndOffset);
     const isClosed = spec.status === '已结项';
 
-    const stageDefs = tpl.definition.stages;
-    let currentStageId: string | null = null;
-
-    stageDefs.forEach((sd, idx) => {
-      const seq = idx + 1;
-      const stageId = `${spec.id}-${sd.code}`;
-      const isDone = isClosed || seq < spec.currentStageSeq;
-      const isCurrent = !isClosed && seq === spec.currentStageSeq;
-      if (isCurrent) currentStageId = stageId;
-
-      bundle.stages.push({
-        id: stageId,
-        projectId: spec.id,
-        seq,
-        code: sd.code,
-        name: sd.name,
-        status: isDone ? '已完成' : isCurrent ? '进行中' : '未开始',
-        startedAt: isDone || isCurrent ? addDays(planStart, idx * 18) : null,
-        finishedAt: isDone ? addDays(planStart, (idx + 1) * 18) : null,
-      });
-
-      const gateId = `${spec.id}-${sd.gate.code}`;
-      const gateStatus = isDone ? '已通过' : isCurrent ? '待检查' : '未开始';
-      bundle.gates.push({
-        id: gateId,
-        projectId: spec.id,
-        stageId,
-        code: sd.gate.code,
-        name: sd.gate.name,
-        ownerRole: sd.gate.ownerRole,
-        status: gateStatus,
-        conclusion: isDone ? '已通过' : '',
-        comment: isDone ? '检查项齐备，同意进入下一阶段。' : '',
-        decidedBy: isDone ? OPEN_IDS.zhangmin : null,
-        decidedAt: isDone ? addDays(planStart, (idx + 1) * 18) : null,
-        createdAt: ts,
-      });
-
-      sd.gate.items.forEach((it, i) => {
-        const checked = isDone || (isCurrent && i < spec.currentGateChecked);
-        bundle.gateItems.push({
-          id: `${gateId}-I${i + 1}`,
-          gateId,
-          seq: i + 1,
-          content: it.content,
-          ownerRole: it.ownerRole,
-          checked,
-          checkedBy: checked ? OPEN_IDS.chenjing : null,
-          checkedAt: checked ? addDays(planStart, (idx + 1) * 18 - 2) : null,
-          source: 'template',
-        });
-      });
-    });
-
-    tpl.definition.milestones.forEach((md, idx) => {
-      const baselineDate = addDays(planStart, md.offsetDays);
-      // 演示：P-0012 的 M2 由变更单 CR-001 延后 7 天
-      const delayed = spec.id === 'P0012' && md.code === 'M2';
-      const currentDate = delayed ? addDays(baselineDate, 7) : baselineDate;
-      const delayDays = diffDays(baselineDate, currentDate);
-      const done = idx < spec.milestonesDone;
-      const overdue = !done && diffDays(today(), currentDate) < 0;
-      const isNext = !done && idx === spec.milestonesDone;
-      bundle.milestones.push({
-        id: `${spec.id}-${md.code}`,
-        projectId: spec.id,
-        code: md.code,
-        name: md.name,
-        target: '',
-        // Q-1 安全默认：仅模板带 anchorStage 的（A 类）回填真实 stageId/anchor，
-        // B/C 类模板未预置 → null，由 PM 手工补锚。stageId 拼法与上方阶段循环一致（spec.id + 阶段 code）
-        stageId: md.anchorStage ? `${spec.id}-${md.anchorStage}` : null,
-        anchor: md.anchor ?? null,
-        baselineDate,
-        currentDate,
-        delayDays,
-        status: done ? '已达成' : overdue ? '已逾期' : isNext ? '进行中' : '未开始',
-        done,
-        doneAt: done ? currentDate : null,
-        lastChangeId: delayed ? 'CR001' : null,
-        createdAt: ts,
-        updatedAt: ts,
-      });
-    });
+    // 先落成员，便于取 PMO 作为门决议 / 达成操作人
+    const pmoOpenId =
+      spec.members.find(([openId, role]) => role === 'pmo')?.[0] ?? spec.createdBy;
 
     spec.members.forEach(([openId, role], i) => {
       bundle.members.push({
@@ -354,6 +273,81 @@ export function createProjects(users: User[], templates: LifecycleTemplate[]): P
         assignedBy: spec.createdBy,
         assignedAt: planStart,
       });
+    });
+
+    // ── 逐里程碑生成：里程碑 + 其门（0..1） + 检查项 ──
+    tpl.definition.milestones.forEach((md, idx) => {
+      const baselineDate = addDays(planStart, md.offsetDays);
+      // 演示：P-0012 的 M2 由变更单 CR-001 延后 7 天
+      const delayed = spec.id === 'P0012' && md.code === 'M2';
+      const currentDate = delayed ? addDays(baselineDate, 7) : baselineDate;
+      const delayDays = diffDays(baselineDate, currentDate);
+      const done = idx < spec.milestonesDone;
+
+      bundle.milestones.push({
+        id: `${spec.id}-${md.code}`,
+        projectId: spec.id,
+        code: md.code,
+        name: md.name,
+        target: '',
+        required: md.required,
+        baselineDate,
+        currentDate,
+        delayDays,
+        // SK-2：status / done 为派生值，此处给初始值；读路径经 refreshMilestoneStatuses 重算
+        status: done ? '已达成' : '未开始',
+        done,
+        doneAt: done ? currentDate : null,
+        doneBy: done ? pmoOpenId : null,
+        statusOverride: null,
+        overrideBy: null,
+        overrideAt: null,
+        overrideBaseDate: null,
+        lastChangeId: delayed ? 'CR001' : null,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+
+      // 一碑一门（C-G1）：模板必备碑恒配门，用户自建碑无门（本轮不开放）
+      if (md.gate) {
+        const gateId = `${spec.id}-${md.gate.code}`;
+        const isCurrent = !isClosed && idx === spec.currentGateSeq - 1;
+        const gateStatus: GateStatus = done
+          ? '已通过'
+          : isCurrent
+            ? '待检查'
+            : '未开始';
+
+        bundle.gates.push({
+          id: gateId,
+          projectId: spec.id,
+          milestoneId: `${spec.id}-${md.code}`,
+          code: md.gate.code,
+          name: md.gate.name,
+          ownerRole: md.gate.ownerRole,
+          status: gateStatus,
+          conclusion: done ? '已通过' : '',
+          comment: done ? '检查项齐备，同意里程碑达成。' : '',
+          decidedBy: done ? pmoOpenId : null,
+          decidedAt: done ? currentDate : null,
+          createdAt: ts,
+        });
+
+        md.gate.items.forEach((it, i) => {
+          const checked = done || (isCurrent && i < spec.currentGateChecked);
+          bundle.gateItems.push({
+            id: `${gateId}-I${i + 1}`,
+            gateId,
+            seq: i + 1,
+            content: it.content,
+            ownerRole: it.ownerRole,
+            checked,
+            checkedBy: checked ? OPEN_IDS.chenjing : null,
+            checkedAt: checked ? addDays(planStart, (idx + 1) * 18 - 2) : null,
+            source: 'template',
+          });
+        });
+      }
     });
 
     bundle.projects.push({
@@ -369,7 +363,7 @@ export function createProjects(users: User[], templates: LifecycleTemplate[]): P
       background: spec.background,
       goal: spec.goal,
       status: spec.status,
-      currentStageId,
+      // 方案一：currentStageId 已删除，进度以里程碑为唯一时间轴
       health: spec.health,
       planStart,
       planEnd,

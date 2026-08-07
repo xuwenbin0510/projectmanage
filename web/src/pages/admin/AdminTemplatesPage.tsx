@@ -35,15 +35,23 @@ export function AdminTemplatesPage(): JSX.Element {
       render: (t) => <Chip size="small" variant="outlined" label={PROJECT_TYPE_LABEL[t.projectType as ProjectType]} />,
     },
     { key: 'version', label: '版本', width: 80, render: (t) => <Typography variant="caption">v{t.version}</Typography> },
-    { key: 'stages', label: '阶段数', width: 90, align: 'center', render: (t) => <Typography variant="caption">{t.definition.stages.length}</Typography> },
     { key: 'milestones', label: '里程碑数', width: 100, align: 'center', render: (t) => <Typography variant="caption">{t.definition.milestones.length}</Typography> },
+    {
+      key: 'gates',
+      label: '质量门数',
+      width: 100,
+      align: 'center',
+      render: (t) => (
+        <Typography variant="caption">{t.definition.milestones.filter((m) => m.gate).length}</Typography>
+      ),
+    },
     { key: 'docs', label: '交付物数', width: 100, align: 'center', render: (t) => <Typography variant="caption">{t.definition.docs.length}</Typography> },
     { key: 'isActive', label: '状态', width: 100, render: (t) => <StatusChip status={t.isActive ? '已批准' : '草稿'} label={t.isActive ? '启用' : '停用'} /> },
   ];
 
   return (
     <Stack spacing={2.5}>
-      <PageHeader title="生命周期模板" subtitle="A / B / C 三类项目各自的生命周期定义：阶段、质量门、里程碑与交付物（只读预览）" />
+      <PageHeader title="生命周期模板" subtitle="A / B / C 三类项目各自的生命周期定义：里程碑、质量门与交付物（只读预览）" />
       <SectionCard flush>
         {loading ? (
           <LoadingState variant="skeleton" rows={4} height={48} />

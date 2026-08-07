@@ -12,9 +12,10 @@ import type {
   ClassifyInput,
   ClassifyResult,
   LifecycleTemplate,
-  StageWithGate,
   Milestone,
-  MilestoneAnchor,
+  MilestoneWithGate,
+  QualityGate,
+  GateChecklistItem,
   CloseBlocker,
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView, BoardColumn } from '@/types/wbs';
@@ -30,7 +31,9 @@ import type {
   CreateProjectPayload,
   UpdateProjectPayload,
   GateDecisionPayload,
+  MilestoneCreatePayload,
   MilestoneUpdatePayload,
+  CreateMilestoneSpec,
   WbsNodePayload,
   ReportPayload,
   CreateReviewPayload,
@@ -54,18 +57,31 @@ import {
   rollupProjectProgress,
   resolveWbsRules,
   validateWbsPlacement,
+  validateWbsDeadline,
+  validateWbsEstimate,
   subtreeRelativeDepth,
+  deriveMilestoneStatus,
+  milestoneStartFrom,
+  sortMilestones,
+  compareMilestones,
 } from './rules';
 import {
   PROJECT_TRANSITIONS,
   REVIEW_TEMPLATES,
   DEFAULT_WIP_LIMIT,
   AUDIT_ACTION_LABEL,
+  GATE_PASSED_STATUSES,
 } from '@/config/enums';
 import { canDo } from '@/config/permissions';
-import { addDays, today, nowIso, diffDays, weekCode, weekRange } from '@/utils/date';
+import { addDays, today, nowIso, diffDays, weekCode, weekRange, fitMilestoneDates } from '@/utils/date';
 import { genId, deepClone } from '@/utils/format';
-import { compareWbsCode, nextChildCode } from '@/utils/wbs';
+import {
+  compareWbsCode,
+  nextChildCode,
+  leafNodesOf,
+  isLeafNode,
+  milestoneTaskStats,
+} from '@/utils/wbs';
 
 /* ═══════════════════════════════════════════════════
  * 内存 Mock 引擎：实现 ApiClient 全部方法
@@ -138,24 +154,19 @@ function projectTemplateOf(db: MockDb, projectId: string): LifecycleTemplate | n
   return db.templates.find((t) => t.id === p.templateId) ?? null;
 }
 
-/** 校验引用的阶段 / 里程碑属于同一项目，否则抛 E_VALIDATION */
-function assertSameProjectRef(
+/**
+ * 校验引用的里程碑属于同一项目，否则抛 E_VALIDATION。
+ * 方案一删除阶段实体后，跨表引用只剩「里程碑」一种。
+ */
+function assertSameProjectMilestone(
   db: MockDb,
   projectId: string,
-  refKind: 'stage' | 'milestone',
   refId: string | null | undefined,
 ): void {
   if (!refId) return;
-  if (refKind === 'stage') {
-    const st = db.stages.find((s) => s.id === refId);
-    if (!st || st.projectId !== projectId) {
-      throw new ApiError(ErrorCode.E_VALIDATION, '归属阶段不存在或不属于当前项目', { refKind, refId });
-    }
-  } else {
-    const ms = db.milestones.find((m) => m.id === refId);
-    if (!ms || ms.projectId !== projectId) {
-      throw new ApiError(ErrorCode.E_VALIDATION, '关联里程碑不存在或不属于当前项目', { refKind, refId });
-    }
+  const ms = db.milestones.find((m) => m.id === refId);
+  if (!ms || ms.projectId !== projectId) {
+    throw new ApiError(ErrorCode.E_VALIDATION, '关联里程碑不存在或不属于当前项目', { refId });
   }
 }
 
@@ -188,24 +199,30 @@ function audit(
   });
 }
 
-/** 项目列表行聚合 */
+/**
+ * 项目列表行聚合（§3.2 / N-5）
+ * 「走到第几步」由「下一里程碑 + 已过 N/M 道门」表达，不再有「当前阶段」。
+ */
 function toListItem(db: MockDb, p: Project): ProjectListItem {
   const pm = db.members.find((m) => m.projectId === p.id && m.projectRole === 'pm');
-  const stage = db.stages.find((s) => s.id === p.currentStageId);
-  const gate = stage ? db.gates.find((g) => g.stageId === stage.id) : undefined;
-  const ms = db.milestones.filter((m) => m.projectId === p.id);
+  const ms = sortMilestones(db.milestones.filter((m) => m.projectId === p.id));
+  const gates = db.gates.filter((g) => g.projectId === p.id);
   const nodes = db.wbsNodes.filter((n) => n.projectId === p.id);
-  const next = ms
-    .filter((m) => !m.done)
-    .sort((a, b) => (a.currentDate < b.currentDate ? -1 : 1))[0];
+  /* 下一个未达成里程碑（确定性排序后首个 !done） */
+  const next = ms.find((m) => !m.done) ?? null;
+  /* 当前门 = 下一里程碑挂载的门；无下一碑或该碑无门 → 空 */
+  const gate = next ? gates.find((g) => g.milestoneId === next.id) ?? null : null;
   const risks = db.risks.filter((r) => r.projectId === p.id && r.riskValue >= 12);
 
   return {
     ...p,
     pmName: pm?.userName ?? '—',
-    currentStageName: stage?.name ?? (p.status === '已结项' ? '已归档' : '未启动'),
+    nextMilestoneCode: next?.code ?? '',
+    nextMilestoneName: next?.name ?? '',
     currentGateCode: gate?.code ?? '',
     currentGateStatus: gate?.status ?? '未开始',
+    gatePassed: gates.filter((g) => GATE_PASSED_STATUSES.includes(g.status)).length,
+    gateTotal: gates.length,
     progress: p.status === '已结项' ? 100 : rollupProjectProgress(nodes),
     milestoneDone: ms.filter((m) => m.done).length,
     milestoneTotal: ms.length,
@@ -214,18 +231,84 @@ function toListItem(db: MockDb, p: Project): ProjectListItem {
   };
 }
 
-/** 阶段 + 门 + 门检查项 聚合 */
-function stagesWithGate(db: MockDb, projectId: string): StageWithGate[] {
-  return db.stages
-    .filter((s) => s.projectId === projectId)
-    .sort((a, b) => a.seq - b.seq)
-    .map((s) => {
-      const gate = db.gates.find((g) => g.stageId === s.id) ?? null;
-      const gateItems = gate
-        ? db.gateItems.filter((i) => i.gateId === gate.id).sort((a, b) => a.seq - b.seq)
-        : [];
-      return { ...s, gate, gateItems };
+/**
+ * 里程碑 + 门 + 门检查项 + 关联任务统计 聚合（取代原 `stagesWithGate`）。
+ * 是里程碑页 / 概览页的唯一数据源；返回前先刷新派生状态，保证读到的 status 永远最新。
+ */
+function milestonesWithGate(db: MockDb, projectId: string): MilestoneWithGate[] {
+  /* P0-M2：读路径幂等重排，自愈 localStorage 中的历史脏 code（F-2）。
+   * 仅改内存 db 的 code 显示字段；落盘由调用方决定（listMilestones 已 saveDb）。 */
+  renumberMilestones(db, projectId);
+  refreshMilestoneStatuses(db, projectId);
+  const nodes = db.wbsNodes.filter((n) => n.projectId === projectId);
+  return sortMilestones(db.milestones.filter((m) => m.projectId === projectId)).map((m) => {
+    const gate = db.gates.find((g) => g.milestoneId === m.id) ?? null;
+    const gateItems = gate
+      ? db.gateItems.filter((i) => i.gateId === gate.id).sort((a, b) => a.seq - b.seq)
+      : [];
+    return { ...m, gate, gateItems, taskStats: milestoneTaskStats(nodes, m.id) };
+  });
+}
+
+/**
+ * 里程碑编号重排（用户反馈① / P0-M1 / P0-M2）：按 `compareMilestones` 排序后重排为 M1..Mn。
+ *
+ * - **幂等**：连续调用结果一致（比较函数不依赖 `code`）
+ * - 仅改显示用 `code`；身份是 `id`，WBS 经 `milestoneId` 关联，重排不影响引用完整性
+ * - 只在**内存 db** 上改，是否落盘由调用方决定（读路径不主动 `saveDb`）
+ *
+ * @returns 是否发生了变化（供读路径判断要不要落盘 / 供测试断言幂等性）
+ */
+function renumberMilestones(db: MockDb, projectId: string): boolean {
+  let changed = false;
+  db.milestones
+    .filter((m) => m.projectId === projectId)
+    .sort(compareMilestones) // ← 与 sortMilestones 同一比较函数（SK-M1）
+    .forEach((m, i) => {
+      const next = `M${i + 1}`;
+      if (m.code !== next) {
+        m.code = next;
+        changed = true;
+      }
     });
+  return changed;
+}
+
+/**
+ * ⚠️ SK-2 **里程碑派生状态的唯一写入口**（§2.5）。
+ *
+ * 输入：时间（`currentDate` / 起算日 / 今天）+ 完成度（关联任务叶子）+ 真值（`doneAt` / `statusOverride`）
+ * 输出：回写 `status` 与 `done`，并顺带重算项目健康度。
+ *
+ * 任何修改里程碑日期 / 达成 / 覆盖 / 任务进度的动作，落库后都必须调用本函数。
+ */
+function refreshMilestoneStatuses(db: MockDb, projectId: string): void {
+  const project = db.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  const list = db.milestones.filter((m) => m.projectId === projectId);
+  const nodes = db.wbsNodes.filter((n) => n.projectId === projectId);
+  const t = today();
+
+  for (const ms of list) {
+    const status = deriveMilestoneStatus(ms, {
+      today: t,
+      startFrom: milestoneStartFrom(list, ms, project.planStart),
+      stats: milestoneTaskStats(nodes, ms.id),
+    });
+    ms.status = status;
+    /* SK-2：done 退化为派生值，与 status 恒等同步 */
+    ms.done = status === '已达成';
+  }
+
+  project.health = computeHealth(list, db.gates.filter((g) => g.projectId === projectId));
+}
+
+/** 清空人工覆盖三元组 + 基线快照（达成 / 取消达成 / 改期 三个动作共用 · SK-7） */
+function clearOverride(ms: Milestone): void {
+  ms.statusOverride = null;
+  ms.overrideBy = null;
+  ms.overrideAt = null;
+  ms.overrideBaseDate = null;
 }
 
 /** 生成评审步骤 */
@@ -287,7 +370,7 @@ function onReviewApproved(db: MockDb, review: Review, actor: User): void {
       gate.conclusion = '已通过';
       gate.decidedBy = actor.openId;
       gate.decidedAt = today();
-      advanceStage(db, gate.projectId, gate.stageId, actor);
+      achieveMilestoneByGate(db, gate, actor);
     }
   }
   if (review.refType === 'project') {
@@ -309,35 +392,32 @@ function onReviewApproved(db: MockDb, review: Review, actor: User): void {
   }
 }
 
-/** 门通过后推进阶段 */
-function advanceStage(db: MockDb, projectId: string, stageId: string, actor: User): void {
-  const stages = db.stages.filter((s) => s.projectId === projectId).sort((a, b) => a.seq - b.seq);
-  const idx = stages.findIndex((s) => s.id === stageId);
-  if (idx === -1) return;
-  const cur = stages[idx];
-  cur.status = '已完成';
-  cur.finishedAt = today();
-  const next = stages[idx + 1];
-  const project = db.projects.find((p) => p.id === projectId);
-  if (next) {
-    next.status = '进行中';
-    next.startedAt = today();
-    const nextGate = db.gates.find((g) => g.stageId === next.id);
-    if (nextGate && nextGate.status === '未开始') nextGate.status = '待检查';
-    if (project) project.currentStageId = next.id;
-    audit(db, actor, 'stage', next.id, 'status_change', projectId, `阶段推进至「${next.name}」`, [
-      { field: 'stage', label: '当前阶段', before: cur.name, after: next.name },
-    ]);
-  } else if (project) {
-    project.currentStageId = cur.id;
-    audit(db, actor, 'stage', cur.id, 'status_change', projectId, '最后一个阶段已完成，可发起结项');
-  }
-  if (project) {
-    project.health = computeHealth(
-      db.milestones.filter((m) => m.projectId === projectId),
-      db.gates.filter((g) => g.projectId === projectId),
+/**
+ * 门通过 → 其挂载里程碑自动达成（§4.3，取代原 `advanceStage`）。
+ *
+ * 写 `doneAt` / `doneBy`（真值来源），清空人工覆盖，再由 `refreshMilestoneStatuses`
+ * 把 `status` 推导为「已达成」。不做任何"下一碑推进"——碑的先后完全由日期决定。
+ */
+function achieveMilestoneByGate(db: MockDb, gate: QualityGate, actor: User): void {
+  const ms = db.milestones.find((m) => m.id === gate.milestoneId);
+  if (!ms) return;
+  if (!ms.doneAt) {
+    ms.doneAt = today();
+    ms.doneBy = actor.openId;
+    ms.updatedAt = nowIso();
+    clearOverride(ms);
+    audit(
+      db,
+      actor,
+      'milestone',
+      ms.id,
+      'status_change',
+      gate.projectId,
+      `质量门「${gate.code} ${gate.name}」通过，里程碑「${ms.code} ${ms.name}」自动达成`,
+      [{ field: 'status', label: '里程碑状态', before: ms.status, after: '已达成' }],
     );
   }
+  refreshMilestoneStatuses(db, gate.projectId);
 }
 
 /** 看板视图组装 */
@@ -352,7 +432,8 @@ function buildBoard(db: MockDb, projectId: string): BoardView {
     };
     db.boardConfigs.push(config);
   }
-  const tasks = db.wbsNodes.filter((n) => n.projectId === projectId && n.nodeType === 'task');
+  /* Q-3：看板卡片 = 真叶子（无子节点），不再以 nodeType==='task' 判定 */
+  const tasks = leafNodesOf(db.wbsNodes.filter((n) => n.projectId === projectId));
   const columns: BoardColumn[] = config.columns.map((status) => ({
     status,
     cards: tasks.filter((t) => t.status === status).sort((a, b) => a.boardOrder - b.boardOrder),
@@ -475,7 +556,7 @@ export class MockApiClient implements ApiClient {
     return deepClone(db.projects.find((p) => p.id === id) ?? nf());
   }
 
-  /** @prd P0-02 新建项目（按模板实例化阶段 / 门 / 里程碑） */
+  /** @prd P0-02 新建项目（按模板实例化里程碑 / 门 / 骨架） */
   async createProject(payload: CreateProjectPayload): Promise<Project> {
     await delay(300);
     const db = getDb();
@@ -510,7 +591,6 @@ export class MockApiClient implements ApiClient {
       background: payload.background,
       goal: payload.goal,
       status: '草稿',
-      currentStageId: null,
       health: 'green',
       planStart: payload.planStart,
       planEnd: payload.planEnd,
@@ -523,162 +603,100 @@ export class MockApiClient implements ApiClient {
     };
     db.projects.push(project);
 
-    tpl.definition.stages.forEach((sd, idx) => {
-      const stageId = `${id}-${sd.code}`;
-      db.stages.push({
-        id: stageId,
-        projectId: id,
-        seq: idx + 1,
-        code: sd.code,
-        name: sd.name,
-        status: idx === 0 ? '进行中' : '未开始',
-        startedAt: idx === 0 ? today() : null,
-        finishedAt: null,
-      });
-      if (idx === 0) project.currentStageId = stageId;
-
-      const gateId = `${id}-${sd.gate.code}`;
-      db.gates.push({
-        id: gateId,
-        projectId: id,
-        stageId,
-        code: sd.gate.code,
-        name: sd.gate.name,
-        ownerRole: sd.gate.ownerRole,
-        status: idx === 0 ? '待检查' : '未开始',
-        conclusion: '',
-        comment: '',
-        decidedBy: null,
-        decidedAt: null,
-        createdAt: ts,
-      });
-      sd.gate.items.forEach((it, i) => {
-        db.gateItems.push({
-          id: `${gateId}-I${i + 1}`,
-          gateId,
-          seq: i + 1,
-          content: it.content,
-          ownerRole: it.ownerRole,
-          checked: false,
-          checkedBy: null,
-          checkedAt: null,
-          source: 'template',
-        });
-      });
-    });
-
-    /* ── 里程碑：用户覆盖优先，否则回退模板 ─────────────────
-     * payload.milestones 三态：undefined = 按模板 / [] = 显式清空 / 非空 = 完全覆盖
-     *
-     * WBS 重构 D-1：里程碑落锚到生命周期阶段。
-     *   模板分支取 `md.anchorStage`（模板阶段 code），向导分支取 `d.stageCode`；
-     *   两者都拼成真实 stageId = `${projectId}-${stageCode}`，且**必须存在**才写入，
-     *   否则一律降级为 null（Q-1 安全默认：宁可不锚，也不写错锚脏数据）。
+    /* ── 里程碑（方案一·极简：不再内联质量门） ─────────────
+     * 优先使用向导中用户编辑 / 新增的里程碑（payload.milestones）；
+     * 老客户端未传时回退到模板静默生成（向后兼容）。
+     * 必备/非必备碑均可自由增删；名称 / 日期用户可改（Q-2 / 用户反馈①②）。
      */
-    /** 模板阶段 code → 已实例化的 stage id；用于里程碑落锚与骨架生成 */
-    const stageIdByCode = new Map<string, string>(
-      db.stages.filter((s) => s.projectId === id).map((s) => [s.code, s.id]),
-    );
-    /** 把「模板阶段 code」解析成真实 stageId + anchor；解析不出来则整体置 null */
-    const resolveAnchor = (
-      stageCode: string | null | undefined,
-      anchor: MilestoneAnchor | null | undefined,
-    ): { stageId: string | null; anchor: MilestoneAnchor | null } => {
-      if (!stageCode) return { stageId: null, anchor: null };
-      const stageId = stageIdByCode.get(stageCode) ?? null;
-      if (!stageId) return { stageId: null, anchor: null };
-      return { stageId, anchor: anchor ?? 'end' };
-    };
+    const wbsRules = resolveWbsRules(tpl);
 
-    const pushMs = (
-      seq: number,
-      code: string,
-      name: string,
-      target: string,
-      date: string,
-      bind: { stageId: string | null; anchor: MilestoneAnchor | null },
-    ): void => {
-      db.milestones.push({
-        // 用索引拼 id，不用 code —— 用户可能造出重复 code
-        id: `${id}-MS${seq}`,
+    /* 把模板定义拍平成「绝对日期」规格，与向导提交的 CreateMilestoneSpec 同构 */
+    /* 模板里程碑偏移 → 等比压缩后的绝对日期（SK-M7：日期生成唯一入口 fitMilestoneDates） */
+    const tplDates = fitMilestoneDates(
+      payload.planStart,
+      payload.planEnd,
+      tpl.definition.milestones.map((md) => md.offsetDays),
+    );
+    const templateSpecs: CreateMilestoneSpec[] = tpl.definition.milestones.map((md, i) => ({
+      code: md.code,
+      name: md.name,
+      target: '',
+      date: tplDates[i] ?? addDays(payload.planStart, md.offsetDays),
+      required: md.required,
+      gate: null, // K-1：新建项目不生成质量门（方案一·极简），字段仅保类型契约
+    }));
+    const specList: CreateMilestoneSpec[] =
+      payload.milestones && payload.milestones.length ? payload.milestones : templateSpecs;
+
+    const createdMilestones: Milestone[] = [];
+    specList.forEach((md, idx) => {
+      const msId = `${id}-MS${idx + 1}`;
+      const date = md.date; // 绝对日期：向导已用 planStart + 偏移预填，用户可改
+      const ms: Milestone = {
+        id: msId,
         projectId: id,
-        code,
-        name,
-        target,
-        stageId: bind.stageId,
-        anchor: bind.anchor,
+        code: md.code,
+        name: md.name,
+        target: md.target ?? '',
+        required: md.required,
         baselineDate: date, // 创建即基线
         currentDate: date,
         delayDays: 0,
+        /* SK-2：此处占位，落库后统一由 refreshMilestoneStatuses 推导 */
         status: '未开始',
         done: false,
         doneAt: null,
+        doneBy: null,
+        statusOverride: null,
+        overrideBy: null,
+        overrideAt: null,
+        overrideBaseDate: null,
         lastChangeId: null,
         createdAt: ts,
         updatedAt: ts,
-      });
-    };
+      };
+      db.milestones.push(ms);
+      createdMilestones.push(ms);
 
-    const drafts = payload.milestones;
+      /* 用户反馈②：新建项目不再自动生成质量门，里程碑为独立可编辑实体 */
+    });
 
-    if (drafts === undefined) {
-      // 分支 1：兼容既有调用（测试 / 种子数据）→ 按模板实例化
-      tpl.definition.milestones.forEach((md, i) =>
-        pushMs(
-          i + 1,
-          md.code,
-          md.name,
-          '',
-          addDays(payload.planStart, md.offsetDays),
-          resolveAnchor(md.anchorStage, md.anchor),
-        ),
-      );
-    } else {
-      // 分支 2：用户覆盖（[] 天然什么都不生成 —— 即「显式清空」）；脏数据兜底修补，不抛错
-      drafts.forEach((d, i) => {
-        const code = (d.code || `M${i + 1}`).trim();
-        const name = (d.name || `里程碑 ${i + 1}`).trim();
-        const date = d.date || payload.planStart;
-        pushMs(i + 1, code, name, (d.target ?? '').trim(), date, resolveAnchor(d.stageCode, d.anchor));
-      });
-    }
+    /* P0-M1 触发点⑤：向导可能改过日期 / 加过碑，模板 code 顺序已失效；
+     * 必须在 WBS 骨架生成之前重排，否则骨架 description 里内嵌的 ms.code 是脏的 */
+    renumberMilestones(db, id);
 
-    /* ── WBS 骨架预生成（决策 D-3 方案丙 + Q-2 per-stage） ──────
-     * 建项事务内按模板阶段逐个生成 `nodeType:'stage'` 根节点（前端文案「工作分区」），
-     * 并回填 lifecycleStageId，使新项目一进 WBS 页就有「阶段为脊」的骨架，
-     * 而不是空树 + 用户自由建根导致的结构漂移。
-     * 三类项目统一 per-stage（含 B 类，Q-2）；B 类仅是 requireStageBinding=false。
+    /* ── WBS 骨架预生成（D-3 方案丙 + Q-3 per-milestone） ──────
+     * 逐个里程碑生成一个顶层 `nodeType:'task'` 根节点并绑定 milestoneId，
+     * 使新项目一进 WBS 页就有「里程碑为脊」的骨架，而不是空树导致结构漂移。
+     * 根节点此刻是叶子，会自然计入里程碑完成度；用户往下挂子任务后自动让位。
      */
-    const wbsRules = resolveWbsRules(tpl);
-    if (wbsRules.skeleton === 'per-stage') {
-      tpl.definition.stages.forEach((sd, idx) => {
-        const stageId = stageIdByCode.get(sd.code) ?? null;
-        db.wbsNodes.push({
-          id: `${id}-WS${idx + 1}`,
-          projectId: id,
-          parentId: null,
-          wbsCode: String(idx + 1),
-          level: 1,
-          nodeType: 'stage',
-          lifecycleStageId: stageId,
-          name: sd.name,
-          description: `由 ${tpl.name} 模板阶段「${sd.code} ${sd.name}」自动生成`,
-          owner: '',
-          ownerName: '',
-          estimateDays: 0,
-          actualDays: 0,
-          startDate: '',
-          dueDate: '',
-          status: '待办',
-          progress: 0,
-          boardOrder: idx,
-          isCritical: false,
-          milestoneId: null,
-          createdBy: me.openId,
-          createdAt: ts,
-          updatedAt: ts,
+    if (wbsRules.skeleton === 'per-milestone') {
+      createdMilestones.forEach((ms, idx) => {
+          db.wbsNodes.push({
+            id: `${id}-WS${idx + 1}`,
+            projectId: id,
+            parentId: null,
+            wbsCode: String(idx + 1),
+            level: 1,
+            nodeType: 'task',
+            name: ms.name,
+            description: `由 ${tpl.name} 模板里程碑「${ms.code} ${ms.name}」自动生成`,
+            owner: '',
+            ownerName: '',
+            estimateDays: 0,
+            actualDays: 0,
+            startDate: '',
+            dueDate: ms.currentDate,
+            status: '待办',
+            progress: 0,
+            boardOrder: idx,
+            isCritical: false,
+            milestoneId: ms.id,
+            createdBy: me.openId,
+            createdAt: ts,
+            updatedAt: ts,
+          });
         });
-      });
     }
 
     payload.members.forEach((m, i) => {
@@ -701,17 +719,19 @@ export class MockApiClient implements ApiClient {
       updatedAt: ts,
     });
 
+    /* SK-2：骨架落库后统一推导里程碑状态（首碑会随起算日自然「进行中」） */
+    refreshMilestoneStatuses(db, id);
+
+    const msCount = db.milestones.filter((m) => m.projectId === id).length;
     const createDiff: AuditDiffEntry[] = [
       { field: 'type', label: '项目分类', before: '', after: `${payload.type} 类` },
-    ];
-    if (drafts !== undefined) {
-      createDiff.push({
+      {
         field: 'milestones',
         label: '里程碑',
-        before: '模板默认',
-        after: drafts.length ? `自定义 ${drafts.length} 条` : '清空（0 条）',
-      });
-    }
+        before: '',
+        after: `按 ${tpl.name} 生成 ${msCount} 个里程碑`,
+      },
+    ];
     audit(db, me, 'project', id, 'create', id, `创建项目「${payload.name}」，分类 ${payload.type} 类`, createDiff);
     saveDb();
     return deepClone(project);
@@ -837,17 +857,10 @@ export class MockApiClient implements ApiClient {
     saveDb();
   }
 
-  /* ── 阶段 / 质量门 ─────────────────────────────── */
-
-  async listStages(projectId: string): Promise<StageWithGate[]> {
-    await delay(80);
-    const db = getDb();
-    currentUser(db);
-    return deepClone(stagesWithGate(db, projectId));
-  }
+  /* ── 质量门（挂载于里程碑 · 决策 D-A） ──────────── */
 
   /** @prd P0-03 勾选门检查项 */
-  async toggleGateItem(itemId: string, checked: boolean): Promise<StageWithGate[]> {
+  async toggleGateItem(itemId: string, checked: boolean): Promise<MilestoneWithGate[]> {
     await delay(120);
     const db = getDb();
     const item = db.gateItems.find((i) => i.id === itemId) ?? nf();
@@ -859,11 +872,14 @@ export class MockApiClient implements ApiClient {
     item.checkedAt = checked ? today() : null;
     audit(db, me, 'gate_item', itemId, 'update', gate.projectId, `${checked ? '勾选' : '取消勾选'}检查项「${item.content}」`);
     saveDb();
-    return deepClone(stagesWithGate(db, gate.projectId));
+    return deepClone(milestonesWithGate(db, gate.projectId));
   }
 
-  /** @prd P0-03 提交门控结论（检查项未齐备直接拒绝） */
-  async decideGate(projectId: string, payload: GateDecisionPayload): Promise<StageWithGate[]> {
+  /**
+   * @prd P0-03 提交门控结论（检查项未齐备直接拒绝）
+   * 通过 / 有条件通过 → 其挂载里程碑自动达成（§4.3），无需单独的推进动作。
+   */
+  async decideGate(projectId: string, payload: GateDecisionPayload): Promise<MilestoneWithGate[]> {
     await delay(200);
     const db = getDb();
     assertWritable(db, projectId);
@@ -889,32 +905,133 @@ export class MockApiClient implements ApiClient {
       { field: 'status', label: '门状态', before, after: payload.conclusion },
     ]);
 
-    if (payload.conclusion === '已通过' || payload.conclusion === '有条件通过') {
-      advanceStage(db, projectId, gate.stageId, me);
+    if (GATE_PASSED_STATUSES.includes(payload.conclusion)) {
+      achieveMilestoneByGate(db, gate, me);
+    } else {
+      refreshMilestoneStatuses(db, projectId);
     }
     saveDb();
-    return deepClone(stagesWithGate(db, projectId));
+    return deepClone(milestonesWithGate(db, projectId));
   }
 
-  /* ── 里程碑 ───────────────────────────────────── */
+  /* ── 里程碑（唯一时间轴 · Q-1 / Q-2） ───────────── */
 
-  async listMilestones(projectId: string): Promise<Milestone[]> {
+  async listMilestones(projectId: string): Promise<MilestoneWithGate[]> {
     await delay(80);
     const db = getDb();
     currentUser(db);
-    return deepClone(
-      db.milestones.filter((m) => m.projectId === projectId).sort((a, b) => (a.currentDate < b.currentDate ? -1 : 1)),
-    );
+    const rows = deepClone(milestonesWithGate(db, projectId));
+    /* refreshMilestoneStatuses 可能回写了 status/done/health，需要落盘 */
+    saveDb();
+    return rows;
   }
 
-  /** @prd P0-05 里程碑单向规则：延后必须走变更单 */
-  async updateMilestone(id: string, payload: MilestoneUpdatePayload): Promise<Milestone> {
+  /**
+   * @prd P0-05 新增里程碑（Q-2 自由增）
+   * 用户自建碑恒为 `required:false`（可删）且不带门（C-G2）。
+   */
+  async createMilestone(projectId: string, payload: MilestoneCreatePayload): Promise<MilestoneWithGate> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'milestone.edit', projectId);
+
+    const name = payload.name.trim();
+    if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '里程碑名称不能为空');
+    if (!payload.date) throw new ApiError(ErrorCode.E_VALIDATION, '里程碑日期不能为空');
+
+    const siblings = db.milestones.filter((m) => m.projectId === projectId);
+    /* code 取 M{max+1}，避免与模板碑冲突；解析不出数字的 code 视作 0 */
+    const maxSeq = siblings.reduce((max, m) => {
+      const n = Number.parseInt(m.code.replace(/^\D+/, ''), 10);
+      return Number.isNaN(n) ? max : Math.max(max, n);
+    }, 0);
+    const ts = nowIso();
+    const ms: Milestone = {
+      id: genId('MS'),
+      projectId,
+      code: `M${maxSeq + 1}`,
+      name,
+      target: (payload.target ?? '').trim(),
+      required: false,
+      baselineDate: payload.date,
+      currentDate: payload.date,
+      delayDays: 0,
+      status: '未开始',
+      done: false,
+      doneAt: null,
+      doneBy: null,
+      statusOverride: null,
+      overrideBy: null,
+      overrideAt: null,
+      overrideBaseDate: null,
+      lastChangeId: null,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    db.milestones.push(ms);
+    /* 插入后按日期重排编号，避免 M2-M3 间插入出现 M5（用户反馈①） */
+    renumberMilestones(db, projectId);
+
+    audit(db, me, 'milestone', ms.id, 'create', projectId, `新增里程碑「${ms.code} ${ms.name}」（${ms.currentDate}）`, [
+      { field: 'currentDate', label: '计划日期', before: '', after: ms.currentDate },
+    ]);
+    refreshMilestoneStatuses(db, projectId);
+    saveDb();
+    const row = milestonesWithGate(db, projectId).find((m) => m.id === ms.id) ?? nf();
+    return deepClone(row);
+  }
+
+  /**
+   * @prd P0-05 删除里程碑（Q-2 模板必备碑锁删）
+   * 必备碑 → `E_MS_REQUIRED_LOCKED`；同时级联清理其门 / 门检查项，
+   * 并把挂载在该碑上的 WBS 节点解绑（置 null），不删任务。
+   */
+  async deleteMilestone(id: string): Promise<void> {
+    await delay(150);
+    const db = getDb();
+    const ms = db.milestones.find((m) => m.id === id) ?? nf();
+    assertWritable(db, ms.projectId);
+    const me = assertCan(db, 'milestone.edit', ms.projectId);
+
+    /* 级联：门 → 门检查项（里程碑可自由删除，不再因「必备」锁删，用户反馈②） */
+    const gates = db.gates.filter((g) => g.milestoneId === id);
+    for (const g of gates) {
+      db.gateItems = db.gateItems.filter((i) => i.gateId !== g.id);
+    }
+    db.gates = db.gates.filter((g) => g.milestoneId !== id);
+    /* WBS 关联只解绑不删任务，避免误删用户工作量 */
+    for (const n of db.wbsNodes) {
+      if (n.milestoneId === id) {
+        n.milestoneId = null;
+        n.updatedAt = nowIso();
+      }
+    }
+    db.milestones = db.milestones.filter((m) => m.id !== id);
+    /* 删除后按日期重排编号（用户反馈①） */
+    renumberMilestones(db, ms.projectId);
+
+    audit(db, me, 'milestone', id, 'delete', ms.projectId, `删除里程碑「${ms.code} ${ms.name}」`, [
+      { field: 'name', label: '里程碑', before: `${ms.code} ${ms.name}`, after: '' },
+    ]);
+    refreshMilestoneStatuses(db, ms.projectId);
+    saveDb();
+  }
+
+  /**
+   * @prd P0-05 修改里程碑
+   * - `currentDate`：提前可直改，延后抛 `E_MS_NEED_CHANGE`；改期清空 override（SK-7）
+   * - `achieved`：C-G4 有门且门未过 → `E_GATE_NOT_PASSED`；写 `doneAt/doneBy` 并清空 override
+   * - `statusOverride`：三元组审计留痕 + 快照 `overrideBaseDate`
+   */
+  async updateMilestone(id: string, payload: MilestoneUpdatePayload): Promise<MilestoneWithGate> {
     await delay();
     const db = getDb();
     const ms = db.milestones.find((m) => m.id === id) ?? nf();
     assertWritable(db, ms.projectId);
     const me = assertCan(db, 'milestone.edit', ms.projectId);
 
+    /* ① 改期（单向规则） */
     if (payload.currentDate && payload.currentDate !== ms.currentDate) {
       if (milestoneDelayNeedsChange(ms, payload.currentDate)) {
         throw new ApiError(ErrorCode.E_MS_NEED_CHANGE, '里程碑日期延后须走变更申请', {
@@ -931,16 +1048,25 @@ export class MockApiClient implements ApiClient {
       const before = ms.currentDate;
       ms.currentDate = payload.currentDate;
       ms.delayDays = diffDays(ms.baselineDate, ms.currentDate);
+      /* SK-7：改期后人工覆盖自动作废 */
+      clearOverride(ms);
       audit(db, me, 'milestone', id, 'update', ms.projectId, `里程碑 ${ms.code} 日期提前`, [
         { field: 'currentDate', label: '当前日期', before, after: ms.currentDate },
       ]);
+      /* P0-M1 触发点③：改期后必须重排，否则 M4 提前编号不动（F-1） */
+      renumberMilestones(db, ms.projectId);
     }
 
-    if (payload.name && payload.name !== ms.name) {
-      ms.name = payload.name;
+    /* ② 名称 */
+    if (payload.name !== undefined && payload.name.trim() && payload.name !== ms.name) {
+      const before = ms.name;
+      ms.name = payload.name.trim();
+      audit(db, me, 'milestone', id, 'update', ms.projectId, `里程碑 ${ms.code} 名称调整`, [
+        { field: 'name', label: '名称', before, after: ms.name },
+      ]);
     }
 
-    // 目标 / 达成标准：纯文本字段，直接赋值 + 审计，不触发单向日期约束
+    /* ③ 目标 / 达成标准：纯文本，不触发单向日期约束 */
     if (payload.target !== undefined && payload.target !== ms.target) {
       const before = ms.target;
       ms.target = payload.target;
@@ -949,46 +1075,53 @@ export class MockApiClient implements ApiClient {
       ]);
     }
 
-    // 归属阶段 / 锚点：补选或改锚，不触发单向日期约束；stageId 须属于同一项目
-    if (payload.stageId !== undefined || payload.anchor !== undefined) {
-      if (payload.stageId !== undefined) {
-        assertSameProjectRef(db, ms.projectId, 'stage', payload.stageId);
+    /* ④ 标记 / 取消达成（真值来源 doneAt） */
+    if (payload.achieved !== undefined && payload.achieved !== Boolean(ms.doneAt)) {
+      if (payload.achieved) {
+        /* 用户反馈②：不再因质量门卡住达成，允许直接标记 */
+        ms.doneAt = today();
+        ms.doneBy = me.openId;
+      } else {
+        ms.doneAt = null;
+        ms.doneBy = null;
       }
-      const nextStage = payload.stageId !== undefined ? payload.stageId : ms.stageId;
-      const nextAnchor = nextStage
-        ? payload.anchor !== undefined
-          ? payload.anchor
-          : ms.anchor
-        : null;
-      if (nextStage !== ms.stageId || nextAnchor !== ms.anchor) {
-        const before = `${ms.stageId ?? ''}${ms.anchor ? `/${ms.anchor}` : ''}`;
-        ms.stageId = nextStage;
-        ms.anchor = nextAnchor;
-        audit(db, me, 'milestone', id, 'update', ms.projectId, `里程碑 ${ms.code} 归属阶段调整`, [
-          { field: 'stageId', label: '归属阶段', before, after: `${ms.stageId ?? ''}${ms.anchor ? `/${ms.anchor}` : ''}` },
-        ]);
-      }
+      /* 达成 / 取消达成一律清空覆盖，保证 P1 与 P2 不冲突 */
+      clearOverride(ms);
+      audit(
+        db,
+        me,
+        'milestone',
+        id,
+        'status_change',
+        ms.projectId,
+        `里程碑 ${ms.code} ${payload.achieved ? '标记达成' : '取消达成'}`,
+        [{ field: 'doneAt', label: '达成时间', before: '', after: ms.doneAt ?? '' }],
+      );
     }
 
-    if (payload.done !== undefined && payload.done !== ms.done) {
-      ms.done = payload.done;
-      ms.doneAt = payload.done ? today() : null;
-      ms.status = payload.done ? '已达成' : diffDays(today(), ms.currentDate) < 0 ? '已逾期' : '进行中';
-      audit(db, me, 'milestone', id, 'status_change', ms.projectId, `里程碑 ${ms.code} ${payload.done ? '标记达成' : '取消达成'}`, [
-        { field: 'done', label: '达成状态', before: String(!payload.done), after: String(payload.done) },
+    /* ⑤ 人工覆盖状态（SK-7b：类型层已排除「已达成」） */
+    if (payload.statusOverride !== undefined && payload.statusOverride !== ms.statusOverride) {
+      const before = ms.statusOverride ?? '（无）';
+      if (payload.statusOverride === null) {
+        clearOverride(ms);
+      } else {
+        ms.statusOverride = payload.statusOverride;
+        ms.overrideBy = me.openId;
+        ms.overrideAt = nowIso();
+        /* 快照当前计划日，改期后该覆盖自动失效 */
+        ms.overrideBaseDate = ms.currentDate;
+      }
+      audit(db, me, 'milestone', id, 'status_change', ms.projectId, `里程碑 ${ms.code} 人工覆盖状态`, [
+        { field: 'statusOverride', label: '覆盖状态', before, after: ms.statusOverride ?? '（撤销）' },
       ]);
     }
 
     ms.updatedAt = nowIso();
-    const p = db.projects.find((x) => x.id === ms.projectId);
-    if (p) {
-      p.health = computeHealth(
-        db.milestones.filter((m) => m.projectId === p.id),
-        db.gates.filter((g) => g.projectId === p.id),
-      );
-    }
+    /* SK-2：所有真值改完后统一推导 status / done + 项目健康度 */
+    refreshMilestoneStatuses(db, ms.projectId);
     saveDb();
-    return deepClone(ms);
+    const row = milestonesWithGate(db, ms.projectId).find((m) => m.id === id) ?? nf();
+    return deepClone(row);
   }
 
   /* ── WBS ──────────────────────────────────────── */
@@ -1016,32 +1149,45 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_VALIDATION, '父节点不属于当前项目', { parentId: parent.id });
     }
 
-    // R-2 父子类型 / R-1 深度 / R-6 stage 绑定 —— fail-fast，先于 R-5 叶子完整性
+    // W-1 深度 / W-2 父子类型 —— fail-fast，先于叶子完整性
     const rules = resolveWbsRules(projectTemplateOf(db, projectId));
-    const placementError = validateWbsPlacement(
-      { nodeType: payload.nodeType, parent, lifecycleStageId: payload.lifecycleStageId ?? null },
-      rules,
-    );
+    const placementError = validateWbsPlacement({ nodeType: payload.nodeType, parent }, rules);
     if (placementError) {
       throw new ApiError(placementError.code, placementError.message, placementError.data);
     }
 
-    // R-5 叶子完整性（位置后移到结构校验之后）
-    if (payload.nodeType === 'task' && (!payload.owner || !payload.estimateDays)) {
+    /* 叶子完整性：新建节点必然还没有子节点，故一律按叶子口径校验负责人 / 估算 */
+    if (!payload.owner || !payload.estimateDays) {
       throw new ApiError(ErrorCode.E_WBS_LEAF_INCOMPLETE);
     }
 
-    // 归属阶段 / 关联里程碑 须属于同一项目（跨项目一律 E_VALIDATION）
-    const lifecycleStageId = payload.nodeType === 'stage' ? (payload.lifecycleStageId ?? null) : null;
-    assertSameProjectRef(db, projectId, 'stage', lifecycleStageId);
-    const milestoneId = payload.nodeType === 'stage' ? null : (payload.milestoneId ?? null);
-    assertSameProjectRef(db, projectId, 'milestone', milestoneId);
+    // 关联里程碑：显式传入用传入值；未传则默认继承上级节点的里程碑（用户反馈②）
+    const milestoneId = payload.milestoneId !== undefined ? payload.milestoneId : (parent?.milestoneId ?? null);
+    assertSameProjectMilestone(db, projectId, milestoneId);
 
     const siblings = db.wbsNodes.filter((n) => n.projectId === projectId && n.parentId === payload.parentId);
     const wbsCode = nextChildCode(parent?.wbsCode ?? null, siblings.map((s) => s.wbsCode));
     const owner = payload.owner ?? '';
     const u = db.users.find((x) => x.openId === owner);
     const ts = nowIso();
+
+    // 有效截止日期（未传则默认 +7 天），用于截止日期硬拦截校验（用户反馈③）
+    const effectiveDue = payload.dueDate ?? addDays(today(), 7);
+    const milestone = milestoneId ? db.milestones.find((m) => m.id === milestoneId) ?? null : null;
+    const deadlineErr = validateWbsDeadline({ dueDate: effectiveDue, parent, milestone });
+    if (deadlineErr) {
+      throw new ApiError(deadlineErr.code, deadlineErr.message, deadlineErr.data);
+    }
+
+    /* 工时估算硬拦截（用户反馈④b）：估算不得超过起止区间可用天数 */
+    const estimateErr = validateWbsEstimate({
+      estimateDays: payload.estimateDays ?? 0,
+      startDate: payload.startDate ?? today(),
+      dueDate: effectiveDue,
+    });
+    if (estimateErr) {
+      throw new ApiError(estimateErr.code, estimateErr.message, estimateErr.data);
+    }
 
     const node: WbsNode = {
       id: genId('W'),
@@ -1050,8 +1196,6 @@ export class MockApiClient implements ApiClient {
       wbsCode,
       level: wbsCode.split('.').length,
       nodeType: payload.nodeType,
-      // 仅工作分区（stage）可绑定生命周期阶段；其余类型强制 null
-      lifecycleStageId,
       name: payload.name,
       description: payload.description ?? '',
       owner,
@@ -1059,7 +1203,7 @@ export class MockApiClient implements ApiClient {
       estimateDays: payload.estimateDays ?? 0,
       actualDays: 0,
       startDate: payload.startDate ?? today(),
-      dueDate: payload.dueDate ?? addDays(today(), 7),
+      dueDate: effectiveDue,
       status: payload.status ?? '待办',
       progress: payload.progress ?? 0,
       boardOrder: db.wbsNodes.filter((n) => n.projectId === projectId).length,
@@ -1071,6 +1215,8 @@ export class MockApiClient implements ApiClient {
     };
     db.wbsNodes.push(node);
     audit(db, me, 'wbs_node', node.id, 'create', projectId, `新增 WBS 节点「${wbsCode} ${payload.name}」`);
+    /* 新叶子会改变里程碑完成度 → 触发状态重推 */
+    refreshMilestoneStatuses(db, projectId);
     saveDb();
     return deepClone(node);
   }
@@ -1093,21 +1239,12 @@ export class MockApiClient implements ApiClient {
       // 无子节点时允许改类型，但须重新满足父子白名单（对其父重校验）
       const rules = resolveWbsRules(projectTemplateOf(db, node.projectId));
       const parent = node.parentId ? (db.wbsNodes.find((n) => n.id === node.parentId) ?? null) : null;
-      const placementError = validateWbsPlacement(
-        {
-          nodeType: payload.nodeType,
-          parent,
-          lifecycleStageId: payload.nodeType === 'stage' ? node.lifecycleStageId : null,
-        },
-        rules,
-      );
+      const placementError = validateWbsPlacement({ nodeType: payload.nodeType, parent }, rules);
       if (placementError) {
         throw new ApiError(placementError.code, placementError.message, placementError.data);
       }
       const beforeType = node.nodeType;
       node.nodeType = payload.nodeType;
-      // 类型变更后旧绑定若不再适用则清空
-      if (node.nodeType !== 'stage') node.lifecycleStageId = null;
       diff.push({ field: 'nodeType', label: '节点类型', before: beforeType, after: node.nodeType });
     }
 
@@ -1132,7 +1269,28 @@ export class MockApiClient implements ApiClient {
       node.estimateDays = payload.estimateDays;
     }
     if (payload.startDate !== undefined) node.startDate = payload.startDate;
-    if (payload.dueDate !== undefined) node.dueDate = payload.dueDate;
+    if (payload.dueDate !== undefined) {
+      // 截止日期硬拦截（用户反馈③）：子节点不得晚于上级任务或关联里程碑
+      const nextMsId = payload.milestoneId !== undefined ? (payload.milestoneId ?? null) : node.milestoneId;
+      const ms = nextMsId ? db.milestones.find((m) => m.id === nextMsId) ?? null : null;
+      const parentNode = node.parentId ? db.wbsNodes.find((n) => n.id === node.parentId) ?? null : null;
+      const deadlineErr = validateWbsDeadline({ dueDate: payload.dueDate, parent: parentNode, milestone: ms });
+      if (deadlineErr) {
+        throw new ApiError(deadlineErr.code, deadlineErr.message, deadlineErr.data);
+      }
+      node.dueDate = payload.dueDate;
+    }
+
+    /* 工时估算硬拦截（用户反馈④b）：与起止/截止任一变更后统一复检 */
+    {
+      const effEstimate = payload.estimateDays !== undefined ? payload.estimateDays : node.estimateDays;
+      const effStart = payload.startDate !== undefined ? payload.startDate : node.startDate;
+      const effDue = payload.dueDate !== undefined ? payload.dueDate : node.dueDate;
+      const estErr = validateWbsEstimate({ estimateDays: effEstimate, startDate: effStart, dueDate: effDue });
+      if (estErr) {
+        throw new ApiError(estErr.code, estErr.message, estErr.data);
+      }
+    }
     if (payload.status !== undefined && payload.status !== node.status) {
       diff.push({ field: 'status', label: '状态', before: node.status, after: payload.status });
       node.status = payload.status;
@@ -1142,26 +1300,11 @@ export class MockApiClient implements ApiClient {
       node.actualDays = Number(((node.estimateDays * node.progress) / 100).toFixed(1));
     }
 
-    // lifecycleStageId：仅 stage 可绑定；跨项目引用拒；非 stage 强制 null
-    if (payload.lifecycleStageId !== undefined) {
-      const nextStage = node.nodeType === 'stage' ? (payload.lifecycleStageId ?? null) : null;
-      if (nextStage !== node.lifecycleStageId) {
-        assertSameProjectRef(db, node.projectId, 'stage', nextStage);
-        diff.push({
-          field: 'lifecycleStageId',
-          label: '归属阶段',
-          before: node.lifecycleStageId ?? '',
-          after: nextStage ?? '',
-        });
-        node.lifecycleStageId = nextStage;
-      }
-    }
-
-    // milestoneId：package / task 可挂；跨项目引用拒；stage 强制 null
+    // milestoneId：任意节点均可挂；跨项目引用拒
     if (payload.milestoneId !== undefined) {
-      const nextMs = node.nodeType === 'stage' ? null : (payload.milestoneId ?? null);
+      const nextMs = payload.milestoneId ?? null;
       if (nextMs !== node.milestoneId) {
-        assertSameProjectRef(db, node.projectId, 'milestone', nextMs);
+        assertSameProjectMilestone(db, node.projectId, nextMs);
         diff.push({
           field: 'milestoneId',
           label: '关联里程碑',
@@ -1172,11 +1315,14 @@ export class MockApiClient implements ApiClient {
       }
     }
 
-    if (node.nodeType === 'task' && (!node.owner || !node.estimateDays)) {
+    /* SK-13 叶子完整性：仅对真叶子（无子节点）要求负责人 + 估算 */
+    if (isLeafNode(db.wbsNodes, node.id) && (!node.owner || !node.estimateDays)) {
       throw new ApiError(ErrorCode.E_WBS_LEAF_INCOMPLETE);
     }
     node.updatedAt = nowIso();
     audit(db, me, 'wbs_node', id, 'update', node.projectId, `修改节点「${node.wbsCode} ${node.name}」`, diff);
+    /* 进度 / 挂载关系变化会影响里程碑完成度 → 触发状态重推 */
+    refreshMilestoneStatuses(db, node.projectId);
     saveDb();
     return deepClone(node);
   }
@@ -1187,16 +1333,6 @@ export class MockApiClient implements ApiClient {
     const node = db.wbsNodes.find((n) => n.id === id) ?? nf();
     assertWritable(db, node.projectId);
     const me = assertCan(db, 'wbs.edit', node.projectId);
-
-    // 已绑定生命周期阶段的非空工作分区禁止删除（骨架保护）
-    const children = db.wbsNodes.filter((n) => n.parentId === node.id);
-    if (node.nodeType === 'stage' && node.lifecycleStageId && children.length > 0) {
-      throw new ApiError(ErrorCode.E_VALIDATION, '该工作分区已绑定生命周期阶段且仍有子节点，不能删除', {
-        reason: 'stage_not_empty',
-        nodeId: node.id,
-        childCount: children.length,
-      });
-    }
 
     const toDelete = new Set<string>([id]);
     let grew = true;
@@ -1211,6 +1347,8 @@ export class MockApiClient implements ApiClient {
     }
     db.wbsNodes = db.wbsNodes.filter((n) => !toDelete.has(n.id));
     audit(db, me, 'wbs_node', id, 'delete', node.projectId, `删除节点「${node.wbsCode} ${node.name}」及其 ${toDelete.size - 1} 个子节点`);
+    /* 删除叶子会改变里程碑完成度 → 触发状态重推 */
+    refreshMilestoneStatuses(db, node.projectId);
     saveDb();
   }
 
@@ -1236,11 +1374,11 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_VALIDATION, '目标父节点不属于当前项目', { parentId: parent.id });
     }
 
-    // R-2 父子类型 + R-1 子树整体深度（把深树搬到深处绕过 maxDepth 的路径被显式拦截）
+    // W-2 父子类型 + W-1 子树整体深度（把深树搬到深处绕过 maxDepth 的路径被显式拦截）
     const rules = resolveWbsRules(projectTemplateOf(db, node.projectId));
     const subDepth = subtreeRelativeDepth(db.wbsNodes, node.id);
     const placementError = validateWbsPlacement(
-      { nodeType: node.nodeType, parent, lifecycleStageId: node.lifecycleStageId, subtreeDepth: subDepth },
+      { nodeType: node.nodeType, parent, subtreeDepth: subDepth },
       rules,
     );
     if (placementError) {
@@ -1369,32 +1507,28 @@ export class MockApiClient implements ApiClient {
     const range = weekRange(payload.week);
     const ts = nowIso();
 
-    let report = db.reports.find((r) => r.projectId === payload.projectId && r.week === payload.week);
-    const isNew = !report;
-    if (!report) {
-      report = {
-        id: genId('RP'),
-        projectId: payload.projectId,
-        week: payload.week,
-        weekStart: range.start,
-        weekEnd: range.end,
-        author: me.openId,
-        authorName: me.name,
-        status,
-        doneNote: '',
-        planItems: [],
-        resourceNote: '',
-        tasks: [],
-        risks: [],
-        snapshot: null,
-        submittedAt: null,
-        createdAt: ts,
-        updatedAt: ts,
-      };
-      db.reports.push(report);
-    } else if (report.status === '已提交' && status === '已提交') {
-      throw new ApiError(ErrorCode.E_REPORT_DUPLICATE);
-    }
+    // 用户反馈⑤：工作日志允许同周多次提交，不再按周次查重；每次存/交均新建一条
+    const report: Report = {
+      id: genId('RP'),
+      projectId: payload.projectId,
+      week: payload.week,
+      weekStart: range.start,
+      weekEnd: range.end,
+      author: me.openId,
+      authorName: me.name,
+      status,
+      doneNote: '',
+      planItems: [],
+      resourceNote: '',
+      tasks: [],
+      risks: [],
+      snapshot: null,
+      submittedAt: null,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    db.reports.push(report);
+    const isNew = true;
 
     report.status = status;
     report.doneNote = payload.doneNote;
@@ -1444,6 +1578,45 @@ export class MockApiClient implements ApiClient {
         { field: 'status', label: '周报状态', before: '草稿', after: '已提交' },
       ]);
     }
+
+    saveDb();
+    return deepClone(report);
+  }
+
+  /** @prd P0-08 编辑已有周报（按 id 原地更新，不复用周次查重） */
+  async updateReport(id: string, payload: ReportPayload): Promise<Report> {
+    await delay(150);
+    const db = getDb();
+    const report = db.reports.find((r) => r.id === id) ?? nf();
+    assertWritable(db, report.projectId);
+    const me = assertCan(db, 'report.write', report.projectId);
+    const ts = nowIso();
+
+    report.doneNote = payload.doneNote;
+    report.planItems = payload.planItems.filter((p) => p.trim());
+    report.resourceNote = payload.resourceNote;
+    report.updatedAt = ts;
+    report.tasks = payload.tasks.map<ReportTaskRow>((t) => {
+      const node = db.wbsNodes.find((n) => n.id === t.nodeId);
+      return {
+        reportId: report.id,
+        nodeId: t.nodeId,
+        nodeCode: node?.wbsCode ?? '',
+        nodeName: node?.name ?? '',
+        progressBefore: node?.progress ?? 0,
+        progressAfter: t.progressAfter,
+        selected: t.selected,
+      };
+    });
+    report.risks = payload.risks.map<ReportRisk>((r, i) => ({
+      id: `${report.id}-RK${i + 1}`,
+      reportId: report.id,
+      seq: i + 1,
+      description: r.description,
+      owner: r.owner,
+      dueDate: r.dueDate,
+      promotedRiskId: null,
+    }));
 
     saveDb();
     return deepClone(report);
@@ -1780,25 +1953,24 @@ export class MockApiClient implements ApiClient {
         const before = ms.currentDate;
         ms.currentDate = toDate;
         ms.delayDays = diffDays(ms.baselineDate, toDate);
-        ms.status = ms.done ? '已达成' : diffDays(today(), toDate) < 0 ? '已逾期' : '进行中';
+        /* SK-2：只改日期这一个真值，status / done 交给 refreshMilestoneStatuses 推导；
+         * SK-7：改期后人工覆盖自动作废 */
+        clearOverride(ms);
         ms.lastChangeId = change.id;
         ms.updatedAt = nowIso();
         audit(db, me, 'milestone', ms.id, 'apply', change.projectId, `变更实施：${ms.code} 当前日期调整（基线日期保持不变）`, [
           { field: 'currentDate', label: '当前日期', before, after: toDate },
           { field: 'delayDays', label: '累计延期', after: `${ms.delayDays} 天`, before: '' },
         ]);
+        /* P0-M1 触发点④：变更单回写里程碑日期后重排 */
+        renumberMilestones(db, change.projectId);
       }
     }
 
     change.status = '已实施';
     change.appliedAt = nowIso();
-    const p = db.projects.find((x) => x.id === change.projectId);
-    if (p) {
-      p.health = computeHealth(
-        db.milestones.filter((m) => m.projectId === p.id),
-        db.gates.filter((g) => g.projectId === p.id),
-      );
-    }
+    /* 里程碑日期变动会连带改变起算日 → 全项目重推状态（内含健康度重算） */
+    refreshMilestoneStatuses(db, change.projectId);
     audit(db, me, 'change', id, 'apply', change.projectId, `变更单 ${change.code} 已实施`);
     saveDb();
     return deepClone(change);
@@ -1837,8 +2009,9 @@ export class MockApiClient implements ApiClient {
       .filter((p) => myProjectIds.has(p.id) && p.status !== '已结项' && p.status !== '已终止')
       .map((p) => toListItem(db, p));
 
-    const myTasks = db.wbsNodes
-      .filter((n) => n.owner === me.openId && n.nodeType === 'task' && n.status !== '完成')
+    /* Q-3：我的任务 = 我负责的真叶子（无子节点），不再以 nodeType==='task' 判定 */
+    const myTasks = leafNodesOf(db.wbsNodes)
+      .filter((n) => n.owner === me.openId && n.status !== '完成')
       .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1));
 
     const myApprovals = db.reviews.filter((r) => canDecide(r, me.openId) !== null);

@@ -2,21 +2,20 @@ import type { LifecycleTemplate } from '@/types/project';
 import { nowIso } from '@/utils/date';
 
 /**
- * A / B / C 三套生命周期模板（阶段 + 质量门 + 检查项 + 里程碑骨架 + WBS 规则 + 文档清单）
+ * A / B / C 三套生命周期模板（里程碑 + 质量门 + 检查项 + WBS 规则 + 文档清单）
  * @prd P0-02 P0-03 P0-05 P0-06
  *
- * ⚠️ 本文件是**运行时生效**的模板定义。`docs/lifecycle/*.json` 为架构师草拟版，
- *    阶段数与里程碑数与此处已发生分叉（B: 5阶段3碑 vs 草拟 4阶段6碑；C: 5阶段5碑 vs 草拟 5阶段6碑），
- *    以本文件为准。
+ * ⚠️ 方案一（极简）：阶段实体已被彻底删除。本文件是**运行时生效**的模板定义，
+ * 直接以「里程碑」为唯一时间轴，质量门**内联**在对应里程碑上（一碑最多一门 · C-G1）。
  *
- * 【里程碑锚点 · 决策 Q-1「安全默认」】
- *    仅 A 类填 `anchorStage` / `anchor`（映射见架构 §2.4）。B / C 类刻意留空，
- *    实例化后 `stageId = null`、`anchor = null`，由 PM 在里程碑页手工补锚。
- *    原因：草拟版 json 与运行时阶段集合不一致，硬填会静默产生错锚脏数据。
+ * 检查项总数守恒（A 19 = 19 / B 10 = 10 / C 10 = 10），具体内容与制度 §7.1 对齐，
+ * 仅改「门挂在哪道碑」的归属（详见架构 §2.3.2~2.3.4 三张迁移矩阵）。
  *
- * 【WBS 规则 · 决策 D-2】
- *    三类项目层级规则一致强制，模板只声明**差异项**，其余（尤其是 childTypes）
- *    由 `DEFAULT_WBS_RULES` 兜底，禁止在业务代码里散落 `if (type === 'B')`。
+ * `version` 已随结构性变更由 `1` bump 到 `2`（§9.1.5）；制度引用格式为 `TPL-x v2`。
+ *
+ * 【WBS 规则 · 决策 D-2 / SK-5】
+ *   三类项目层级规则一致，模板只写差异项（此处仅 maxDepth / skeleton），
+ *   其余（尤其 childTypes）由 `DEFAULT_WBS_RULES` 兜底，禁止业务代码散落 `if (type === 'B')`。
  */
 export function createTemplates(): LifecycleTemplate[] {
   const ts = nowIso();
@@ -24,15 +23,17 @@ export function createTemplates(): LifecycleTemplate[] {
   const typeA: LifecycleTemplate = {
     id: 'TPL-A',
     projectType: 'A',
-    version: 1,
+    version: 2,
     name: 'A 类（交付型）标准生命周期',
     isActive: true,
     createdAt: ts,
     definition: {
-      stages: [
+      milestones: [
         {
-          code: 'S1',
-          name: '立项',
+          code: 'M1',
+          name: '项目启动',
+          offsetDays: 0,
+          required: true,
           gate: {
             code: 'QG1',
             name: '立项质量门',
@@ -45,8 +46,10 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S2',
-          name: '需求',
+          code: 'M2',
+          name: '需求基线冻结',
+          offsetDays: 30,
+          required: true,
           gate: {
             code: 'QG2',
             name: '需求质量门',
@@ -59,8 +62,10 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S3',
-          name: '设计',
+          code: 'M3',
+          name: '设计评审通过',
+          offsetDays: 70,
+          required: true,
           gate: {
             code: 'QG3',
             name: '设计质量门',
@@ -73,8 +78,10 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S4',
-          name: '开发实施',
+          code: 'M4',
+          name: '首件调试完成',
+          offsetDays: 125,
+          required: true,
           gate: {
             code: 'QG4',
             name: '开发实施质量门',
@@ -88,8 +95,10 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S5',
-          name: '集成测试',
+          code: 'M5',
+          name: '集成测试通过',
+          offsetDays: 170,
+          required: true,
           gate: {
             code: 'QG5',
             name: '集成测试质量门',
@@ -102,37 +111,33 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S6',
-          name: '验收交付',
+          code: 'M6',
+          name: '客户验收通过',
+          offsetDays: 210,
+          required: true,
           gate: {
             code: 'QG6',
-            name: '验收交付质量门',
+            name: '验收质量门',
             ownerRole: 'pmo',
             items: [
               { content: '客户验收报告已签署', ownerRole: 'pm' },
               { content: '交付物清单齐套并归档', ownerRole: 'cm' },
-              { content: '结项复盘已完成', ownerRole: 'pmo' },
             ],
           },
         },
+        {
+          code: 'M7',
+          name: '项目结项',
+          offsetDays: 232,
+          required: true,
+          gate: {
+            code: 'QG7',
+            name: '结项质量门',
+            ownerRole: 'pmo',
+            items: [{ content: '结项复盘已完成', ownerRole: 'pmo' }],
+          },
+        },
       ],
-      // 锚点映射见架构 §2.4：M1..M5 逐阶段收口，M6/M7 同落 S6（验收 → 结项）
-      milestones: [
-        { code: 'M1', name: '项目启动', offsetDays: 0, anchorStage: 'S1', anchor: 'end' },
-        { code: 'M2', name: '需求基线冻结', offsetDays: 30, anchorStage: 'S2', anchor: 'end' },
-        { code: 'M3', name: '设计评审通过', offsetDays: 70, anchorStage: 'S3', anchor: 'end' },
-        { code: 'M4', name: '首件调试完成', offsetDays: 125, anchorStage: 'S4', anchor: 'end' },
-        { code: 'M5', name: '集成测试通过', offsetDays: 170, anchorStage: 'S5', anchor: 'end' },
-        { code: 'M6', name: '客户验收通过', offsetDays: 210, anchorStage: 'S6', anchor: 'mid' },
-        { code: 'M7', name: '项目结项', offsetDays: 232, anchorStage: 'S6', anchor: 'end' },
-      ],
-      // childTypes / maxDepth 之外的项由 DEFAULT_WBS_RULES 兜底
-      wbsRules: {
-        maxDepth: 4,
-        allowRootTask: false,
-        requireStageBinding: true,
-        skeleton: 'per-stage',
-      },
       docs: [
         '立项申请表',
         '项目章程',
@@ -143,21 +148,29 @@ export function createTemplates(): LifecycleTemplate[] {
         '客户验收报告',
         '结项报告',
       ],
+      // 三类一致：仅声明 maxDepth / skeleton，childTypes 由 DEFAULT_WBS_RULES 兜底（D-2）
+      wbsRules: {
+        maxDepth: 4,
+        skeleton: 'per-milestone',
+      },
     },
   };
 
   const typeB: LifecycleTemplate = {
     id: 'TPL-B',
     projectType: 'B',
-    version: 1,
+    version: 2,
     name: 'B 类（产品型）Sprint 生命周期',
     isActive: true,
     createdAt: ts,
     definition: {
-      stages: [
+      // B 类 4 碑（U-1：新增 M4 Sprint 回顾完成）。QB3 合并原 QB3+QB4（发布 + 演示），QB4 = 回顾闭环门
+      milestones: [
         {
-          code: 'S1',
-          name: 'Sprint 计划',
+          code: 'M1',
+          name: 'Sprint 启动',
+          offsetDays: 0,
+          required: true,
           gate: {
             code: 'QB1',
             name: '计划就绪门',
@@ -169,8 +182,10 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S2',
-          name: '开发',
+          code: 'M2',
+          name: '特性冻结',
+          offsetDays: 8,
+          required: true,
           gate: {
             code: 'QB2',
             name: '开发完成门',
@@ -182,36 +197,29 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S3',
-          name: '评审',
+          code: 'M3',
+          name: '版本发布',
+          offsetDays: 14,
+          required: true,
           gate: {
             code: 'QB3',
-            name: '质量评审门',
+            name: '发布门',
             ownerRole: 'qa',
             items: [
               { content: '回归测试通过率 ≥95%', ownerRole: 'qa' },
               { content: '无 P0/P1 未关闭缺陷', ownerRole: 'qa' },
-            ],
-          },
-        },
-        {
-          code: 'S4',
-          name: '演示',
-          gate: {
-            code: 'QB4',
-            name: '发布门',
-            ownerRole: 'po',
-            items: [
               { content: 'Demo 已向 PO 演示并验收', ownerRole: 'po' },
               { content: '发布说明与回滚方案齐备', ownerRole: 'cm' },
             ],
           },
         },
         {
-          code: 'S5',
-          name: '回顾',
+          code: 'M4',
+          name: 'Sprint 回顾完成',
+          offsetDays: 16,
+          required: true,
           gate: {
-            code: 'QB5',
+            code: 'QB4',
             name: '回顾闭环门',
             ownerRole: 'pmo',
             items: [
@@ -221,36 +229,30 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
       ],
-      // Q-1 安全默认：B 类不预置 anchorStage，实例化后由 PM 手工补锚
-      milestones: [
-        { code: 'M1', name: 'Sprint 启动', offsetDays: 0 },
-        { code: 'M2', name: '特性冻结', offsetDays: 8 },
-        { code: 'M3', name: '版本发布', offsetDays: 14 },
-      ],
-      // D-2：B 类**不豁免**层级规则，唯一差异是工作分区可不绑生命周期阶段
-      // Q-2：骨架仍按 5 个阶段全量预生成（skeleton='per-stage'）
+      docs: ['产品需求文档 PRD', 'Sprint 计划', '发布说明', 'Sprint 回顾纪要'],
       wbsRules: {
         maxDepth: 4,
-        allowRootTask: false,
-        requireStageBinding: false,
-        skeleton: 'per-stage',
+        skeleton: 'per-milestone',
       },
-      docs: ['产品需求文档 PRD', 'Sprint 计划', '发布说明', 'Sprint 回顾纪要'],
     },
   };
 
   const typeC: LifecycleTemplate = {
     id: 'TPL-C',
     projectType: 'C',
-    version: 1,
+    version: 2,
     name: 'C 类（基建型）标准生命周期',
     isActive: true,
     createdAt: ts,
     definition: {
-      stages: [
+      // C 类 5 碑。原 QC3 拆为「到货验收门(QC3) + 施工完成门(QC4) 部分」，
+      // 原 QC4 拆为「施工完成门(QC4) 部分 + 验收移交门(QC5) 部分」，检查项总数守恒 10。
+      milestones: [
         {
-          code: 'S1',
-          name: '立项',
+          code: 'M1',
+          name: '项目启动',
+          offsetDays: 0,
+          required: true,
           gate: {
             code: 'QC1',
             name: '立项质量门',
@@ -262,8 +264,10 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S2',
-          name: '方案设计',
+          code: 'M2',
+          name: '方案定稿',
+          offsetDays: 25,
+          required: true,
           gate: {
             code: 'QC2',
             name: '方案评审门',
@@ -275,60 +279,54 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
         {
-          code: 'S3',
-          name: '采购施工',
+          code: 'M3',
+          name: '设备到货',
+          offsetDays: 60,
+          required: true,
           gate: {
             code: 'QC3',
-            name: '到货与施工门',
+            name: '到货验收门',
             ownerRole: 'cm',
-            items: [
-              { content: '设备到货验收单齐备', ownerRole: 'cm' },
-              { content: '施工进度与安全记录齐全', ownerRole: 'pm' },
-            ],
+            items: [{ content: '设备到货验收单齐备', ownerRole: 'cm' }],
           },
         },
         {
-          code: 'S4',
-          name: '调试验收',
+          code: 'M4',
+          name: '施工完成',
+          offsetDays: 100,
+          required: true,
           gate: {
             code: 'QC4',
-            name: '调试验收门',
-            ownerRole: 'qa',
+            name: '施工完成门',
+            ownerRole: 'pm',
             items: [
+              { content: '施工进度与安全记录齐全', ownerRole: 'pm' },
               { content: '系统联调测试通过', ownerRole: 'qa' },
-              { content: '验收报告已签署', ownerRole: 'pm' },
             ],
           },
         },
         {
-          code: 'S5',
-          name: '运维移交',
+          code: 'M5',
+          name: '验收移交',
+          offsetDays: 130,
+          required: true,
           gate: {
             code: 'QC5',
-            name: '移交门',
+            name: '验收移交门',
             ownerRole: 'pmo',
             items: [
+              { content: '验收报告已签署', ownerRole: 'pm' },
               { content: '运维手册与图纸已移交', ownerRole: 'cm' },
               { content: '运维团队培训已完成', ownerRole: 'pm' },
             ],
           },
         },
       ],
-      // Q-1 安全默认：C 类运行时阶段集合与草拟版 json 不一致，暂不预置 anchorStage
-      milestones: [
-        { code: 'M1', name: '项目启动', offsetDays: 0 },
-        { code: 'M2', name: '方案定稿', offsetDays: 25 },
-        { code: 'M3', name: '设备到货', offsetDays: 60 },
-        { code: 'M4', name: '施工完成', offsetDays: 100 },
-        { code: 'M5', name: '验收移交', offsetDays: 130 },
-      ],
+      docs: ['立项申请表', '施工方案', '设备清单', '验收报告', '运维手册'],
       wbsRules: {
         maxDepth: 4,
-        allowRootTask: false,
-        requireStageBinding: true,
-        skeleton: 'per-stage',
+        skeleton: 'per-milestone',
       },
-      docs: ['立项申请表', '施工方案', '设备清单', '验收报告', '运维手册'],
     },
   };
 

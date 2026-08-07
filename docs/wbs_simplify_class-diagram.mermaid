@@ -1,0 +1,154 @@
+classDiagram
+    direction LR
+
+    class Project {
+        +string id
+        +string code
+        +string name
+        +ProjectType type
+        +ProjectStatus status
+        +Health health
+        +string planStart
+        +string planEnd
+        +string templateId
+        note_currentStageId_REMOVED
+    }
+
+    class Milestone {
+        +string id
+        +string projectId
+        +string code
+        +string name
+        +string target
+        +boolean required
+        +string baselineDate
+        +string currentDate
+        +number delayDays
+        +MilestoneStatus status
+        +boolean done
+        +string doneAt
+        +string doneBy
+        +MilestoneStatus statusOverride
+        +string overrideBy
+        +string overrideAt
+        +string overrideBaseDate
+        +string lastChangeId
+    }
+
+    class QualityGate {
+        +string id
+        +string projectId
+        +string milestoneId
+        +string code
+        +string name
+        +string ownerRole
+        +GateStatus status
+        +string conclusion
+        +string comment
+        +string decidedBy
+        +string decidedAt
+    }
+
+    class GateChecklistItem {
+        +string id
+        +string gateId
+        +number seq
+        +string content
+        +string ownerRole
+        +boolean checked
+        +string checkedBy
+        +string checkedAt
+    }
+
+    class WbsNode {
+        +string id
+        +string projectId
+        +string parentId
+        +string wbsCode
+        +number level
+        +WbsNodeType nodeType
+        +string name
+        +string owner
+        +number estimateDays
+        +TaskStatus status
+        +number progress
+        +string milestoneId
+    }
+
+    class MilestoneWithGate {
+        +QualityGate gate
+        +GateChecklistItem[] gateItems
+        +MilestoneTaskStats taskStats
+    }
+
+    class MilestoneTaskStats {
+        +number total
+        +number done
+        +number progress
+    }
+
+    class WbsRules {
+        +number maxDepth
+        +string skeleton
+        +Map childTypes
+    }
+
+    class LifecycleTemplate {
+        +string id
+        +ProjectType projectType
+        +TemplateMilestone[] milestones
+        +string[] docs
+        +WbsRules wbsRules
+    }
+
+    class TemplateMilestone {
+        +string code
+        +string name
+        +number offsetDays
+        +boolean required
+        +TemplateGate gate
+    }
+
+    class MilestoneRules {
+        +deriveMilestoneStatus(ms, ctx) MilestoneStatus
+        +milestoneStartFrom(list, ms, planStart) string
+        +milestoneTaskStats(nodes, msId) MilestoneTaskStats
+        +isOverrideValid(ms) boolean
+    }
+
+    class WbsPlacementRules {
+        +resolveWbsRules(tpl) WbsRules
+        +allowedChildTypes(parent, rules) WbsNodeType[]
+        +validateWbsPlacement(input, rules) WbsPlacementError
+        +subtreeRelativeDepth(nodes, id) number
+    }
+
+    class WbsTreeUtils {
+        +buildTree(nodes, type) WbsTreeNode[]
+        +leafNodesOf(nodes) WbsNode[]
+        +isLeafNode(nodes, id) boolean
+        +rollupProjectProgress(nodes) number
+        +granularityWarn(node, isLeaf, type) string
+    }
+
+    class MockApiClient {
+        +listMilestones(projectId) MilestoneWithGate[]
+        +createMilestone(projectId, payload) MilestoneWithGate
+        +updateMilestone(id, payload) MilestoneWithGate
+        +deleteMilestone(id) void
+        +toggleGateItem(itemId, checked) MilestoneWithGate[]
+        +decideGate(projectId, payload) MilestoneWithGate[]
+        +createWbsNode(projectId, payload) WbsNode
+        +updateWbsNode(id, payload) WbsNode
+        +moveWbsNode(id, parentId, index) WbsNode[]
+        +deleteWbsNode(id) void
+        +refreshMilestoneStatuses(projectId) void
+    }
+
+    Project "1" --> "0..*" Milestone : 唯一时间轴
+    Milestone "1" --> "0..1" QualityGate : 一碑一门
+    QualityGate "1" --> "1..*" GateChecklistItem : 检查项
+    Milestone "1" --> "0..*" WbsNode : milestoneId 关联
+    WbsNode "1" --> "0..*" WbsNode : parentId 自引用树
+    MilestoneWithGate --|> Milestone : 视图扩展
+    MilestoneWithGate --> MilestoneTaskStats

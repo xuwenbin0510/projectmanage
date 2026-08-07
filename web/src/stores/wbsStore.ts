@@ -4,10 +4,20 @@ import type { ProjectType } from '@/types/project';
 import type { WbsNodePayload } from '@/api/contract';
 import { api } from '@/api/client';
 import { buildTree } from '@/utils/wbs';
+import { useProjectStore } from './projectStore';
+
+/** WBS 变化会连带影响里程碑关联任务统计 → 同步刷新里程碑（用户反馈④） */
+async function syncMilestones(projectId: string): Promise<void> {
+  try {
+    await useProjectStore.getState().refreshMilestones(projectId);
+  } catch {
+    /* 忽略：里程碑刷新失败不应阻断 WBS 操作 */
+  }
+}
 
 /**
  * WBS + 看板 store
- * @prd P0-06（WBS 树与工作包） P0-07（看板 + WIP）
+ * @prd P0-06（WBS 树与任务） P0-07（看板 + WIP）
  */
 interface WbsState {
   projectId: string;
@@ -61,6 +71,7 @@ export const useWbsStore = create<WbsState>((set, get) => ({
     const node = await api.createWbsNode(projectId, payload);
     const nodes = await api.listWbs(projectId);
     set({ nodes, tree: buildTree(nodes, projectType) });
+    void syncMilestones(projectId);
     return node;
   },
 
@@ -69,6 +80,7 @@ export const useWbsStore = create<WbsState>((set, get) => ({
     const node = await api.updateWbsNode(id, payload);
     const nodes = await api.listWbs(projectId);
     set({ nodes, tree: buildTree(nodes, projectType) });
+    void syncMilestones(projectId);
     return node;
   },
 
@@ -77,12 +89,14 @@ export const useWbsStore = create<WbsState>((set, get) => ({
     await api.deleteWbsNode(id);
     const nodes = await api.listWbs(projectId);
     set({ nodes, tree: buildTree(nodes, projectType) });
+    void syncMilestones(projectId);
   },
 
   async moveNode(id, newParentId, index) {
-    const { projectType } = get();
+    const { projectId, projectType } = get();
     const nodes = await api.moveWbsNode(id, newParentId, index);
     set({ nodes, tree: buildTree(nodes, projectType) });
+    void syncMilestones(projectId);
   },
 
   async moveTask(nodeId, status, order) {

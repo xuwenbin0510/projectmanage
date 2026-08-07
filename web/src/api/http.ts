@@ -12,8 +12,7 @@ import type {
   ClassifyInput,
   ClassifyResult,
   LifecycleTemplate,
-  StageWithGate,
-  Milestone,
+  MilestoneWithGate,
   CloseBlocker,
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
@@ -28,6 +27,7 @@ import type {
   CreateProjectPayload,
   UpdateProjectPayload,
   GateDecisionPayload,
+  MilestoneCreatePayload,
   MilestoneUpdatePayload,
   WbsNodePayload,
   ReportPayload,
@@ -176,26 +176,30 @@ export class HttpApiClient implements ApiClient {
     await del<null>(`/projects/${projectId}/members/${memberId}`);
   }
 
-  /* 阶段 / 门 */
-  listStages(projectId: string): Promise<StageWithGate[]> {
-    return get<StageWithGate[]>(`/projects/${projectId}/stages`);
+  /* 质量门（挂在里程碑上 · 决策 D-A） */
+  toggleGateItem(itemId: string, checked: boolean): Promise<MilestoneWithGate[]> {
+    return patch<MilestoneWithGate[]>(`/gate-items/${itemId}`, { checked });
   }
 
-  toggleGateItem(itemId: string, checked: boolean): Promise<StageWithGate[]> {
-    return patch<StageWithGate[]>(`/gate-items/${itemId}`, { checked });
-  }
-
-  decideGate(projectId: string, payload: GateDecisionPayload): Promise<StageWithGate[]> {
-    return post<StageWithGate[]>(`/projects/${projectId}/gates/${payload.gateId}/decide`, payload);
+  decideGate(projectId: string, payload: GateDecisionPayload): Promise<MilestoneWithGate[]> {
+    return post<MilestoneWithGate[]>(`/projects/${projectId}/gates/${payload.gateId}/decide`, payload);
   }
 
   /* 里程碑 */
-  listMilestones(projectId: string): Promise<Milestone[]> {
-    return get<Milestone[]>(`/projects/${projectId}/milestones`);
+  listMilestones(projectId: string): Promise<MilestoneWithGate[]> {
+    return get<MilestoneWithGate[]>(`/projects/${projectId}/milestones`);
   }
 
-  updateMilestone(id: string, payload: MilestoneUpdatePayload): Promise<Milestone> {
-    return patch<Milestone>(`/milestones/${id}`, payload);
+  createMilestone(projectId: string, payload: MilestoneCreatePayload): Promise<MilestoneWithGate> {
+    return post<MilestoneWithGate>(`/projects/${projectId}/milestones`, payload);
+  }
+
+  updateMilestone(id: string, payload: MilestoneUpdatePayload): Promise<MilestoneWithGate> {
+    return patch<MilestoneWithGate>(`/milestones/${id}`, payload);
+  }
+
+  async deleteMilestone(id: string): Promise<void> {
+    await del<null>(`/milestones/${id}`);
   }
 
   /* WBS */
@@ -247,6 +251,10 @@ export class HttpApiClient implements ApiClient {
 
   submitReport(payload: ReportPayload): Promise<Report> {
     return post<Report>(`/projects/${payload.projectId}/reports`, { ...payload, submit: true });
+  }
+
+  updateReport(id: string, payload: ReportPayload): Promise<Report> {
+    return patch<Report>(`/projects/${payload.projectId}/reports/${id}`, payload);
   }
 
   /* 评审 */

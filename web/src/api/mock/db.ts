@@ -3,7 +3,6 @@ import type {
   Project,
   ProjectMember,
   LifecycleTemplate,
-  ProjectStage,
   QualityGate,
   GateChecklistItem,
   Milestone,
@@ -26,7 +25,6 @@ export interface MockDb {
   projects: Project[];
   members: ProjectMember[];
   templates: LifecycleTemplate[];
-  stages: ProjectStage[];
   gates: QualityGate[];
   gateItems: GateChecklistItem[];
   milestones: Milestone[];
@@ -42,9 +40,13 @@ export interface MockDb {
   sessionOpenId: string | null;
 }
 
-// v3：Milestone 新增必填字段 stageId/anchor、WbsNode 新增必填字段 lifecycleStageId，
-// 旧缓存缺字段会导致运行时 undefined，故升版强制刷新
-const STORAGE_KEY = 'pm_mock_db_v3';
+// v4：方案一（极简）彻底删除「阶段」实体 ——
+//   · 删除 MockDb.stages / ProjectStage / Project.currentStageId
+//   · Milestone 删除 stageId / anchor，新增 required / doneAt / doneBy / statusOverride 等派生字段
+//   · WbsNode 删除 lifecycleStageId，nodeType 收敛为 task / subtask
+//   · QualityGate.stageId 外键改为 milestoneId
+// 旧缓存（v3 及更早）缺上述字段会导致运行时 undefined，故升版强制丢弃重建（SK-9）
+const STORAGE_KEY = 'pm_mock_db_v4';
 
 let instance: MockDb | null = null;
 

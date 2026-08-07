@@ -1,0 +1,131 @@
+%% ============================================================
+%% WBS/里程碑简化（方案一）时序图集
+%% 抽自 pm-app/docs/wbs_simplify_arch.md §4
+%% 图1 建项目 / 图2 里程碑增删改+状态推导 / 图3 质量门决议→里程碑达成
+%% ============================================================
+
+%% ---------- 图 1：建项目（3 步向导 → 模板静默生成碑 + 门 + WBS 骨架） ----------
+sequenceDiagram
+    autonumber
+    actor PM as 项目经理
+    participant Wiz as ProjectCreatePage(3步)
+    participant Api as MockApiClient
+    participant Rules as rules.ts
+    participant Db as MockDb
+
+    PM->>Wiz: 步骤1 基本信息 + 分类判定(合并)
+    Wiz->>Api: classify(classifyInput)
+    Api->>Rules: classifyProject(input)
+    Rules-->>Api: {suggested, reasons}
+    Api-->>Wiz: 分类建议(可覆盖需填理由)
+    PM->>Wiz: 步骤2 团队组建(PM/TL各1人, B类需PO)
+    PM->>Wiz: 步骤3 确认提交
+    Note over Wiz: 里程碑步已删除, 不再传 milestones 字段
+
+    Wiz->>Api: createProject(payload)
+    Api->>Db: 校验 分类理由/PO/角色基数
+    Api->>Db: 写入 Project(无 currentStageId)
+    Api->>Db: 按模板 milestones 逐条建碑(required=true, doneAt=null)
+    loop 每个必备里程碑
+        Api->>Db: 建 QualityGate(milestoneId=碑id, 首碑门=待检查 其余=未开始)
+        Api->>Db: 建 GateChecklistItem[](source=template)
+    end
+    Api->>Rules: resolveWbsRules(template)
+    Rules-->>Api: {maxDepth:4, skeleton:'per-milestone'}
+    loop 每个必备里程碑
+        Api->>Db: 建顶层 WbsNode(nodeType='task', milestoneId=碑id, level=1)
+    end
+    Api->>Db: 写入 members / boardConfig / auditLog
+    Api->>Api: refreshMilestoneStatuses(projectId)
+    Api-->>Wiz: Project
+    Wiz-->>PM: 跳转项目概览
+
+%% ---------- 图 2：里程碑增删改 + 状态惰性推导 ----------
+sequenceDiagram
+    autonumber
+    actor PM as 项目经理
+    participant Page as MilestonesPage
+    participant Api as MockApiClient
+    participant MR as rules.ts(里程碑推导)
+    participant WU as utils/wbs.ts
+    participant Db as MockDb
+
+    Page->>Api: listMilestones(projectId)
+    Api->>Api: refreshMilestoneStatuses(projectId)
+    loop 每个里程碑(按 currentDate 升序)
+        Api->>MR: milestoneStartFrom(list, ms, project.planStart)
+        MR-->>Api: startFrom
+        Api->>WU: milestoneTaskStats(nodes, ms.id)
+        WU-->>Api: {total, done, progress}
+        Api->>MR: deriveMilestoneStatus(ms, {today, startFrom, stats})
+        MR-->>Api: status(P1..P5)
+        Api->>Db: 回写 ms.status / ms.done(派生)
+    end
+    Api->>Db: 重算 project.health
+    Api-->>Page: MilestoneWithGate[](含 gate/gateItems/taskStats)
+    Page-->>PM: 表格: 状态 / 关联任务 3-8 62% / 门状态 / 必备徽标
+
+    alt 新增里程碑
+        PM->>Page: 填写 名称+目标+日期
+        Page->>Api: createMilestone(projectId, payload)
+        Api->>Db: code=M{max+1}, required=false, baseline=current=date, 无门
+        Api->>Api: refreshMilestoneStatuses(projectId)
+        Api-->>Page: MilestoneWithGate
+    else 删除里程碑
+        PM->>Page: 点击删除
+        Page->>Api: deleteMilestone(id)
+        Api->>Db: required===true ? 抛 E_MS_REQUIRED_LOCKED : 继续
+        Api->>Db: 级联删 gate + gateItems
+        Api->>Db: 关联 WbsNode.milestoneId 置 null
+        Api->>Api: refreshMilestoneStatuses(projectId)
+        Api-->>Page: void
+    else 手动覆盖状态
+        PM->>Page: 选择覆盖值(未开始/进行中/已逾期)
+        Page->>Api: updateMilestone(id, {statusOverride})
+        Api->>Db: 写 statusOverride/overrideBy/overrideAt/overrideBaseDate=currentDate
+        Api->>Db: auditLog(status_change, before=推导值, after=覆盖值)
+        Api->>Api: refreshMilestoneStatuses(projectId)
+    else 改期(提前)
+        PM->>Page: 选新日期
+        Page->>Api: updateMilestone(id, {currentDate})
+        Api->>MR: milestoneDelayNeedsChange(ms, toDate)
+        MR-->>Api: false(提前) / true(延后)
+        Api->>Db: 提前: 改 currentDate + delayDays, 清空 override 三元组
+        Note over Api: 延后 -> 抛 E_MS_NEED_CHANGE 并带出变更单草稿
+    end
+
+%% ---------- 图 3：质量门决议 → 里程碑自动达成（替代原「阶段推进」） ----------
+sequenceDiagram
+    autonumber
+    actor QA as 质量负责人
+    participant Page as MilestoneGateDialog
+    participant Api as MockApiClient
+    participant Rules as rules.ts
+    participant Db as MockDb
+
+    QA->>Page: 打开某里程碑的质量门检查清单
+    QA->>Page: 勾选检查项
+    Page->>Api: toggleGateItem(itemId, true)
+    Api->>Db: 写 checked/checkedBy/checkedAt + auditLog(gate_item)
+    Api-->>Page: MilestoneWithGate[]
+
+    QA->>Page: 提交门控结论
+    Page->>Api: decideGate(projectId, {gateId, conclusion, comment})
+    Api->>Rules: gateReady(items)
+    Rules-->>Api: {ready, unchecked}
+    alt 有未勾选项 且 结论不是"不通过"
+        Api-->>Page: 抛 E_GATE_ITEM_INCOMPLETE(带未勾选清单)
+    else 结论 已通过 / 有条件通过
+        Api->>Db: gate.status=结论, decidedBy/decidedAt
+        Api->>Db: 里程碑 doneAt=today, doneBy=决议人, 清空 override
+        Api->>Db: auditLog(gate.decide) + auditLog(milestone.status_change)
+        Api->>Api: refreshMilestoneStatuses(projectId)
+        Note over Api: 该碑 -> 已达成; 后续碑因 startFrom 前移可能自动转"进行中"
+        Api->>Db: 重算 project.health
+        Api-->>Page: MilestoneWithGate[]
+    else 结论 不通过
+        Api->>Db: gate.status=不通过; 里程碑保持原推导状态
+        Api-->>Page: MilestoneWithGate[]
+    end
+
+    Note over QA,Db: 手动勾"达成"路径: updateMilestone(achieved=true)<br/>若该碑有门且门未过 -> 抛 E_GATE_NOT_PASSED(C-G4)

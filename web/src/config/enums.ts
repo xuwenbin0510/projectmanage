@@ -6,13 +6,12 @@ import type {
   ProjectRole,
   ProjectStatus,
   ProjectType,
-  StageStatus,
   GateStatus,
   MilestoneStatus,
+  MilestoneOverride,
   Health,
 } from '@/types/project';
 import type { TaskStatus, WbsNodeType, WbsRules } from '@/types/wbs';
-import type { MilestoneAnchor } from '@/types/project';
 import type { ReviewType, ReviewMode, ReviewStatus, ReviewStepStatus } from '@/types/review';
 import type { ChangeType, ChangeRoute, ChangeStatus } from '@/types/change';
 import type { AuditAction, AuditEntityType } from '@/types/audit';
@@ -113,16 +112,17 @@ export const HEALTH_HINT: Record<Health, string> = {
   red: '存在逾期里程碑或高风险',
 };
 
-/* ── 阶段 / 质量门 / 里程碑 ─────────────────────────── */
-
-export const STAGE_STATUSES: StageStatus[] = ['未开始', '进行中', '已完成'];
+/* ── 质量门 / 里程碑 ────────────────────────────────── */
 
 export const GATE_STATUSES: GateStatus[] = ['未开始', '待检查', '已通过', '有条件通过', '不通过'];
 
 /** 门控结论可选项（提交结论时用） */
 export const GATE_CONCLUSIONS: GateStatus[] = ['已通过', '有条件通过', '不通过'];
 
-/** 门状态图标（概览阶段条） */
+/** 已「过门」的两种终态（概览页「已过 N/M 道门」口径） */
+export const GATE_PASSED_STATUSES: GateStatus[] = ['已通过', '有条件通过'];
+
+/** 门状态图标（概览页质量门进度条） */
 export const GATE_ICON: Record<GateStatus, string> = {
   已通过: '✔',
   有条件通过: '✔',
@@ -133,45 +133,46 @@ export const GATE_ICON: Record<GateStatus, string> = {
 
 export const MILESTONE_STATUSES: MilestoneStatus[] = ['未开始', '进行中', '已达成', '已逾期'];
 
-/** 里程碑阶段锚点文案（WBS 重构 D-1） */
-export const MILESTONE_ANCHOR_LABEL: Record<MilestoneAnchor, string> = {
-  start: '阶段启动',
-  mid: '阶段中段',
-  end: '阶段收口',
-};
+/**
+ * 里程碑状态人工覆盖的可选值（🔒 U-5 / SK-7b）。
+ * **恒不含「已达成」** —— 达成只能通过质量门决议或 `achieved=true` 写入 `doneAt`。
+ */
+export const MILESTONE_OVERRIDES: MilestoneOverride[] = ['未开始', '进行中', '已逾期'];
 
-export const MILESTONE_ANCHORS: MilestoneAnchor[] = ['start', 'mid', 'end'];
+/** 里程碑状态配色（MUI Chip color） */
+export const MILESTONE_STATUS_COLOR: Record<MilestoneStatus, 'default' | 'info' | 'success' | 'error'> = {
+  未开始: 'default',
+  进行中: 'info',
+  已达成: 'success',
+  已逾期: 'error',
+};
 
 /* ── WBS / 看板 ───────────────────────────────────── */
 
 export const TASK_STATUSES: TaskStatus[] = ['待办', '进行中', '待评审', '完成', '阻塞'];
 
 /**
- * WBS 节点类型文案。
- * ⚠️ 决策 D-4：`stage` 前端一律显示「工作分区」，与「生命周期阶段（project_stages）」
- * 在语义上区分开；枚举值 `'stage'` 本身不改，避免存量数据与接口契约破坏。
+ * WBS 节点类型文案（简化方案一：只剩 2 类，靠层级区分容器与叶子）
+ * - 「任务」既可当容器又可自己干活；「子任务」恒为最底层
  */
 export const WBS_NODE_TYPE_LABEL: Record<WbsNodeType, string> = {
-  stage: '工作分区',
-  package: '工作包',
   task: '任务',
+  subtask: '子任务',
 };
 
+export const WBS_NODE_TYPES: WbsNodeType[] = ['task', 'subtask'];
+
 /**
- * WBS 层级规则缺省值（决策 D-2：三类项目一致强制，模板只覆盖差异项）
- * - `requireStageBinding` 缺省 true；B 类模板覆盖为 false
+ * WBS 层级规则缺省值（决策 D-2 / SK-5：三类项目一致，模板只覆盖差异项）
  * - 任何业务代码都应通过 `resolveWbsRules(template)` 取值，不要直接读本常量做判断
  */
 export const DEFAULT_WBS_RULES: WbsRules = {
   maxDepth: 4,
-  allowRootTask: false,
-  requireStageBinding: true,
-  skeleton: 'per-stage',
+  skeleton: 'per-milestone',
   childTypes: {
-    root: ['stage', 'package'],
-    stage: ['package', 'task'],
-    package: ['task'],
-    task: [],
+    root: ['task'],
+    task: ['task', 'subtask'],
+    subtask: [],
   },
 };
 
@@ -286,12 +287,11 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
 
 export const AUDIT_ENTITY_LABEL: Record<AuditEntityType, string> = {
   project: '项目',
-  stage: '阶段',
   gate: '质量门',
   gate_item: '门检查项',
   milestone: '里程碑',
   wbs_node: 'WBS 节点',
-  report: '周报',
+  report: '工作日志',
   review: '评审',
   change: '变更',
   user: '用户',

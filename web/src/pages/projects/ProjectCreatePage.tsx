@@ -6,7 +6,6 @@ import {
   Button,
   Checkbox,
   Chip,
-  CircularProgress,
   Divider,
   FormControlLabel,
   IconButton,
@@ -29,28 +28,20 @@ import { z } from 'zod';
 import { FieldRow, PageHeader, SectionCard, UserAvatar } from '@/components/common';
 import { api } from '@/api/client';
 import type { CreateProjectPayload } from '@/api/contract';
-import type {
-  ClassifyInput,
-  ClassifyResult,
-  MilestoneAnchor,
-  MilestoneDraft,
-  ProjectRole,
-  ProjectType,
-  User,
-} from '@/types/project';
+import type { ClassifyInput, ClassifyResult, ProjectRole, ProjectType, User } from '@/types/project';
 import {
   PROJECT_ROLES,
   PROJECT_ROLE_LABEL,
   PROJECT_TYPES,
   PROJECT_TYPE_LABEL,
   PROJECT_TYPE_SHORT,
-  MILESTONE_ANCHOR_LABEL,
-  MILESTONE_ANCHORS,
 } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
 import { useAsync, useToast } from '@/hooks';
-import { dayjs, today, addDays, DATE_FMT } from '@/utils/date';
+import { dayjs, today, diffDays, DATE_FMT, fitMilestoneDatesEx } from '@/utils/date';
+import type { FitMilestoneDatesResult } from '@/utils/date';
 import { fmtAmount } from '@/utils/format';
+import { tokens } from '@/theme/tokens';
 import { classifyProject } from '@/api/mock/rules';
 
 /* ── 表单模型 ─────────────────────────────────────── */
@@ -58,6 +49,19 @@ import { classifyProject } from '@/api/mock/rules';
 interface MemberDraft {
   userOpenId: string;
   role: ProjectRole;
+}
+
+/** 向导里程碑草稿（用户反馈①：模板带出 + 可改名称/日期 + 可新增） */
+interface MilestoneDraft {
+  code: string;
+  name: string;
+  target: string;
+  date: string;
+  /** 模板必备（锁删，仅可改期） */
+  required: boolean;
+  gate: { code: string; name: string; ownerRole: string; items: Array<{ content: string; ownerRole: string }> } | null;
+  /** 模板原始偏移天数；用户手动新增的碑为 undefined（重算时按旧周期反推） */
+  offsetDays?: number;
 }
 
 interface CreateForm {
@@ -75,11 +79,11 @@ interface CreateForm {
   type: ProjectType;
   overrideReason: string;
   members: MemberDraft[];
-  /** 里程碑草稿；未触碰时由生命周期模板预填 */
+  /** 里程碑规划草稿（由模板带出，用户可改 / 可新增） */
   milestones: MilestoneDraft[];
 }
 
-const STEPS = ['基本信息', '分类判定', '团队组建', '里程碑规划', '确认提交'] as const;
+const STEPS = ['基本信息', '分类判定', '里程碑规划', '团队组建', '确认提交'] as const;
 
 const baseSchema = z.object({
   name: z.string().trim().min(2, '项目名称至少 2 个字'),
@@ -98,7 +102,7 @@ const EMPTY_FORM: CreateForm = {
   background: '',
   goalText: '',
   planStart: today(),
-  planEnd: addDays(today(), 90),
+  planEnd: today(),
   hasHardware: false,
   hasAcceptance: false,
   isSelfIteration: true,
@@ -109,20 +113,14 @@ const EMPTY_FORM: CreateForm = {
   milestones: [],
 };
 
-/** 取里程碑草稿的下一个编号：M{现有 code 数字后缀最大值 + 1} */
-function nextMilestoneCode(list: MilestoneDraft[]): string {
-  const max = list.reduce((acc, d) => {
-    const m = /(\d+)\s*$/.exec(d.code ?? '');
-    return m ? Math.max(acc, Number(m[1])) : acc;
-  }, 0);
-  return `M${max + 1}`;
-}
-
 /**
- * 新建项目向导：基本信息 → 分类判定 → 团队组建 → 里程碑规划 → 确认提交
+ * 新建项目向导：基本信息 → 分类判定 → 团队组建 → 确认提交
  * @prd P0-01 P0-02
  * 规则：覆盖系统分类建议必须写理由；PM / TL 各且仅 1 人；B 类必须有 PO。
  * 同一人可担任多个角色，成员唯一键为「人 + 角色」复合键。
+ *
+ * 简化方案一（Q-1/Q-2）：里程碑与质量门由生命周期模板**静默生成**，
+ * 向导不再配置里程碑（创建后在里程碑页自由增删改）。
  */
 export function ProjectCreatePage(): JSX.Element {
   const navigate = useNavigate();
@@ -131,12 +129,13 @@ export function ProjectCreatePage(): JSX.Element {
   const [step, setStep] = useState<number>(0);
   const [form, setForm] = useState<CreateForm>({ ...EMPTY_FORM });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /** 已据以构建里程碑草稿的项目分类（变化时才重建，避免覆盖用户编辑） */
+  const [msBuiltFor, setMsBuiltFor] = useState<string>('');
+  /** 生成里程碑时采用过的计划周期（用于检测周期变更是否需重算，P0-M5） */
+  const [builtPeriod, setBuiltPeriod] = useState<{ start: string; end: string }>({ start: '', end: '' });
+  /** 最近一次里程碑日期压缩结果（含压缩比 / 堆叠标志，供透明化提示 P1-M11/M12） */
+  const [fitInfo, setFitInfo] = useState<FitMilestoneDatesResult | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
-  /** 用户是否动过里程碑（动过之后模板预填不再覆盖） */
-  const [msTouched, setMsTouched] = useState<boolean>(false);
-  const [msLoading, setMsLoading] = useState<boolean>(false);
-  /** 当前分类模板的阶段（U-13：里程碑「归属阶段」下拉选项 = 模板 stage code） */
-  const [tplStages, setTplStages] = useState<Array<{ code: string; name: string }>>([]);
   const [classifyResult, setClassifyResult] = useState<ClassifyResult>(() =>
     classifyProject({
       contractAmount: 0,
@@ -186,48 +185,50 @@ export function ProjectCreatePage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classifyInput]);
 
-  /**
-   * 里程碑预填：分类 / 计划开始日期变化时按生命周期模板重算。
-   * 用户一旦动过（msTouched）就不再覆盖；模板缺失或请求失败降级为空列表，不阻断向导。
+  /* ── 里程碑规划草稿：进入里程碑步骤时由模板带出（用户反馈①） ──
+   * 仅在分类变化（msBuiltFor !== form.type）时重建，避免覆盖用户编辑。
+   * 日期 = planStart + 模板偏移；用户在向导中可改名称 / 日期、可新增。
    */
   useEffect(() => {
-    if (msTouched) return;
-    // 计划开始被清空 / 非法时不预填，避免算出 "Invalid Date"；用户填回合法日期后会自动重跑
-    if (!form.planStart || !dayjs(form.planStart).isValid()) return;
+    if (step !== 2) return;
+    if (msBuiltFor === form.type) return; // 首次 / 分类变化才重建，仍不覆盖用户编辑
+    const { planStart, planEnd } = form;
     let alive = true;
-    setMsLoading(true);
     api
       .getLifecycleTemplate(form.type)
       .then((tpl) => {
-        if (!alive) return;
-        const defs = tpl?.definition.milestones ?? [];
-        setTplStages((tpl?.definition.stages ?? []).map((s) => ({ code: s.code, name: s.name })));
-        setForm((f) => ({
-          ...f,
-          milestones: defs.map((d) => ({
-            code: d.code,
-            name: d.name,
-            target: '',
-            date: addDays(f.planStart, d.offsetDays),
-            // U-12 模板预填带出锚点：A 类模板有 anchorStage/anchor，B/C 无则留空（安全默认）
-            stageCode: d.anchorStage ?? null,
-            anchor: d.anchor ?? null,
-          })),
+        if (!alive || !tpl) return;
+        const offsets = tpl.definition.milestones.map((md) => md.offsetDays);
+        const fit = fitMilestoneDatesEx(planStart, planEnd, offsets); // ★ 不再直算 addDays
+        const specs: MilestoneDraft[] = tpl.definition.milestones.map((md, i) => ({
+          code: md.code,
+          name: md.name,
+          target: '',
+          date: fit.dates[i],
+          required: md.required,
+          offsetDays: md.offsetDays,
+          gate: md.gate
+            ? {
+                code: md.gate.code,
+                name: md.gate.name,
+                ownerRole: md.gate.ownerRole,
+                items: md.gate.items.map((it) => ({ content: it.content, ownerRole: it.ownerRole })),
+              }
+            : null,
         }));
+        setForm((f) => ({ ...f, milestones: specs }));
+        setFitInfo(fit);
+        setBuiltPeriod({ start: planStart, end: planEnd });
+        setMsBuiltFor(form.type);
       })
       .catch(() => {
-        if (alive) setForm((f) => ({ ...f, milestones: [] }));
-      })
-      .finally(() => {
-        // 改动 B 回归修复(P2-2)：loading 标记幂等，无条件清除；
-        // 否则模板请求在途时 effect 因 msTouched 翻 true 早退 + cleanup 置 alive=false，
-        // 旧请求 settle 时 setMsLoading(false) 不触发 → spinner 永久卡住、重置按钮永久置灰。
-        setMsLoading(false);
+        if (alive) setMsBuiltFor(form.type);
       });
     return () => {
       alive = false;
     };
-  }, [form.type, form.planStart, msTouched]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, form.type, msBuiltFor, form.planStart, form.planEnd]); // ★ 补 planStart/planEnd（问题②根因）
 
   const patch = (p: Partial<CreateForm>): void => setForm((f) => ({ ...f, ...p }));
 
@@ -248,7 +249,7 @@ export function ProjectCreatePage(): JSX.Element {
 
   /**
    * 纯函数收集校验错误（只 return，不 setState）。
-   * `target` = 即将进入的步骤索引；guard 累积式：0 基本 / 1 分类 / 2 团队 / 3 里程碑 / 4 确认。
+   * `target` = 即将进入的步骤索引；guard 累积式：0 基本 / 1 分类 / 2 里程碑 / 3 团队 / 4 确认。
    * 提交时需要同步读取错误来决定回跳步骤，因此不能依赖异步的 errors state。
    */
   const collectErrors = (target: number): Record<string, string> => {
@@ -279,18 +280,23 @@ export function ProjectCreatePage(): JSX.Element {
     }
 
     if (target >= 3) {
+      // 里程碑规划：每个里程碑名称与计划日期必填（用户反馈①）
+      form.milestones.forEach((m, i) => {
+        if (!m.name.trim()) next[`milestone-${i}`] = '名称必填';
+        else if (!m.date) next[`milestone-${i}`] = '计划日期必填';
+      });
+      if (form.milestones.some((m) => !m.name.trim() || !m.date)) {
+        next.milestones = '请完善里程碑规划（每个里程碑的名称与计划日期必填）';
+      }
+    }
+
+    if (target >= 4) {
       // 复合键防御：同一人可担任多个角色，但「同一人 + 同一角色」不能重复
       const keys = form.members.map((m) => `${m.userOpenId}::${m.role}`);
       if (new Set(keys).size !== keys.length) next.members = '同一成员的同一角色不能重复添加';
       else if (pmCount !== 1) next.members = '项目经理（PM）有且仅有 1 人';
       else if (tlCount !== 1) next.members = '技术负责人（TL）有且仅有 1 人';
       else if (form.type === 'B' && !hasPo) next.members = 'B 类（产品型）项目必须指定产品负责人（PO）';
-    }
-
-    if (target >= 4) {
-      // 里程碑不硬校验数量（允许全部清空）；单条要求名称与日期非空，越界日期只给软提示
-      const bad = form.milestones.findIndex((d) => !d.name.trim() || !d.date);
-      if (bad >= 0) next.milestones = `第 ${bad + 1} 条里程碑的名称与计划日期均为必填`;
     }
 
     return next;
@@ -347,68 +353,13 @@ export function ProjectCreatePage(): JSX.Element {
     patch({ members: form.members.filter((_, i) => i !== index) });
   };
 
-  /* ── 里程碑草稿编辑（任何改动都会锁定 msTouched，防止预填 effect 覆盖） ── */
-
-  const updateMilestoneDraft = (index: number, p: Partial<MilestoneDraft>): void => {
-    setMsTouched(true);
-    setForm((f) => ({
-      ...f,
-      milestones: f.milestones.map((d, i) => (i === index ? { ...d, ...p } : d)),
-    }));
-  };
-
-  const addMilestoneDraft = (): void => {
-    setMsTouched(true);
-    setForm((f) => {
-      const last = f.milestones[f.milestones.length - 1];
-      return {
-        ...f,
-        milestones: [
-          ...f.milestones,
-          {
-            code: nextMilestoneCode(f.milestones),
-            name: '',
-            target: '',
-            date: last?.date || f.planStart,
-            // U-15 用户新增里程碑默认不锚定，可稍后在里程碑页补选
-            stageCode: null,
-            anchor: null,
-          },
-        ],
-      };
-    });
-  };
-
-  const removeMilestoneDraft = (index: number): void => {
-    setMsTouched(true);
-    setForm((f) => ({ ...f, milestones: f.milestones.filter((_, i) => i !== index) }));
-  };
-
-  /** 解锁 msTouched 即可触发预填 effect 重新按模板生成 */
-  const resetMilestonesToTemplate = (): void => {
-    setErrors((e) => {
-      if (!e.milestones) return e;
-      const rest = { ...e };
-      delete rest.milestones;
-      return rest;
-    });
-    setMsTouched(false);
-  };
-
-  /** 日期落在计划周期之外 —— 仅软提示，不拦截提交 */
-  const isMsDateOutOfRange = (d: MilestoneDraft): boolean => {
-    if (!d.date || !form.planStart || !form.planEnd) return false;
-    const day = dayjs(d.date);
-    return day.isBefore(dayjs(form.planStart), 'day') || day.isAfter(dayjs(form.planEnd), 'day');
-  };
-
   /* ── 提交 ────────────────────────────────────── */
 
   const handleSubmit = async (): Promise<void> => {
     const nextErrors = collectErrors(4);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
-      setStep(nextErrors.milestones ? 3 : nextErrors.members ? 2 : nextErrors.overrideReason ? 1 : 0);
+      setStep(nextErrors.members ? 3 : nextErrors.milestones ? 2 : nextErrors.overrideReason ? 1 : 0);
       return;
     }
     const payload: CreateProjectPayload = {
@@ -425,8 +376,14 @@ export function ProjectCreatePage(): JSX.Element {
       classifySuggested: classifyResult.suggested,
       classifyOverrideReason: isOverride ? form.overrideReason.trim() : '',
       members: form.members.map((m) => ({ userOpenId: m.userOpenId, role: m.role })),
-      // 三态：未触碰 → undefined（后端按模板生成）；触碰过 → 数组（[] 即显式清空）
-      milestones: msTouched ? form.milestones : undefined,
+      milestones: form.milestones.map((m) => ({
+        code: m.code,
+        name: m.name.trim(),
+        target: m.target.trim(),
+        date: m.date,
+        required: m.required,
+        gate: m.gate,
+      })),
     };
     setSubmitting(true);
     try {
@@ -450,7 +407,7 @@ export function ProjectCreatePage(): JSX.Element {
         value={form.name}
         onChange={(e) => patch({ name: e.target.value })}
         error={Boolean(errors.name)}
-        helperText={errors.name ?? '建议包含客户 / 产品与阶段，例如「XX 局智慧园区一期」'}
+        helperText={errors.name ?? '建议包含客户 / 产品，例如「XX 局智慧园区一期」'}
         fullWidth
       />
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
@@ -680,170 +637,6 @@ export function ProjectCreatePage(): JSX.Element {
     </Stack>
   );
 
-  const renderMilestones = (): JSX.Element => {
-    const list = form.milestones;
-    const dates = list.map((d) => d.date).filter(Boolean).sort();
-    const outOfRangeCount = list.filter(isMsDateOutOfRange).length;
-
-    return (
-      <Stack spacing={2}>
-        <Alert severity="info" variant="outlined">
-          日期已按「计划开始 + <strong>{PROJECT_TYPE_SHORT[form.type]}</strong>模板偏移」预填，可自由增删改。
-          全部删除则<strong>创建后不生成里程碑</strong>，可稍后在里程碑页补充。
-          每条可选「归属阶段 + 锚点」（A 类模板自动带出；留空不阻断向导，可稍后补选）。
-          创建后日期即成为基线，延后需走变更单。
-        </Alert>
-
-        {msLoading && (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <CircularProgress size={16} />
-            <Typography variant="body2" color="text.secondary">
-              正在按模板预填里程碑…
-            </Typography>
-          </Stack>
-        )}
-
-        {!msLoading && list.length === 0 && (
-          <Typography variant="body2" color="text.secondary">
-            当前没有里程碑（该分类暂无生效模板，或已被清空）。可点击下方「新增里程碑」手动添加。
-          </Typography>
-        )}
-
-        <Stack spacing={1.5}>
-          {list.map((d, i) => {
-            const nameError = !d.name.trim();
-            const dateError = !d.date;
-            const outOfRange = !dateError && isMsDateOutOfRange(d);
-            return (
-              <Stack
-                key={`${d.code}-${i}`}
-                direction={{ xs: 'column', md: 'row' }}
-                spacing={1.25}
-                alignItems={{ xs: 'stretch', md: 'flex-start' }}
-              >
-                <Chip size="small" label={d.code || `M${i + 1}`} sx={{ mt: { md: 1 }, minWidth: 52 }} />
-                <TextField
-                  size="small"
-                  label="名称"
-                  required
-                  value={d.name}
-                  onChange={(e) => updateMilestoneDraft(i, { name: e.target.value })}
-                  error={nameError}
-                  helperText={nameError ? '名称必填' : ' '}
-                  sx={{ flex: '1 1 180px', minWidth: 150 }}
-                />
-                <TextField
-                  size="small"
-                  label="目标 / 达成标准"
-                  value={d.target}
-                  placeholder="例：需求规格说明书通过评审并冻结基线"
-                  onChange={(e) => updateMilestoneDraft(i, { target: e.target.value })}
-                  helperText=" "
-                  multiline
-                  minRows={2}
-                  sx={{ flex: '2 1 260px', minWidth: 200 }}
-                />
-                <DatePicker
-                  label="计划日期"
-                  format={DATE_FMT}
-                  value={d.date ? dayjs(d.date) : null}
-                  onChange={(v) =>
-                    updateMilestoneDraft(i, { date: v && v.isValid() ? v.format(DATE_FMT) : '' })
-                  }
-                  slotProps={{
-                    textField: {
-                      size: 'small',
-                      error: dateError,
-                      helperText: dateError ? '日期必填' : outOfRange ? '不在计划周期内' : ' ',
-                      sx: { width: { xs: '100%', md: 178 }, flexShrink: 0 },
-                    },
-                  }}
-                />
-                {/* U-13 归属阶段 + 锚点：选项 = 所选分类模板的阶段 code；留空不阻断向导 */}
-                <TextField
-                  select
-                  size="small"
-                  label="归属阶段（可选）"
-                  value={d.stageCode ?? ''}
-                  onChange={(e) =>
-                    updateMilestoneDraft(i, {
-                      stageCode: e.target.value || null,
-                      anchor: e.target.value ? d.anchor : null,
-                    })
-                  }
-                  helperText={d.stageCode ? ' ' : '可稍后在里程碑页补选'}
-                  sx={{ width: { xs: '100%', md: 148 }, flexShrink: 0 }}
-                >
-                  <MenuItem value="">
-                    <Typography variant="body2" color="text.secondary">未归属</Typography>
-                  </MenuItem>
-                  {tplStages.map((s) => (
-                    <MenuItem key={s.code} value={s.code}>
-                      {s.code} {s.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  select
-                  size="small"
-                  label="锚点（可选）"
-                  value={d.anchor ?? ''}
-                  disabled={!d.stageCode}
-                  onChange={(e) =>
-                    updateMilestoneDraft(i, { anchor: (e.target.value as MilestoneAnchor) || null })
-                  }
-                  helperText={!d.stageCode ? '先选归属阶段' : ' '}
-                  sx={{ width: { xs: '100%', md: 148 }, flexShrink: 0 }}
-                >
-                  <MenuItem value="">
-                    <Typography variant="body2" color="text.secondary">未指定</Typography>
-                  </MenuItem>
-                  {MILESTONE_ANCHORS.map((a) => (
-                    <MenuItem key={a} value={a}>
-                      {MILESTONE_ANCHOR_LABEL[a]}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <IconButton
-                  size="small"
-                  onClick={() => removeMilestoneDraft(i)}
-                  aria-label="删除里程碑"
-                  sx={{ mt: { md: 0.5 }, alignSelf: { xs: 'flex-end', md: 'flex-start' } }}
-                >
-                  <DeleteOutlineIcon fontSize="small" />
-                </IconButton>
-              </Stack>
-            );
-          })}
-        </Stack>
-
-        <Stack direction="row" spacing={1}>
-          <Button size="small" startIcon={<AddIcon />} onClick={addMilestoneDraft}>
-            新增里程碑
-          </Button>
-          <Button size="small" color="inherit" onClick={resetMilestonesToTemplate} disabled={msLoading}>
-            重置为模板
-          </Button>
-        </Stack>
-
-        {outOfRangeCount > 0 && (
-          <Alert severity="warning" variant="outlined">
-            有 <strong>{outOfRangeCount}</strong> 条里程碑的日期不在计划周期（{form.planStart} ~ {form.planEnd}）内，
-            仅作提醒，不影响提交。
-          </Alert>
-        )}
-
-        {errors.milestones && <Alert severity="error">{errors.milestones}</Alert>}
-
-        <Typography variant="caption" color="text.secondary">
-          共 {list.length} 条
-          {dates.length > 0 ? ` · 最早 ${dates[0]} ~ 最晚 ${dates[dates.length - 1]}` : ''}
-          {msTouched ? ' · 已自定义（切换分类不会覆盖）' : ' · 跟随模板自动更新'}
-        </Typography>
-      </Stack>
-    );
-  };
-
   const renderConfirm = (): JSX.Element => (
     <Stack spacing={1.75}>
       <FieldRow label="项目名称">{form.name}</FieldRow>
@@ -868,65 +661,155 @@ export function ProjectCreatePage(): JSX.Element {
           ))}
         </Stack>
       </FieldRow>
-      <Divider />
-      <FieldRow label="里程碑规划">
-        {form.milestones.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            未规划（创建后可在里程碑页补充）
-          </Typography>
-        ) : (
-          <Stack spacing={0.25}>
-            {form.milestones.map((d, i) => (
-              <Typography key={`${d.code}-${i}`} variant="body2">
-                {d.code || `M${i + 1}`} {d.name || `里程碑 ${i + 1}`} · {d.date}
-                {d.stageCode ? ` · ${d.stageCode}${d.anchor ? `（${MILESTONE_ANCHOR_LABEL[d.anchor]}）` : ''}` : ' · 未归属阶段'}
-                {d.target ? ` · 目标：${d.target}` : ''}
-              </Typography>
-            ))}
-          </Stack>
-        )}
+      <FieldRow label="里程碑">
+        {form.milestones.length} 个（{form.milestones.filter((m) => m.required).length} 个必备）· 创建后可在里程碑页自由增删改
       </FieldRow>
       <Divider />
-      <FieldRow label="项目团队">
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          {form.members.map((m) => (
-            <Chip
-              key={`${m.userOpenId}-${m.role}`}
-              size="small"
-              variant="outlined"
-              label={`${nameOf(m.userOpenId)} · ${PROJECT_ROLE_LABEL[m.role]}`}
-            />
-          ))}
-        </Stack>
-      </FieldRow>
       <Alert severity="info" variant="outlined">
-        提交后系统会按 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板自动实例化阶段与质量门；
-        {msTouched ? (
-          form.milestones.length > 0 ? (
-            <>
-              里程碑按你上一步的规划<strong>自定义创建 {form.milestones.length} 条</strong>。
-            </>
-          ) : (
-            <>
-              <strong>本次不创建里程碑</strong>，可在里程碑页补充。
-            </>
-          )
-        ) : (
-          <>
-            里程碑按 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板生成{' '}
-            <strong>{form.milestones.length}</strong> 条。
-          </>
-        )}
+        提交后系统会按 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板生成里程碑与配套质量门（向导中已规划，可在此后继续增删改）；
         项目初始状态为「草稿」，需在概览页发起立项审批。
       </Alert>
+    </Stack>
+  );
+
+  /* ── 计划周期变更检测 + 重算（P0-M5，不静默覆盖用户已手改的日期） ── */
+  const periodDirty =
+    step === 2 &&
+    form.milestones.length > 0 &&
+    Boolean(builtPeriod.start) &&
+    (form.planStart !== builtPeriod.start || form.planEnd !== builtPeriod.end);
+
+  const recalcMilestoneDates = (): void => {
+    /* 模板碑用原始 offsetDays；用户手动新增的碑无 offsetDays，按相对旧 planStart 的天数反推 */
+    const offsets = form.milestones.map(
+      (m) => m.offsetDays ?? Math.max(0, diffDays(builtPeriod.start, m.date)),
+    );
+    const fit = fitMilestoneDatesEx(form.planStart, form.planEnd, offsets);
+    patch({ milestones: form.milestones.map((m, i) => ({ ...m, date: fit.dates[i] })) });
+    setFitInfo(fit);
+    setBuiltPeriod({ start: form.planStart, end: form.planEnd });
+  };
+
+  const renderMilestones = (): JSX.Element => (
+    <Stack spacing={2}>
+      <Alert severity="info" variant="outlined">
+        默认里程碑由 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板带出，可修改<strong>名称 / 计划日期</strong>；
+        模板<strong>必备里程碑锁删</strong>（仅可改期），其余可自由增删；也支持新增里程碑。
+      </Alert>
+      {periodDirty && (
+        <Alert severity="warning" variant="outlined"
+          action={<Button size="small" onClick={recalcMilestoneDates}>按新周期重算日期</Button>}>
+          计划周期已调整为 {form.planStart} ~ {form.planEnd}，当前里程碑日期仍按旧周期生成。
+          点击重算会按新周期等比调整全部日期，<strong>你手动修改过的日期会被覆盖</strong>。
+        </Alert>
+      )}
+      {fitInfo?.compressed && (
+        <Alert severity="info" variant="outlined">
+          计划周期 {fitInfo.planDays} 天 &lt; 模板跨度 {fitInfo.templateSpan} 天，
+          里程碑日期已按 <strong>{(fitInfo.ratio * 100).toFixed(1)}%</strong> 等比压缩，节奏保持不变。
+        </Alert>
+      )}
+      {fitInfo?.stacked && (
+        <Alert severity="warning" variant="outlined">
+          计划周期过短（{fitInfo.planDays} 天），{form.milestones.length} 个里程碑无法完全错开，
+          存在同日里程碑。建议延长周期或删减里程碑。<strong>不影响提交</strong>。
+        </Alert>
+      )}
+      <Stack spacing={1.5}>
+        {form.milestones.map((m, i) => (
+          <Box
+            key={`${m.code}-${i}`}
+            sx={{ p: 1.5, border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5 }}
+          >
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems="flex-start">
+              <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+                  <Typography variant="subtitle2">{m.code}</Typography>
+                  {m.required && (
+                    <Chip size="small" label="必备" color="primary" sx={{ height: 16, fontSize: 10 }} />
+                  )}
+                  {m.gate && (
+                    <Chip size="small" variant="outlined" label="有质量门" sx={{ height: 16, fontSize: 10 }} />
+                  )}
+                </Stack>
+                <TextField
+                  label="里程碑名称"
+                  value={m.name}
+                  onChange={(e) =>
+                    patch({
+                      milestones: form.milestones.map((x, xi) => (xi === i ? { ...x, name: e.target.value } : x)),
+                    })
+                  }
+                  error={Boolean(errors[`milestone-${i}`])}
+                  fullWidth
+                  size="small"
+                />
+              </Box>
+              <DatePicker
+                label="计划日期"
+                value={m.date ? dayjs(m.date) : null}
+                format={DATE_FMT}
+                slotProps={{
+                  textField: { size: 'small', fullWidth: true, error: Boolean(errors[`milestone-${i}`]) },
+                }}
+                onChange={(v) =>
+                  patch({
+                    milestones: form.milestones.map((x, xi) =>
+                      xi === i ? { ...x, date: v && v.isValid() ? v.format(DATE_FMT) : '' } : x,
+                    ),
+                  })
+                }
+              />
+              <IconButton
+                size="small"
+                color="error"
+                disabled={m.required}
+                onClick={() => patch({ milestones: form.milestones.filter((_, xi) => xi !== i) })}
+                aria-label="删除里程碑"
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+            {m.required && (
+              <Typography variant="caption" color="text.secondary">
+                模板必备里程碑不可删除，仅可在此修改名称 / 日期
+              </Typography>
+            )}
+          </Box>
+        ))}
+      </Stack>
+      <Box>
+        <Button
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={() =>
+            patch({
+              milestones: [
+                ...form.milestones,
+                {
+                  code: `M${form.milestones.length + 1}`,
+                  name: '',
+                  target: '',
+                  date: form.planStart,
+                  required: false,
+                  gate: null,
+                },
+              ],
+            })
+          }
+        >
+          添加里程碑
+        </Button>
+      </Box>
+      {errors.milestones && <Alert severity="error">{errors.milestones}</Alert>}
     </Stack>
   );
 
   const STEP_RENDER: Array<() => JSX.Element> = [
     renderBasic,
     renderClassify,
-    renderMembers,
     renderMilestones,
+    renderMembers,
     renderConfirm,
   ];
 

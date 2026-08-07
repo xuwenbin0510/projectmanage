@@ -45,7 +45,7 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     name: '李明',
     globalRole: 'pm',
     dept: '项目管理部',
-    hint: 'PM 视角：建项目、报周报、提变更、推阶段',
+    hint: 'PM 视角：建项目、报周报、提变更、走门控',
   },
   {
     openId: OPEN_IDS.zhangmin,

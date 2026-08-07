@@ -64,7 +64,7 @@ export const PROJECT_TABS: ProjectTabItem[] = [
   { key: 'milestones', label: '里程碑', segment: 'milestones' },
   { key: 'wbs', label: 'WBS', segment: 'wbs' },
   { key: 'board', label: '看板', segment: 'board' },
-  { key: 'reports', label: '周报', segment: 'reports' },
+  { key: 'reports', label: '工作日志', segment: 'reports' },
   { key: 'reviews', label: '评审审批', segment: 'reviews' },
   { key: 'changes', label: '变更', segment: 'changes' },
   { key: 'audit', label: '变更历史', segment: 'audit' },

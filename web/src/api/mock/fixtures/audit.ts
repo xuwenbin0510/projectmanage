@@ -258,7 +258,7 @@ export function createDocuments(users: User[]): ProjectDocument[] {
     {
       id: 'DC001',
       projectId: 'P0012',
-      stageId: 'P0012-S1',
+      milestoneId: 'P0012-M1',
       templateKey: 'charter',
       name: '项目章程 v1.0',
       status: '已基线',
@@ -270,7 +270,7 @@ export function createDocuments(users: User[]): ProjectDocument[] {
     {
       id: 'DC002',
       projectId: 'P0012',
-      stageId: 'P0012-S2',
+      milestoneId: 'P0012-M2',
       templateKey: 'srs',
       name: '需求规格说明书 SRS v1.2',
       status: '已基线',
@@ -282,7 +282,7 @@ export function createDocuments(users: User[]): ProjectDocument[] {
     {
       id: 'DC003',
       projectId: 'P0012',
-      stageId: 'P0012-S3',
+      milestoneId: 'P0012-M3',
       templateKey: 'hld',
       name: '概要设计说明书 v1.0',
       status: '评审中',
@@ -294,7 +294,7 @@ export function createDocuments(users: User[]): ProjectDocument[] {
     {
       id: 'DC004',
       projectId: 'P0012',
-      stageId: 'P0012-S4',
+      milestoneId: 'P0012-M5',
       templateKey: 'test_plan',
       name: '集成测试计划 v0.9',
       status: '草稿',

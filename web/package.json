@@ -9,6 +9,8 @@
     "dev:mock": "vite --mode development",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "verify:simplify": "node scripts/verify_simplify.mjs",
+    "smoke:engine": "node scripts/smoke_engine.mjs",
     "preview": "vite preview",
     "lint": "eslint . --ext .ts,.tsx"
   },

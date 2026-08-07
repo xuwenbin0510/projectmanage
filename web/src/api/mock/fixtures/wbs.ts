@@ -7,18 +7,49 @@ import { DEFAULT_WIP_LIMIT } from '@/config/enums';
 /**
  * WBS 演示数据（含边界样本：逾期任务 / 粒度超限 / 叶子缺负责人 / 进行中列已满 WIP）
  * @prd P0-06 P0-07
+ *
+ * ⚠️ 存量种子仍按旧「stage / package / task」三型书写（历史数据，新模型仅 task / subtask），
+ * 实例化时按 §2.4.4 确定性规则映射为「任务(task) / 子任务(subtask)」两型：
+ *   · stage / package → 恒为 task
+ *   · task 且有子节点 → task（容器）
+ *   · task 且无子节点 → subtask（真叶子）
+ * 这样 43 个节点映射为 task 15 / subtask 28，且满足「subtask 必为叶」「根层无 subtask」。
  */
+
+/** 种子期的旧三型；仅用于书写，实例化时映射掉，不进入运行时类型 */
+type SeedNodeType = 'stage' | 'package' | 'task';
 
 type NodeSpec = [
   code: string,
   name: string,
-  nodeType: WbsNodeType,
+  nodeType: SeedNodeType,
   owner: string,
   estimateDays: number,
   progress: number,
   status: TaskStatus,
   dueOffset: number,
 ];
+
+/** 种子节点 → 最终 nodeType（§2.4.4 确定性映射） */
+function mapSeedNodeType(t: SeedNodeType, hasChild: boolean): WbsNodeType {
+  if (t === 'task') return hasChild ? 'task' : 'subtask';
+  return 'task'; // stage / package → task
+}
+
+/**
+ * 里程碑挂载（§2.6 补挂建议）：把二级容器 task 绑到对应里程碑。
+ *
+ * ⚠️ 口径 Y（SK-M4）：被绑定的容器节点**自身也计入**该里程碑的关联任务集合，
+ *    其子树真叶子一并计入（按 id 去重）；但**加权完成度只算真叶子**，
+ *    容器节点权重为 0。详见 `src/utils/wbs.ts · milestoneTaskDetail`。
+ */
+const MILESTONE_BIND: Record<string, Record<string, string>> = {
+  P0012: { '1.1': 'M2', '1.2': 'M3', '1.3': 'M4', '1.4': 'M4', '1.5': 'M5' },
+  P0015: { '1.1': 'M2', '1.2': 'M3' },
+  P0018: { '1.1': 'M2', '1.2': 'M4', '1.3': 'M5' },
+  P0009: { '1.1': 'M4', '1.2': 'M5' },
+  P0021: { '1': 'M1' },
+};
 
 const P0012: NodeSpec[] = [
   ['1', '星舰数据中心一期', 'stage', '', 0, 0, '进行中', 165],
@@ -30,8 +61,6 @@ const P0012: NodeSpec[] = [
   ['1.2.2', '硬件接口 ICD 定义', 'task', OPEN_IDS.wangqiang, 8, 40, '待评审', -4],
   ['1.2.3', '详细设计评审准备', 'task', OPEN_IDS.wudi, 2, 100, '完成', -8],
   ['1.3', '开发实施', 'package', '', 0, 0, '进行中', 60],
-  // 存量违规修正（WBS 重构 D-2）：原 1.3.1「数据接入模块」package 挂在 package(1.3) 下违反
-  // 「package→task」白名单；提升为根级 package（根节点 1 为 stage，允许挂 package），顺延集成测试编码
   ['1.4', '数据接入模块', 'package', '', 0, 0, '进行中', 20],
   ['1.4.1', '采集协议解析', 'task', OPEN_IDS.wudi, 4, 60, '进行中', 5],
   ['1.4.2', '数据入库服务', 'task', OPEN_IDS.zhengshuang, 3, 30, '进行中', 7],
@@ -40,7 +69,7 @@ const P0012: NodeSpec[] = [
   ['1.3.3', '前端可视化开发', 'task', '', 0, 0, '待办', 20],
   ['1.3.4', '联调脚本编写', 'task', OPEN_IDS.wudi, 2, 20, '进行中', 9],
   ['1.3.5', '性能压测准备', 'task', OPEN_IDS.xuwenbin, 3, 10, '进行中', -3],
-  ['1.5', '集成测试', 'package', '', 0, 0, '未开始' as TaskStatus extends never ? never : TaskStatus, 90],
+  ['1.5', '集成测试', 'package', '', 0, 0, '待办', 90],
   ['1.5.1', '集成测试用例编写', 'task', OPEN_IDS.xuwenbin, 3, 0, '待办', 4],
   ['1.5.2', '缺陷回归', 'task', OPEN_IDS.xuwenbin, 2, 0, '待办', -1],
 ];
@@ -104,22 +133,26 @@ export function createWbs(users: User[]): WbsBundle {
 
   for (const [projectId, specs] of ALL) {
     const codeToId = new Map<string, string>();
+    const codes = specs.map((s) => s[0]);
     specs.forEach((s, i) => {
       codeToId.set(s[0], `${projectId}-W${i + 1}`);
     });
 
+    // 判断某 code 是否有子节点（决定 task 还是 subtask）
+    const hasChild = (code: string): boolean =>
+      codes.some((c) => c.startsWith(`${code}.`));
+
     specs.forEach((s, i) => {
-      const [code, name, nodeType, owner, estimateDays, progress, status, dueOffset] = s;
+      const [code, name, seedType, owner, estimateDays, progress, status, dueOffset] = s;
       const pCode = parentCodeOf(code);
+      const milestoneCode = MILESTONE_BIND[projectId]?.[code];
       nodes.push({
         id: `${projectId}-W${i + 1}`,
         projectId,
         parentId: pCode ? (codeToId.get(pCode) ?? null) : null,
         wbsCode: code,
         level: code.split('.').length,
-        nodeType,
-        // 存量种子节点名称不可靠，不按名称猜测阶段归属；统一 null，由 UI 提示补选
-        lifecycleStageId: null,
+        nodeType: mapSeedNodeType(seedType, hasChild(code)),
         name,
         description: '',
         owner,
@@ -132,7 +165,7 @@ export function createWbs(users: User[]): WbsBundle {
         progress,
         boardOrder: i,
         isCritical: code.startsWith('1.2') || code.startsWith('1.4'),
-        milestoneId: null,
+        milestoneId: milestoneCode ? `${projectId}-${milestoneCode}` : null,
         createdBy: OPEN_IDS.xuwenbin,
         createdAt: ts,
         updatedAt: ts,

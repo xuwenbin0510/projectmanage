@@ -1,4 +1,4 @@
-/** 用户 / 项目 / 成员 / 生命周期 / 阶段 / 质量门 / 里程碑（对齐架构 3.1 ER 图） */
+/** 用户 / 项目 / 成员 / 生命周期模板 / 质量门 / 里程碑（简化方案一 · 无阶段实体） */
 
 import type { WbsRules } from '@/types/wbs';
 
@@ -29,11 +29,21 @@ export type ProjectStatus =
 
 export type Health = 'green' | 'yellow' | 'red';
 
-export type StageStatus = '未开始' | '进行中' | '已完成';
-
 export type GateStatus = '未开始' | '待检查' | '已通过' | '有条件通过' | '不通过';
 
 export type MilestoneStatus = '未开始' | '进行中' | '已达成' | '已逾期';
+
+/**
+ * 里程碑状态的「人工覆盖」值域（🔒 U-5 / SK-7b 定案）。
+ *
+ * **恒不含「已达成」** —— 达成有且只有一条写入路径 `doneAt`：
+ * - 有门的碑：门决议为「已通过 / 有条件通过」时引擎自动写入，或 `achieved=true` 但受 C-G4 拦截；
+ * - 无门的自建碑：`achieved=true` 直接写入。
+ *
+ * 把「已达成」放进 override 等于给「绕过门控达成」开后门，与制度 §1.2.3 / §7.1 冲突。
+ * 这里在**类型层**收口，不是只在 UI 下拉里少放一个选项。
+ */
+export type MilestoneOverride = '未开始' | '进行中' | '已逾期';
 
 export interface User {
   id: number;
@@ -77,7 +87,6 @@ export interface Project {
   background: string;
   goal: string[];
   status: ProjectStatus;
-  currentStageId: string | null;
   health: Health;
   planStart: string;
   planEnd: string;
@@ -89,12 +98,21 @@ export interface Project {
   updatedAt: string;
 }
 
-/** 项目列表行（附带聚合展示字段） */
+/**
+ * 项目列表行（附带聚合展示字段）
+ * 「项目走到第几步」由「下一里程碑 + 已过 N/M 道门」表达（§3.2 / N-5）
+ */
 export interface ProjectListItem extends Project {
   pmName: string;
-  currentStageName: string;
+  /** 下一个未达成里程碑（按 currentDate 升序首个 !done）的编码 / 名称；无则为 '' */
+  nextMilestoneCode: string;
+  nextMilestoneName: string;
+  /** 下一个未达成里程碑所挂的门；无门为 '' / '未开始' */
   currentGateCode: string;
   currentGateStatus: GateStatus;
+  /** 已通过（含有条件通过）的门数 / 门总数 */
+  gatePassed: number;
+  gateTotal: number;
   progress: number;
   milestoneDone: number;
   milestoneTotal: number;
@@ -112,38 +130,48 @@ export interface ProjectMember {
   assignedAt: string;
 }
 
+/** 模板内联的质量门检查项 */
+export interface TemplateGateItem {
+  content: string;
+  ownerRole: string;
+}
+
+/** 模板内联的质量门（一碑最多一门 · C-G1） */
+export interface TemplateGate {
+  code: string;
+  name: string;
+  ownerRole: string;
+  items: TemplateGateItem[];
+}
+
+/**
+ * 模板里程碑骨架。
+ * - `offsetDays`：相对 `project.planStart` 的天数偏移
+ * - `required`：模板必备里程碑，实例化后锁删（仅可改期 · Q-2）
+ * - `gate`：该碑挂载的质量门；缺省 = 无门（C-G2：必备碑恒配门，自建碑无门）
+ */
+export interface TemplateMilestone {
+  code: string;
+  name: string;
+  offsetDays: number;
+  required: boolean;
+  gate?: TemplateGate;
+}
+
 export interface LifecycleTemplate {
   id: string;
   projectType: ProjectType;
   version: number;
   name: string;
   definition: {
-    stages: Array<{ code: string; name: string; gate: { code: string; name: string; ownerRole: string; items: Array<{ content: string; ownerRole: string }> } }>;
-    /**
-     * 里程碑骨架。
-     * - `anchorStage`：锚定的模板阶段 code（S1..S6）；缺省 = 不锚定（实例化后 stageId 为 null）
-     * - `anchor`：阶段内锚点位置；仅在 anchorStage 有值时有意义
-     * - 决策 Q-1「安全默认」：当前仅 A 类模板填锚，B/C 保持缺省（运行时模板与
-     *   `docs/lifecycle/*.json` 草拟版阶段数不一致，硬填会产生错锚脏数据）
-     */
-    milestones: Array<{ code: string; name: string; offsetDays: number; anchorStage?: string; anchor?: MilestoneAnchor }>;
+    /** 里程碑骨架（唯一时间轴）；阶段实体已在方案一中彻底删除 */
+    milestones: TemplateMilestone[];
     docs: string[];
-    /** WBS 层级规则；只写差异项，其余由 `DEFAULT_WBS_RULES` 兜底（决策 D-2） */
+    /** WBS 层级规则；只写差异项，其余由 `DEFAULT_WBS_RULES` 兜底（决策 D-2 / SK-5） */
     wbsRules?: Partial<WbsRules>;
   };
   isActive: boolean;
   createdAt: string;
-}
-
-export interface ProjectStage {
-  id: string;
-  projectId: string;
-  seq: number;
-  code: string;
-  name: string;
-  status: StageStatus;
-  startedAt: string | null;
-  finishedAt: string | null;
 }
 
 export interface GateChecklistItem {
@@ -158,10 +186,15 @@ export interface GateChecklistItem {
   source: 'template' | 'custom';
 }
 
+/**
+ * 质量门（决策 D-A：独立表，外键由 `stageId` 改挂 `milestoneId`）
+ * C-G1：同一 `projectId` 下 `milestoneId` 唯一（一碑最多一门）
+ */
 export interface QualityGate {
   id: string;
   projectId: string;
-  stageId: string;
+  /** 挂载的里程碑 id */
+  milestoneId: string;
   code: string;
   name: string;
   ownerRole: string;
@@ -173,19 +206,6 @@ export interface QualityGate {
   createdAt: string;
 }
 
-/** 阶段 + 门 聚合视图（概览页阶段条 / 门检查清单用） */
-export interface StageWithGate extends ProjectStage {
-  gate: QualityGate | null;
-  /** 该门下的检查项（按 seq 升序）；无门时为空数组 */
-  gateItems: GateChecklistItem[];
-}
-
-/**
- * 里程碑在所属阶段内的锚点位置（WBS 重构 D-1 · 方案 B）
- * - `start` 阶段启动点 / `mid` 阶段中段 / `end` 阶段收口点（多数里程碑落此）
- */
-export type MilestoneAnchor = 'start' | 'mid' | 'end';
-
 export interface Milestone {
   id: string;
   projectId: string;
@@ -193,38 +213,56 @@ export interface Milestone {
   name: string;
   /** 目标 / 达成标准（交付物）；模板生成时为 ''，允许空串但不为 null */
   target: string;
-  /** 所属生命周期阶段 id（project_stages.id）；null = 未锚定，可后补 */
-  stageId: string | null;
-  /** 阶段内锚点；stageId 为 null 时恒为 null */
-  anchor: MilestoneAnchor | null;
+  /** 模板必备里程碑（Q-2）：锁删，仅可改期；用户自建碑为 false */
+  required: boolean;
   /** 原始基线，永不修改 */
   baselineDate: string;
-  /** 当前计划，仅变更单可改 */
+  /** 当前计划，仅提前可直接改，延后须走变更单 */
   currentDate: string;
   /** currentDate - baselineDate（天）；正数 = 延期，负数 = 提前 */
   delayDays: number;
+  /**
+   * ⚠️ SK-2 **派生值**，由 `refreshMilestoneStatuses()` 唯一写入。
+   * 任何业务代码禁止直接赋值。
+   */
   status: MilestoneStatus;
+  /** ⚠️ SK-2 派生值：`done = (status === '已达成')` */
   done: boolean;
+  /** 达成时间（真值来源之一）；null = 未达成 */
   doneAt: string | null;
+  /** 达成操作人 openId */
+  doneBy: string | null;
+  /** 人工覆盖值（真值来源之二）；null = 未覆盖 */
+  statusOverride: MilestoneOverride | null;
+  overrideBy: string | null;
+  overrideAt: string | null;
+  /** 覆盖时的 `currentDate` 快照，用于「改期后覆盖自动失效」判定（SK-7） */
+  overrideBaseDate: string | null;
   lastChangeId: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+/** 里程碑关联任务完成度（§2.5.3 · 口径 Y，SK-M4） */
+export interface MilestoneTaskStats {
+  /** 关联节点数 = 直接绑定该碑的节点 ∪ 其子树真叶子（按 id 去重） */
+  total: number;
+  /** 上述集合中 `progress >= 100` 的节点数 */
+  done: number;
+  /** 加权完成度 0~100：**仅对集合中的真叶子**按 estimateDays 加权，汇总节点权重为 0 */
+  progress: number;
+}
+
 /**
- * 创建向导中的里程碑草稿（未落库）
- * - `code`：M1/M2…，模板带来或前端补号 `M{max+1}`
- * - `date`：计划日期，`YYYY-MM-DD`（复用 DATE_FMT）
- * - `stageCode`：锚定的模板阶段 code（S1..S6）；向导里选的是**模板阶段 code**，
- *   落库时由 createProject 事务拼成真实 `stageId`。null = 不锚定（允许，不阻塞向导）
+ * 里程碑 + 门 + 关联任务统计 聚合视图
+ * （取代原 `StageWithGate`，是里程碑页 / 概览页的唯一数据源）
  */
-export interface MilestoneDraft {
-  code: string;
-  name: string;
-  target: string;
-  date: string;
-  stageCode?: string | null;
-  anchor?: MilestoneAnchor | null;
+export interface MilestoneWithGate extends Milestone {
+  /** SK-1：无门的碑恒为 `null`，不是空对象 */
+  gate: QualityGate | null;
+  /** 该门下的检查项（按 seq 升序）；无门时为空数组 */
+  gateItems: GateChecklistItem[];
+  taskStats: MilestoneTaskStats;
 }
 
 /** 结项阻塞项（P0-17） */

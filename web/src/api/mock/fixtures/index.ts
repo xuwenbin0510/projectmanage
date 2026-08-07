@@ -26,7 +26,6 @@ export function createSeedDb(): MockDb {
     projects: pb.projects,
     members: pb.members,
     templates,
-    stages: pb.stages,
     gates: pb.gates,
     gateItems: pb.gateItems,
     milestones: pb.milestones,
