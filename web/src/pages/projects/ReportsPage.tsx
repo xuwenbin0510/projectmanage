@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -29,7 +29,7 @@ import {
   UserAvatar,
 } from '@/components/common';
 import type { Column } from '@/components/common';
-import type { Report } from '@/types/report';
+import type { Report, ReportTaskRef } from '@/types/report';
 import type { WbsTreeNode } from '@/types/wbs';
 import type { ReportPayload } from '@/api/contract';
 import { useProjectStore } from '@/stores/projectStore';
@@ -39,6 +39,7 @@ import { useToast } from '@/hooks';
 import { REPORT_SECTION_TITLE } from '@/config/enums';
 import { dayjs, weekCode, shiftWeek, fmtDate } from '@/utils/date';
 import { tokens } from '@/theme/tokens';
+import { memberNameOf } from '@/utils/member';
 
 interface TaskProgress {
   progressAfter: number;
@@ -73,6 +74,7 @@ function buildWeekOptions(current: string): string[] {
  */
 export function ReportsPage(): JSX.Element {
   const { id = '' } = useParams();
+  const location = useLocation();
   const toast = useToast();
   const project = useProjectStore((s) => s.current);
   const members = useProjectStore((s) => s.members);
@@ -94,6 +96,10 @@ export function ReportsPage(): JSX.Element {
   const [detail, setDetail] = useState<Report | null>(null);
   /** 编辑中的周报 id（null = 新建） */
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
+  /** R3-7：编辑中的完整周报（assemble 时 tasks 原样回传的权威来源） */
+  const [editingReport, setEditingReport] = useState<Report | null>(null);
+  /** R3-5 接收端：避免同一路由 state（prefillNodeId）重复触发新建弹窗 */
+  const prefilledRef = useRef<boolean>(false);
 
   const weekOptions = useMemo(() => buildWeekOptions(weekCode(dayjs())), []);
 
@@ -108,6 +114,7 @@ export function ReportsPage(): JSX.Element {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -120,7 +127,15 @@ export function ReportsPage(): JSX.Element {
 
   useEffect(() => {
     void fetchReports(id).catch((e: unknown) => toast.error(e));
-    if (project?.type) void fetchWbs(id, project.type);
+    // R3-5 接收端：从 WBS「写日志」跳转过来时，location.state 携带 prefillNodeId
+    const prefillNodeId = (location.state as { prefillNodeId?: string } | null)?.prefillNodeId;
+    const wbsReady = project?.type ? fetchWbs(id, project.type) : Promise.resolve();
+    void wbsReady.then(() => {
+      if (prefillNodeId && !prefilledRef.current) {
+        prefilledRef.current = true;
+        openCreateWithPrefill(prefillNodeId);
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -134,6 +149,30 @@ export function ReportsPage(): JSX.Element {
       Object.fromEntries(nodes.map((n) => [n.id, { progressAfter: n.progress, selected: false }])),
     );
     setEditingReportId(null);
+    setEditingReport(null);
+    setOpen(true);
+  };
+
+  /** R3-5 接收端：从 WBS「写日志」跳转 → 自动打开新建弹窗并预勾选该任务 */
+  const openCreateWithPrefill = (nodeId: string): void => {
+    // 从 store 取最新节点（fetchWbs 的 .then 回调里闭包 nodes 可能是旧值）
+    const latestNodes = useWbsStore.getState().nodes;
+    const target = latestNodes.find((n) => n.id === nodeId);
+    if (!target) {
+      // 节点不存在（可能已被删除）→ 降级为普通新建
+      openCreate();
+      return;
+    }
+    reset({ week: weekOptions[0], doneNote: '', resourceNote: '', planItems: [''], risks: [] });
+    setPlanItems(['']);
+    // 任务树全不选 + 该节点 selected=true
+    setTaskMap(
+      Object.fromEntries(
+        latestNodes.map((n) => [n.id, { progressAfter: n.progress, selected: n.id === nodeId }]),
+      ),
+    );
+    setEditingReportId(null);
+    setEditingReport(null);
     setOpen(true);
   };
 
@@ -156,21 +195,31 @@ export function ReportsPage(): JSX.Element {
       Object.fromEntries(r.tasks.map((t) => [t.nodeId, { progressAfter: t.progressAfter, selected: t.selected }])),
     );
     setEditingReportId(r.id);
+    // R3-7：保存完整编辑对象，assemble 时 tasks 原样回传
+    setEditingReport(r);
     setOpen(true);
   };
 
   const assemble = (values: FormValues): ReportPayload => ({
     projectId: id,
-    week: values.week,
+    // R3-7：编辑态周次以原始报告为准（引擎不更新 week；也规避 disabled 字段丢失）
+    week: editingReport ? editingReport.week : values.week,
     doneNote: values.doneNote,
     planItems: planItems.map((p) => p.trim()).filter(Boolean),
     resourceNote: values.resourceNote,
-    // 关联全部 WBS 节点（树形勾选），保留 selected / progressAfter
-    tasks: nodes.map((n) => ({
-      nodeId: n.id,
-      progressAfter: taskMap[n.id]?.progressAfter ?? n.progress,
-      selected: taskMap[n.id]?.selected ?? false,
-    })),
+    // ★ R3-7 关键：编辑态原样回传原始 report.tasks（selected / progressAfter 不变），
+    //   引擎按 payload.tasks 整体重建 report.tasks，否则关联会被清空
+    tasks: editingReport
+      ? editingReport.tasks.map<ReportTaskRef>((t) => ({
+          nodeId: t.nodeId,
+          progressAfter: t.progressAfter,
+          selected: t.selected,
+        }))
+      : nodes.map((n) => ({
+          nodeId: n.id,
+          progressAfter: taskMap[n.id]?.progressAfter ?? n.progress,
+          selected: taskMap[n.id]?.selected ?? false,
+        })),
     risks: values.risks,
   });
 
@@ -189,6 +238,7 @@ export function ReportsPage(): JSX.Element {
       }
       setOpen(false);
       setEditingReportId(null);
+      setEditingReport(null);
       await fetchReports(id);
     } catch (e) {
       toast.error(e);
@@ -228,16 +278,18 @@ export function ReportsPage(): JSX.Element {
     },
   ];
 
-  /** WBS 树形勾选（用户反馈⑤：树形关联，保留勾选 + 进度逻辑） */
+  /** WBS 树形勾选（用户反馈⑤：树形关联，保留勾选 + 进度逻辑；R3-7 编辑态只读） */
   const renderTaskTree = (list: WbsTreeNode[], depth: number): JSX.Element[] =>
     list.map((n) => {
       const t = taskMap[n.id] ?? { progressAfter: n.progress, selected: false };
+      const readOnly = Boolean(editingReport);
       return (
         <Box key={n.id} sx={{ pl: depth * 2 }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', py: 0.25 }}>
             <input
               type="checkbox"
               checked={t.selected}
+              disabled={readOnly}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, selected: e.target.checked } }))}
               style={{ accentColor: tokens.brand.primary }}
             />
@@ -252,6 +304,7 @@ export function ReportsPage(): JSX.Element {
               label="完%"
               size="small"
               value={t.progressAfter}
+              disabled={readOnly}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
               sx={{ width: 92 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
@@ -296,7 +349,11 @@ export function ReportsPage(): JSX.Element {
         title={editingReportId ? `编辑工作日志 · ${project?.name ?? ''}` : `新建工作日志 · ${project?.name ?? ''}`}
         submitText="提交"
         maxWidth="md"
-        onClose={() => setOpen(false)}
+        onClose={() => {
+          setOpen(false);
+          setEditingReportId(null);
+          setEditingReport(null);
+        }}
         onSubmit={handleSubmit((v) => void doSave(v, true))}
         extraActions={
           <Button color="inherit" onClick={handleSubmit((v) => void doSave(v, false))}>
@@ -304,18 +361,37 @@ export function ReportsPage(): JSX.Element {
           </Button>
         }
       >
-        <TextField select label="周次" {...register('week')} fullWidth error={Boolean(errors.week)} helperText={errors.week?.message}>
-          {weekOptions.map((w) => (
-            <MenuItem key={w} value={w}>
-              {w}
-            </MenuItem>
-          ))}
-        </TextField>
+        {/* R3-7：编辑态周次只读展示 + 隐藏 input 保持注册（disabled 会丢值，不参与提交） */}
+        {editingReport ? (
+          <>
+            <input type="hidden" {...register('week')} />
+            <Typography variant="body2" sx={{ py: 1 }}>
+              周次：{watch('week')}
+            </Typography>
+          </>
+        ) : (
+          <TextField select label="周次" {...register('week')} fullWidth error={Boolean(errors.week)} helperText={errors.week?.message}>
+            {weekOptions.map((w) => (
+              <MenuItem key={w} value={w}>
+                {w}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
 
         <Box>
           <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{REPORT_SECTION_TITLE.done}</Typography>
           <TextField label="补充说明（对照计划的完成情况）" {...register('doneNote')} fullWidth multiline minRows={2} placeholder="本周按计划完成了哪些关键事项" />
-          <Box sx={{ mt: 1, maxHeight: 320, overflowY: 'auto', border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5, p: 1 }}>
+          {/* R3-6：任务关联区固定标题；编辑态追加只读说明 */}
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1, mb: 0.5 }}>
+            <Typography variant="subtitle2">{REPORT_SECTION_TITLE.taskAssoc}</Typography>
+            {editingReport && (
+              <Typography variant="caption" color="text.secondary">
+                编辑已提交日志时该区域只读
+              </Typography>
+            )}
+          </Stack>
+          <Box sx={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5, p: 1 }}>
             {tree.length === 0 ? (
               <Typography variant="caption" color="text.secondary">
                 暂无 WBS 任务，可先到「工作分解」页建立
@@ -357,28 +433,46 @@ export function ReportsPage(): JSX.Element {
         <Box>
           <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{REPORT_SECTION_TITLE.risks}</Typography>
           <Stack spacing={1}>
-            {risks.fields.map((field, index) => (
-              <Stack key={field.id} spacing={1} sx={{ p: 1, border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5 }}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <TextField {...register(`risks.${index}.description` as const)} label="风险描述" fullWidth size="small" error={Boolean(errors.risks?.[index]?.description)} helperText={errors.risks?.[index]?.description?.message} />
-                  <IconButton size="small" color="error" onClick={() => risks.remove(index)}>
-                    <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
+            {risks.fields.map((field, index) => {
+              const ownerOpenId = watch(`risks.${index}.owner` as const);
+              const dueDateValue = watch(`risks.${index}.dueDate` as const);
+              return (
+                <Stack key={field.id} spacing={1} sx={{ p: 1, border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5 }}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    {/* R3-7：风险描述编辑态保持可编辑（纯文本）；增删行属结构性修改，编辑态禁用 */}
+                    <TextField {...register(`risks.${index}.description` as const)} label="风险描述" fullWidth size="small" error={Boolean(errors.risks?.[index]?.description)} helperText={errors.risks?.[index]?.description?.message} />
+                    <IconButton size="small" color="error" onClick={() => risks.remove(index)} disabled={Boolean(editingReport)}>
+                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Stack>
+                  <Stack direction="row" spacing={1}>
+                    {editingReport ? (
+                      /* R3-7：编辑态责任人 / 截止日只读展示 + 隐藏 input 保持注册（disabled 会丢值） */
+                      <>
+                        <input type="hidden" {...register(`risks.${index}.owner` as const)} />
+                        <input type="hidden" {...register(`risks.${index}.dueDate` as const)} />
+                        <Typography variant="body2" sx={{ flex: 1, py: 1 }}>
+                          责任人：{memberNameOf(members, ownerOpenId)}（截止 {dueDateValue}）
+                        </Typography>
+                      </>
+                    ) : (
+                      <>
+                        <TextField {...register(`risks.${index}.owner` as const)} select label="责任人" size="small" sx={{ flex: 1 }} error={Boolean(errors.risks?.[index]?.owner)} helperText={errors.risks?.[index]?.owner?.message}>
+                          <MenuItem value="">（未选）</MenuItem>
+                          {ownerOptions.map((m) => (
+                            <MenuItem key={m.userOpenId} value={m.userOpenId}>
+                              {m.userName}
+                            </MenuItem>
+                          ))}
+                        </TextField>
+                        <TextField {...register(`risks.${index}.dueDate` as const)} type="date" label="截止日" size="small" sx={{ flex: 1 }} InputLabelProps={{ shrink: true }} error={Boolean(errors.risks?.[index]?.dueDate)} helperText={errors.risks?.[index]?.dueDate?.message} />
+                      </>
+                    )}
+                  </Stack>
                 </Stack>
-                <Stack direction="row" spacing={1}>
-                  <TextField {...register(`risks.${index}.owner` as const)} select label="责任人" size="small" sx={{ flex: 1 }} error={Boolean(errors.risks?.[index]?.owner)} helperText={errors.risks?.[index]?.owner?.message}>
-                    <MenuItem value="">（未选）</MenuItem>
-                    {ownerOptions.map((m) => (
-                      <MenuItem key={m.userOpenId} value={m.userOpenId}>
-                        {m.userName}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  <TextField {...register(`risks.${index}.dueDate` as const)} type="date" label="截止日" size="small" sx={{ flex: 1 }} InputLabelProps={{ shrink: true }} error={Boolean(errors.risks?.[index]?.dueDate)} helperText={errors.risks?.[index]?.dueDate?.message} />
-                </Stack>
-              </Stack>
-            ))}
-            <Button startIcon={<AddIcon />} size="small" onClick={() => risks.append({ description: '', owner: '', dueDate: '' })} sx={{ alignSelf: 'flex-start' }}>
+              );
+            })}
+            <Button startIcon={<AddIcon />} size="small" onClick={() => risks.append({ description: '', owner: '', dueDate: '' })} sx={{ alignSelf: 'flex-start' }} disabled={Boolean(editingReport)}>
               添加风险项
             </Button>
           </Stack>
@@ -456,7 +550,8 @@ export function ReportsPage(): JSX.Element {
               {detail.risks.length ? (
                 detail.risks.map((rk) => (
                   <Typography key={rk.id} variant="body2">
-                    · {rk.description}（责任人：{rk.owner}，截止：{rk.dueDate}）
+                    {/* R3-8：责任人显示成员姓名（解析不到显示 openId 原文） */}
+                    · {rk.description}（责任人：{memberNameOf(members, rk.owner)}，截止：{rk.dueDate}）
                   </Typography>
                 ))
               ) : (

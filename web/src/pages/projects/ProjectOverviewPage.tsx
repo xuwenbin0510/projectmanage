@@ -176,10 +176,7 @@ export function ProjectOverviewPage(): JSX.Element {
       toast.success(`「${activeMs.code} ${activeMs.name}」已标记达成`);
       await refreshProject(id);
     } catch (e) {
-      if (isApiError(e) && e.code === ErrorCode.E_GATE_NOT_PASSED) {
-        toast.error('该里程碑已挂质量门，需门控结论为「通过 / 有条件通过」后方可标记达成');
-        return;
-      }
+      // R3-11：引擎不再抛 E_GATE_NOT_PASSED，死分支已清理
       toast.error(e);
     } finally {
       setSubmitting(false);
@@ -287,9 +284,6 @@ export function ProjectOverviewPage(): JSX.Element {
                     {m.code} {m.name}
                   </Typography>
                   {m.done && <Chip size="small" label="已达成" sx={{ height: 18, fontSize: 11 }} />}
-                  {m.required && !m.done && (
-                    <Chip size="small" label="必备" sx={{ height: 18, fontSize: 11 }} />
-                  )}
                 </Stack>
                 <Stack direction="row" spacing={0.75} alignItems="center">
                   <StatusChip status={m.status} />

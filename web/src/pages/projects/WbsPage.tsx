@@ -17,7 +17,7 @@ import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { SimpleTreeView, TreeItem } from '@mui/x-tree-view';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import {
   ConfirmDialog,
@@ -27,11 +27,13 @@ import {
   PermissionButton,
   ProgressBar,
   SectionCard,
+  StatusChip,
   UserAvatar,
 } from '@/components/common';
 import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules } from '@/types/wbs';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useProjectStore } from '@/stores/projectStore';
+import { useFlowStore } from '@/stores/flowStore';
 import { usePermission, useToast } from '@/hooks';
 import { api } from '@/api/client';
 import { allowedChildTypes, resolveWbsRules, validateWbsPlacement } from '@/api/mock/rules';
@@ -41,10 +43,13 @@ import {
   TASK_STATUSES,
   WBS_NODE_TYPE_LABEL,
 } from '@/config/enums';
+import { ROUTES } from '@/config/routes';
 import { tokens, alphaOf, toneColor } from '@/theme/tokens';
 import { flattenTree, rollupProgress } from '@/utils/wbs';
 import { fmtDays } from '@/utils/format';
 import { dayjs, fmtDate, DATE_FMT } from '@/utils/date';
+import { reportCountByNode, nodeReportsOf } from '@/utils/reportAgg';
+import { memberNameOf } from '@/utils/member';
 
 interface NodeForm {
   parentId: string;
@@ -78,6 +83,7 @@ const EMPTY_FORM: NodeForm = {
  */
 export function WbsPage(): JSX.Element {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const toast = useToast();
   const { can } = usePermission();
 
@@ -85,6 +91,7 @@ export function WbsPage(): JSX.Element {
   const projectType = project?.type ?? 'A';
   const members = useProjectStore((s) => s.members);
   const milestones = useProjectStore((s) => s.milestones);
+  const refreshMilestones = useProjectStore((s) => s.refreshMilestones);
 
   const tree = useWbsStore((s) => s.tree);
   const nodes = useWbsStore((s) => s.nodes);
@@ -94,16 +101,29 @@ export function WbsPage(): JSX.Element {
   const updateNode = useWbsStore((s) => s.updateNode);
   const deleteNode = useWbsStore((s) => s.deleteNode);
 
+  /* R3-5：工作日志数据源（徽标计数 / 详情聚合） */
+  const reports = useFlowStore((s) => s.reports);
+  const fetchReports = useFlowStore((s) => s.fetchReports);
+
   const [form, setForm] = useState<NodeForm>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<WbsTreeNode | null>(null);
+  /** R3-5：日志详情弹窗的目标节点 */
+  const [logDetailNode, setLogDetailNode] = useState<WbsTreeNode | null>(null);
   /** 创建子任务时里程碑若继承自上级则锁定（用户反馈④a：避免误改继承关系） */
   const [lockMilestone, setLockMilestone] = useState<boolean>(false);
   const [rules, setRules] = useState<WbsRules>(DEFAULT_WBS_RULES);
 
   useEffect(() => {
-    if (id) void fetchWbs(id, projectType);
+    if (id) {
+      void fetchWbs(id, projectType);
+      // ★ R3-4 根因修复：WBS 页挂载即同步刷新里程碑（与 MilestonesPage 一致），
+      //   保证「关联里程碑」下拉 / 节点徽标使用引擎最新排序（currentDate 升序 + M1..Mn 幂等）
+      void refreshMilestones(id);
+      // ★ R3-5：挂载拉取工作日志（徽标计数与详情聚合数据源）
+      void fetchReports(id).catch((e: unknown) => toast.error(e));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, projectType]);
 
@@ -158,6 +178,17 @@ export function WbsPage(): JSX.Element {
     if (!milestoneId) return null;
     return milestones.find((m) => m.id === milestoneId) ?? null;
   };
+
+  /* ── R3-5：日志聚合派生值 ── */
+  /** 节点 → 关联日志数（selected=true 口径，与 ReportsPage 列表「关联任务数」一致） */
+  const reportCounts = useMemo(() => reportCountByNode(reports), [reports]);
+  /** 详情弹窗数据：目标节点关联日志（createdAt 升序） */
+  const nodeReports = useMemo(
+    () => (logDetailNode ? nodeReportsOf(reports, logDetailNode.id) : []),
+    [reports, logDetailNode],
+  );
+  /** 写日志入口：report:write 权限且项目未归档（不依赖 wbs:edit，保证只有写日志权限的人也能写） */
+  const canWriteLog = can('report:write') && !archived;
 
   const openCreate = (parentId: string): void => {
     const parent = parentId ? flatNodes.find((n) => n.id === parentId) ?? null : null;
@@ -271,6 +302,7 @@ export function WbsPage(): JSX.Element {
     const isLeaf = node.children.length === 0;
     const boundMs = milestoneOf(node.milestoneId);
     const canAddChild = allowedChildTypes(node, rules).length > 0;
+    const logCount = reportCounts.get(node.id) ?? 0;
     return (
       <TreeItem
         key={node.id}
@@ -297,6 +329,37 @@ export function WbsPage(): JSX.Element {
                 label={`${boundMs.code} ${boundMs.name}`}
                 sx={{ height: 20, flexShrink: 0 }}
               />
+            )}
+            {/* R3-3：所有节点行内显示截止日期（无 dueDate 显示「截止 —」） */}
+            <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
+              截止 {fmtDate(node.dueDate)}
+            </Typography>
+            {/* R3-5：日志聚合徽标（n=0 弱化样式，仍可点击查看空态） */}
+            <Chip
+              size="small"
+              label={`日志 ${logCount}`}
+              variant={logCount > 0 ? 'filled' : 'outlined'}
+              color={logCount > 0 ? 'primary' : 'default'}
+              sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setLogDetailNode(node);
+              }}
+            />
+            {/* R3-5：写日志入口（跳转工作日志页，自动打开新建弹窗并预勾选本任务） */}
+            {canWriteLog && (
+              <PermissionButton
+                action="report:write"
+                disabledReason={archived ? '项目已归档' : ''}
+                size="small"
+                sx={{ height: 24, minWidth: 0, px: 1, fontSize: 12, flexShrink: 0 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(ROUTES.projectReports(id), { state: { prefillNodeId: node.id } });
+                }}
+              >
+                写日志
+              </PermissionButton>
             )}
             {node.warnings.length > 0 && (
               <Tooltip title={node.warnings.join('；')} arrow>
@@ -527,6 +590,76 @@ export function WbsPage(): JSX.Element {
             : ''
         }
       />
+
+      {/* R3-5：节点关联日志详情（createdAt 升序；每条含该节点进度 before→after） */}
+      <FormDialog
+        open={Boolean(logDetailNode)}
+        title={logDetailNode ? `工作日志详情 · ${logDetailNode.wbsCode} ${logDetailNode.name}` : '工作日志详情'}
+        submitText="关闭"
+        maxWidth="md"
+        onClose={() => setLogDetailNode(null)}
+        onSubmit={() => setLogDetailNode(null)}
+      >
+        {logDetailNode && (
+          <Stack spacing={1.5}>
+            {nodeReports.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                该节点暂无关联工作日志
+              </Typography>
+            ) : (
+              nodeReports.map((r) => {
+                const row = r.tasks.find((t) => t.nodeId === logDetailNode.id);
+                return (
+                  <Box
+                    key={r.id}
+                    sx={{ p: 1.5, border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5 }}
+                  >
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+                      <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{r.week}</Typography>
+                      <StatusChip status={r.status} />
+                      <Typography variant="caption" color="text.secondary">
+                        填报人：{r.authorName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        提交：{r.submittedAt ? fmtDate(r.submittedAt) : '—'}
+                      </Typography>
+                    </Stack>
+                    {row && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                        该任务进度：{row.progressBefore}% → {row.progressAfter}%
+                      </Typography>
+                    )}
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {r.doneNote || '—'}
+                    </Typography>
+                    {r.planItems.length > 0 && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                        下周计划：{r.planItems.join('；')}
+                      </Typography>
+                    )}
+                    {r.risks.length > 0 && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                        风险：
+                        {r.risks
+                          .map(
+                            (rk) =>
+                              `${rk.description}（责任人：${memberNameOf(members, rk.owner)}，截止：${rk.dueDate}）`,
+                          )
+                          .join('；')}
+                      </Typography>
+                    )}
+                    {r.resourceNote && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                        协调资源：{r.resourceNote}
+                      </Typography>
+                    )}
+                  </Box>
+                );
+              })
+            )}
+          </Stack>
+        )}
+      </FormDialog>
     </Stack>
   );
 }

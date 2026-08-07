@@ -1,144 +1,77 @@
-%% 流程一：创建项目 → 生成默认里程碑（等比压缩）→ 读路径幂等自愈重排
+%% 第三轮优化（round3-optimize）时序图：R3-4 排序修复 / R3-5 日志聚合 / R3-7 编辑回传
+%% 详见 docs/delta-design-round3-optimize.md §4
+
+%% ① WBS 挂载刷新里程碑 → 下拉排序一致（R3-4）
 sequenceDiagram
     autonumber
     actor U as 项目经理
-    participant W as ProjectCreatePage
-    participant D as utils/date.ts
-    participant E as MockApiClient
-    participant DB as MockDb(localStorage)
-    participant P as MilestonesPage
+    participant W as WbsPage
+    participant WS as wbsStore
+    participant PS as projectStore
+    participant E as MockApiClient(引擎)
 
-    U->>W: 填基本信息 planStart/planEnd
-    U->>W: 进入 step=2「里程碑规划」
-    W->>E: getLifecycleTemplate(type)
-    E-->>W: tpl.definition.milestones[offsetDays]
-    W->>D: fitMilestoneDatesEx(planStart, planEnd, offsets)
-    D-->>W: {dates, compressed, ratio, stacked}
-    W->>W: setForm(milestones=specs) / setBuiltPeriod({start,end})
-    W-->>U: 渲染 7 碑 + 「已按 12.9% 等比压缩」提示(P1-M11)
-    alt stacked === true
-        W-->>U: 非阻塞警告「周期过短，N 碑无法错开」(P1-M12)
-    end
+    U->>W: 进入 WBS 页（Tab / 深链）
+    W->>WS: fetchWbs(id, projectType)
+    WS->>E: listWbs(id)
+    E-->>WS: WbsNode[]（wbsCode 自然序）
+    WS-->>W: tree/nodes 更新
+    W->>PS: refreshMilestones(id)  ★R3-4 新增
+    PS->>E: listMilestones(id)
+    E->>E: milestonesWithGate(): renumberMilestones + sortMilestones(compareMilestones)
+    E-->>PS: MilestoneWithGate[]（currentDate 升序、编号 M1..Mn、幂等）
+    PS-->>W: store.milestones 更新
+    W-->>U: 下拉/节点徽标按最新顺序渲染（新碑立即出现）
 
-    opt 用户回到 step=0 改了 planStart/planEnd
-        U->>W: 修改计划周期
-        W-->>U: 顶部提示条 + 「按新周期重算日期」按钮(P0-M5，不静默覆盖)
-        U->>W: 点击重算
-        W->>D: fitMilestoneDatesEx(新周期, offsets)
-        D-->>W: dates
-        W->>W: patch(milestones dates) / setBuiltPeriod(新周期)
-    end
-
-    U->>W: 提交创建
-    W->>E: createProject({...form, milestones: specs})
-    E->>D: fitMilestoneDates(planStart, planEnd, tplOffsets)
-    Note over E,D: 仅当 payload.milestones 缺省时用于兜底 templateSpecs
-    E->>DB: push(project) / push(milestones)
-    E->>E: renumberMilestones(db, projectId)   ★T2 新增
-    Note over E: 必须在 WBS 骨架生成之前，<br/>否则骨架 description 里的 code 是脏的
-    E->>DB: push(wbsNodes 骨架, milestoneId 绑定)
-    E->>E: refreshMilestoneStatuses(db, projectId)
-    E->>DB: saveDb()
-    E-->>W: Project
-    W->>P: navigate(项目里程碑页)
-
-    P->>E: listMilestones(projectId)
-    E->>E: milestonesWithGate(db, projectId)
-    E->>E: renumberMilestones(db, projectId)   ★T4 读路径幂等自愈(F-2)
-    E->>E: refreshMilestoneStatuses(db, projectId)
-    E->>E: sortMilestones(compareMilestones) + milestoneTaskStats(口径Y)
-    E->>DB: saveDb()
-    E-->>P: MilestoneWithGate[]（code 与顺序恒定自洽）
-
-%% ─────────────────────────────────────────────────────────────
-%% 流程二：列表编辑里程碑 → 两段式提交（P0-M6 / P0-M7）
+%% ② 节点行点「日志 n」→ 聚合详情弹窗（R3-5）
 sequenceDiagram
     autonumber
     actor U as 项目经理
-    participant P as MilestonesPage
-    participant E as MockApiClient
-    participant S as projectStore
+    participant W as WbsPage
+    participant FS as flowStore
+    participant R as utils/reportAgg.ts
+    participant M as utils/member.ts
 
-    U->>P: 点击操作列「编辑」铅笔
-    P->>P: setEdit({ms, name, target, date})
-    P-->>U: 弹窗：名称* / 目标(多行) / 计划日期<br/>基线日期只读 · 必备标记只读 · 无「达成」开关
+    Note over W,FS: 挂载时已 fetchReports(id)
+    U->>W: 点击节点行「日志 3」徽标
+    W->>R: reportCountByNode(reports) 已算好徽标数
+    W->>R: nodeReportsOf(reports, node.id)
+    R-->>W: Report[]（createdAt 升序，含该节点 selected 行）
+    W->>M: memberNameOf(members, rk.owner)
+    M-->>W: 责任人姓名（解析不到回退 openId）
+    W-->>U: Dialog 逐条展示 周次/状态/填报人/提交时间/doneNote/planItems/risks/resourceNote + 该节点 progressBefore→after
 
-    U->>P: 改名称 + 改目标 + 把日期往后调
-    U->>P: 点「保存」
-    P->>P: 校验 name.trim() 非空
-
-    rect rgb(232, 245, 233)
-    Note over P,E: 段 1 —— 文本字段（永远不会被单向规则拦截）
-    P->>E: updateMilestone(id, {name, target})
-    E->>E: 分支②③ 写入 + audit
-    E-->>P: MilestoneWithGate
-    P->>P: textSaved = true
-    end
-
-    rect rgb(255, 243, 224)
-    Note over P,E: 段 2 —— 日期（可能被拦截）
-    P->>E: updateMilestone(id, {currentDate})
-    alt 日期提前（合法）
-        E->>E: 分支① 改期 + clearOverride + audit
-        E->>E: renumberMilestones(db, projectId)  ★T3 新增(F-1)
-        E->>E: refreshMilestoneStatuses + saveDb
-        E-->>P: MilestoneWithGate
-        P->>S: refreshMilestones(projectId)
-        P-->>U: Toast 成功「里程碑已更新」，关闭弹窗
-    else 日期延后 → E_MS_NEED_CHANGE
-        E-->>P: throw ApiError(E_MS_NEED_CHANGE, {changeDraft})
-        P-->>U: Toast「名称与目标已保存；日期延后需提交变更单」
-        P->>S: refreshMilestones(projectId)
-        Note over P,S: ★必须先刷新再关弹窗，<br/>否则重开编辑框看到的是旧名称(P0-M7 验收点)
-        P->>P: setEdit(null) / setDraft(changeDraft)
-        P-->>U: ConfirmDialog「去创建变更单」→ 复用现有 draft 引导
-    end
-    end
-
-%% ─────────────────────────────────────────────────────────────
-%% 流程三：插入 / 改期里程碑 → 重排 → 计数同源钻取
+%% ③ 点「写日志」→ 跳转工作日志页 → 预勾选任务 → 新建（R3-5③）
 sequenceDiagram
     autonumber
     actor U as 项目经理
-    participant P as MilestonesPage
-    participant E as MockApiClient
-    participant R as rules.compareMilestones
-    participant W as utils/wbs.ts
+    participant W as WbsPage
+    participant RT as React Router
+    participant R as ReportsPage
+    participant WS as wbsStore
+    participant FS as flowStore
 
-    Note over U,E: 场景 A —— M2(3/10) 与 M3(3/20) 之间插入 3/15 新碑
-    U->>P: 新建里程碑(name, date=3/15)
-    P->>E: createMilestone(projectId, payload)
-    E->>E: push(ms, code=M{max+1}=M4 临时值)
-    E->>E: renumberMilestones(db, projectId)
-    E->>R: compareMilestones × n log n
-    R-->>E: 3/1 < 3/10 < 3/15 < 3/20
-    E-->>P: M1(3/1) M2(3/10) M3(3/15) M4(3/20)  ✅ 不出现 M5
+    U->>W: 点击节点「写日志」（report:write 且未归档）
+    W->>RT: navigate(ROUTES.projectReports(id), { state: { prefillNodeId: node.id } })
+    RT->>R: 挂载 /projects/:id/reports（location.state.prefillNodeId）
+    R->>FS: fetchReports(id)
+    R->>WS: fetchWbs(id, project.type)
+    WS-->>R: tree/nodes 就绪
+    R->>R: openCreateWithPrefill(prefillNodeId)：任务树全不选 + 该节点 selected=true，打开新建弹窗
+    U->>R: 填写文本/勾选/进度后提交
+    R->>FS: submitReport(payload)
+    FS-->>R: 列表刷新
 
-    Note over U,E: 场景 B —— 把 M4(3/20) 提前到 3/5
-    U->>P: 改期入口 → 提交 3/5
-    P->>E: updateMilestone(id, {currentDate:'3/5'})
-    E->>E: 分支① 改期 + clearOverride
-    E->>E: renumberMilestones ★T3
-    E-->>P: M1(3/1) M2(3/5) M3(3/10) M4(3/15)
+%% ④ 编辑日志 → 仅文本可改 → 原样回传 tasks（R3-7）
+sequenceDiagram
+    autonumber
+    actor U as 项目经理
+    participant R as ReportsPage
+    participant E as MockApiClient(引擎)
 
-    Note over U,E: 场景 C —— 变更单审批后回写日期
-    U->>E: applyChange(changeId)
-    E->>E: ms.currentDate = toDate / delayDays / clearOverride
-    E->>E: renumberMilestones(db, change.projectId)  ★T3 第 2 处
-    E->>E: refreshMilestoneStatuses + saveDb
-
-    Note over U,W: 场景 D —— 计数与钻取同源
-    P->>E: listMilestones(projectId)
-    E->>W: milestoneTaskStats(nodes, msId)
-    W->>W: milestoneTaskDetail → {nodes:5, rollupIds:{骨架}, leaves:4}
-    W-->>E: {total:5, done:3, progress:加权(leaves)}
-    E-->>P: taskStats
-    P-->>U: 列表显示「3/5 完成 · 80%」
-
-    U->>P: 点击「关联任务」数字
-    P->>E: listWbs(projectId)
-    E-->>P: WbsNode[]（同一份数据源）
-    P->>W: milestoneTaskDetail(nodes, msId)
-    W-->>P: {nodes:5, rollupIds, leaves}
-    P-->>U: 弹窗顶部「共 5 条关联任务；完成度按叶子任务工时加权，汇总节点不计入权重」<br/>列表 5 条：骨架带「汇总」Chip + 4 条子任务缩进
-    Note over P,U: 弹窗条目数 5 === 列表 total 5 ✅ 严格同源(P0-M9)
+    U->>R: 打开编辑弹窗（已提交日志）
+    R->>R: reset(原始字段)；周次/责任人/截止日只读展示；任务树勾选与进度禁用
+    R->>R: assemble(edit)：tasks = editingReport.tasks 原样回传；risks = values.risks（description 可改、owner/dueDate 保留）；week = editingReport.week
+    R->>E: updateReport(id, payload)
+    E->>E: 仅覆盖 doneNote/planItems/resourceNote/risks；report.tasks 按 payload.tasks 重建（=原行集，关联不丢）
+    E-->>R: Report
+    R->>R: 关闭弹窗 + fetchReports(id) 刷新

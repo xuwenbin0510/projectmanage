@@ -52,7 +52,7 @@ export interface CreateProjectPayload {
   /**
    * 新建项目时随项目一起提交的里程碑规格（取代静默生成）。
    * 为空时服务端回退到模板静默生成（向后兼容）。
-   * 向导中由模板带出、用户可改名称 / 日期、可新增（非必备）、必备锁删（Q-2 / 用户反馈①）。
+   * 向导中由模板带出、用户可改名称 / 日期、可新增（非必备）。
    */
   milestones?: CreateMilestoneSpec[];
 }
@@ -94,7 +94,7 @@ export interface CreateMilestoneGateSpec {
 /**
  * 新建项目时提交的里程碑规格（取代静默生成 · 用户反馈①）。
  * 向导由模板带出，用户可改 `name` / `date`，可新增（默认 `required=false`）。
- * `gate` 为 null 表示无门；必备里程碑带门，且锁删仅可改期。
+ * `gate` 为 null 表示无门；`required` 保留模板血缘语义（R3-1：字段保留、页面不展示「必备」UI）。
  */
 export interface CreateMilestoneSpec {
   code: string;
@@ -103,7 +103,7 @@ export interface CreateMilestoneSpec {
   target?: string;
   /** 计划日期 `YYYY-MM-DD`（绝对日期，向导用 planStart + 模板偏移预填，用户可改） */
   date: string;
-  /** 模板必备（锁删，仅可改期） */
+  /** 模板血缘语义（R3-1：字段保留、页面不展示「必备」UI） */
   required: boolean;
   /** 质量门规格；null = 该里程碑无门 */
   gate: CreateMilestoneGateSpec | null;
@@ -236,7 +236,7 @@ export interface ApiClient {
   listMilestones(projectId: string): Promise<MilestoneWithGate[]>;
   createMilestone(projectId: string, payload: MilestoneCreatePayload): Promise<MilestoneWithGate>;
   updateMilestone(id: string, payload: MilestoneUpdatePayload): Promise<MilestoneWithGate>;
-  /** 必备碑抛 `E_MS_REQUIRED_LOCKED`；级联删门与检查项，关联 WBS 节点解绑（SK-12） */
+  /** 级联删门与检查项，关联 WBS 节点解绑（SK-12）；不再按「必备」锁删（R3-1） */
   deleteMilestone(id: string): Promise<void>;
 
   /* WBS P0-11 */
@@ -256,6 +256,7 @@ export interface ApiClient {
   getReport(projectId: string, week: string): Promise<Report | null>;
   saveReport(payload: ReportPayload): Promise<Report>;
   submitReport(payload: ReportPayload): Promise<Report>;
+  /** 编辑提交必须原样回传原始 report.tasks（selected/progressAfter 不变），引擎按 payload.tasks 整体重建，否则关联被清空（R3-7） */
   updateReport(id: string, payload: ReportPayload): Promise<Report>;
 
   /* 评审 P0-09 P0-10 */

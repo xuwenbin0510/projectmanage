@@ -52,6 +52,13 @@ export interface Report {
   updatedAt: string;
 }
 
+/**
+ * 编辑回传任务行的最小契约：nodeId + progressAfter + selected 必须与原始 report.tasks 完全一致（R3-7）。
+ * 引擎 `updateReport` 按 `payload.tasks` 整体重建 `report.tasks`，编辑提交必须原样回传，
+ * 否则关联会被清空。
+ */
+export type ReportTaskRef = Pick<ReportTaskRow, 'nodeId' | 'progressAfter' | 'selected'>;
+
 /** 周报校验结果（提交前本地强校验，服务端会再判一次） */
 export interface ReportValidation {
   ok: boolean;

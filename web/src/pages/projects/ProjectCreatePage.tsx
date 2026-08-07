@@ -57,7 +57,7 @@ interface MilestoneDraft {
   name: string;
   target: string;
   date: string;
-  /** 模板必备（锁删，仅可改期） */
+  /** 模板血缘语义（R3-1：字段保留写入引擎，页面不再展示「必备」UI） */
   required: boolean;
   gate: { code: string; name: string; ownerRole: string; items: Array<{ content: string; ownerRole: string }> } | null;
   /** 模板原始偏移天数；用户手动新增的碑为 undefined（重算时按旧周期反推） */
@@ -662,11 +662,11 @@ export function ProjectCreatePage(): JSX.Element {
         </Stack>
       </FieldRow>
       <FieldRow label="里程碑">
-        {form.milestones.length} 个（{form.milestones.filter((m) => m.required).length} 个必备）· 创建后可在里程碑页自由增删改
+        {form.milestones.length} 个里程碑 · 创建后可在里程碑页自由增删改
       </FieldRow>
       <Divider />
       <Alert severity="info" variant="outlined">
-        提交后系统会按 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板生成里程碑与配套质量门（向导中已规划，可在此后继续增删改）；
+        提交后系统会按 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板生成里程碑（向导中已规划，可在此后继续增删改）；
         项目初始状态为「草稿」，需在概览页发起立项审批。
       </Alert>
     </Stack>
@@ -693,8 +693,8 @@ export function ProjectCreatePage(): JSX.Element {
   const renderMilestones = (): JSX.Element => (
     <Stack spacing={2}>
       <Alert severity="info" variant="outlined">
-        默认里程碑由 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板带出，可修改<strong>名称 / 计划日期</strong>；
-        模板<strong>必备里程碑锁删</strong>（仅可改期），其余可自由增删；也支持新增里程碑。
+        默认里程碑由 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板带出，可修改<strong>名称 / 计划日期</strong>，
+        可自由增删；也支持新增里程碑。
       </Alert>
       {periodDirty && (
         <Alert severity="warning" variant="outlined"
@@ -725,9 +725,6 @@ export function ProjectCreatePage(): JSX.Element {
               <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
                 <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
                   <Typography variant="subtitle2">{m.code}</Typography>
-                  {m.required && (
-                    <Chip size="small" label="必备" color="primary" sx={{ height: 16, fontSize: 10 }} />
-                  )}
                   {m.gate && (
                     <Chip size="small" variant="outlined" label="有质量门" sx={{ height: 16, fontSize: 10 }} />
                   )}
@@ -763,18 +760,12 @@ export function ProjectCreatePage(): JSX.Element {
               <IconButton
                 size="small"
                 color="error"
-                disabled={m.required}
                 onClick={() => patch({ milestones: form.milestones.filter((_, xi) => xi !== i) })}
                 aria-label="删除里程碑"
               >
                 <DeleteOutlineIcon fontSize="small" />
               </IconButton>
             </Stack>
-            {m.required && (
-              <Typography variant="caption" color="text.secondary">
-                模板必备里程碑不可删除，仅可在此修改名称 / 日期
-              </Typography>
-            )}
           </Box>
         ))}
       </Stack>

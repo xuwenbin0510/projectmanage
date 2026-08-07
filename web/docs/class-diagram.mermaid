@@ -1,123 +1,73 @@
+%% 第三轮优化（round3-optimize）类图：数据模型 + 服务工具关系
+%% 详见 docs/delta-design-round3-optimize.md §3.5
+
 classDiagram
-    class Milestone {
+    class MilestoneWithGate {
         +string id
-        +string projectId
         +string code
         +string name
-        +string target
         +boolean required
         +string baselineDate
         +string currentDate
-        +number delayDays
-        +MilestoneStatus status
-        +boolean done
-        +string createdAt
-        +string updatedAt
-    }
-
-    class MilestoneTaskStats {
-        +number total
-        +number done
-        +number progress
-    }
-
-    class MilestoneWithGate {
+        +string lastChangeId
         +QualityGate gate
-        +GateChecklistItem[] gateItems
         +MilestoneTaskStats taskStats
     }
-    MilestoneWithGate --|> Milestone : extends
-    MilestoneWithGate *-- MilestoneTaskStats : taskStats
-
     class WbsNode {
         +string id
-        +string projectId
-        +string parentId
         +string wbsCode
-        +number level
-        +string nodeType
-        +number estimateDays
-        +number progress
+        +string name
+        +string dueDate
         +string milestoneId
+        +number progress
     }
-    WbsNode ..> Milestone : milestoneId (弱关联/可 null)
+    class Report {
+        +string id
+        +string week
+        +string status
+        +string authorName
+        +string submittedAt
+        +string doneNote
+        +string[] planItems
+        +string resourceNote
+        +ReportTaskRow[] tasks
+        +ReportRisk[] risks
+        +string createdAt
+    }
+    class ReportTaskRow {
+        +string nodeId
+        +string nodeName
+        +number progressBefore
+        +number progressAfter
+        +boolean selected
+    }
+    class ReportRisk {
+        +string description
+        +string owner
+        +string dueDate
+    }
+    class ProjectMember {
+        +string userOpenId
+        +string userName
+    }
+    class ReportAgg {
+        <<util>>
+        +reportCountByNode(reports) Map~string,number~
+        +nodeReportsOf(reports, nodeId) Report[]
+    }
+    class MemberUtil {
+        <<util>>
+        +memberNameOf(members, openId) string
+    }
+    class MilestonesPage
+    class WbsPage
+    class ReportsPage
 
-    class DateUtil {
-        <<module src/utils/date.ts>>
-        +addDays(base, days) string
-        +diffDays(a, b) number
-        +fitMilestoneDatesEx(planStart, planEnd, offsets) FitMilestoneDatesResult
-        +fitMilestoneDates(planStart, planEnd, offsets) string[]
-    }
-
-    class FitMilestoneDatesResult {
-        +string[] dates
-        +boolean compressed
-        +number ratio
-        +number planDays
-        +number templateSpan
-        +boolean stacked
-    }
-    DateUtil ..> FitMilestoneDatesResult : returns
-
-    class WbsUtil {
-        <<module src/utils/wbs.ts>>
-        +parentIdSet(nodes) Set
-        +milestoneTaskDetail(nodes, msId) MilestoneTaskDetail
-        +milestoneTaskNodes(nodes, msId) WbsNode[]
-        +milestoneTaskStats(nodes, msId) MilestoneTaskStats
-        +weightedProgress(leaves) number
-    }
-
-    class MilestoneTaskDetail {
-        +WbsNode[] nodes
-        +Set rollupIds
-        +WbsNode[] leaves
-    }
-    WbsUtil ..> MilestoneTaskDetail : returns
-    MilestoneTaskDetail o-- WbsNode
-    WbsUtil ..> MilestoneTaskStats : returns
-
-    class MockRules {
-        <<module src/api/mock/rules.ts>>
-        +compareMilestones(a, b) number
-        +sortMilestones(list) T[]
-        +milestoneStartFrom(list, ms, planStart) string
-        +deriveMilestoneStatus(ms, ctx) MilestoneStatus
-    }
-    MockRules ..> Milestone
-
-    class MockApiClient {
-        <<engine src/api/mock/index.ts>>
-        -renumberMilestones(db, projectId) boolean
-        -milestonesWithGate(db, projectId) MilestoneWithGate[]
-        -refreshMilestoneStatuses(db, projectId) void
-        +createProject(payload) Project
-        +listMilestones(projectId) MilestoneWithGate[]
-        +createMilestone(projectId, payload) MilestoneWithGate
-        +updateMilestone(id, payload) MilestoneWithGate
-        +deleteMilestone(id) void
-        +applyChange(id) Change
-    }
-    MockApiClient ..> MockRules : uses compareMilestones
-    MockApiClient ..> WbsUtil : uses milestoneTaskStats
-    MockApiClient ..> DateUtil : uses fitMilestoneDates
-    MockApiClient ..> MilestoneWithGate : returns
-
-    class ProjectCreatePage {
-        <<view>>
-        -MilestoneDraft[] milestones
-        -builtPeriod start/end
-        +recalcMilestoneDates() void
-    }
-    ProjectCreatePage ..> DateUtil : fitMilestoneDatesEx
-
-    class MilestonesPage {
-        <<view>>
-        -EditState edit
-        -DrillState drill
-        +handleEditSubmit() Promise
-        +openDrill(ms) Promise
-    }
-    MilestonesPage ..> WbsUtil : milestoneTaskDetail
-    MilestonesPage ..> MockApiClient : updateMilestone x2 (两段式)
+    Report "1" --> "*" ReportTaskRow
+    Report "1" --> "*" ReportRisk
+    ReportTaskRow --> WbsNode : nodeId
+    WbsNode --> MilestoneWithGate : milestoneId
+    WbsPage --> ReportAgg : 徽标/详情聚合
+    WbsPage --> MemberUtil : 责任人姓名
+    ReportsPage --> MemberUtil : 责任人姓名
+    MilestonesPage --> MilestoneWithGate : 列表/改期/编辑

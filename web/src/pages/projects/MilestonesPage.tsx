@@ -29,7 +29,7 @@ import type { MilestoneWithGate, MilestoneOverride } from '@/types/project';
 import type { ChangeDraft } from '@/types/change';
 import { milestoneTaskDetail, type MilestoneTaskDetail } from '@/utils/wbs';
 import { ROUTES } from '@/config/routes';
-import { MILESTONE_OVERRIDES, PROJECT_TYPE_SHORT } from '@/config/enums';
+import { MILESTONE_OVERRIDES } from '@/config/enums';
 import { isApiError, ErrorCode } from '@/types/api';
 import { dayjs, fmtDate, DATE_FMT } from '@/utils/date';
 import { fmtDays } from '@/utils/format';
@@ -59,7 +59,7 @@ interface EditState {
 
 /**
  * 里程碑：基线 vs 当前，单向规则（延后必须走变更单）
- * 自由增删改（Q-2）：模板必备里程碑锁删，仅可改期；其余可任意增删。
+ * 自由增删改（Q-2）：里程碑可自由编辑与删除，不再按「必备」锁删（R3-1）。
  * 状态为引擎派生值（SK-2），页面只触发「达成 / 人工覆盖 / 改期」三类写入。
  * @prd P0-05
  */
@@ -210,16 +210,12 @@ export function MilestonesPage(): JSX.Element {
       toast.success(`「${m.code} ${m.name}」已${m.done ? '取消达成' : '标记达成'}`);
       await refreshMilestones(id);
     } catch (e) {
-      // C-G4：有门且门未过 → 不允许直接标记达成
-      if (isApiError(e) && e.code === ErrorCode.E_GATE_NOT_PASSED) {
-        toast.error('该里程碑已挂质量门，需门控结论为「通过 / 有条件通过」后方可标记达成');
-        return;
-      }
+      // R3-11：引擎不再抛 E_GATE_NOT_PASSED（门控拦截已下沉到引擎内部），死分支已清理
       toast.error(e);
     }
   };
 
-  /* ── 删除（Q-2：模板必备里程碑锁删，仅可改期） ── */
+  /* ── 删除（Q-2 / R3-1：里程碑可自由删除，不再按「必备」锁删） ── */
   const handleDelete = async (): Promise<void> => {
     if (!deleteTarget) return;
     try {
@@ -228,11 +224,7 @@ export function MilestonesPage(): JSX.Element {
       setDeleteTarget(null);
       await refreshMilestones(id);
     } catch (e) {
-      if (isApiError(e) && e.code === ErrorCode.E_MS_REQUIRED_LOCKED) {
-        toast.error('模板必备里程碑不可删除，仅可改期');
-        setDeleteTarget(null);
-        return;
-      }
+      // R3-11：引擎不再抛 E_MS_REQUIRED_LOCKED，死分支已清理
       toast.error(e);
       setDeleteTarget(null);
     }
@@ -319,9 +311,6 @@ export function MilestonesPage(): JSX.Element {
         <Box sx={{ minWidth: 0 }}>
           <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
             {m.code} {m.name}
-            {m.required && (
-              <Chip size="small" label="必备" sx={{ height: 16, fontSize: 10, ml: 0.75, color: tokens.brand.primary }} />
-            )}
           </Typography>
           {m.lastChangeId && (
             <Typography variant="caption" color="text.secondary">
@@ -356,25 +345,31 @@ export function MilestonesPage(): JSX.Element {
         ),
     },
     {
-      key: 'baseline',
-      label: '基线日期',
-      width: 112,
-      render: (m) => (
-        <Tooltip title="原始基线，任何操作都不会修改" arrow>
-          <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>{fmtDate(m.baselineDate)}</Typography>
-        </Tooltip>
-      ),
-    },
-    {
       key: 'current',
-      label: '当前计划',
-      width: 190,
+      label: '计划日期（到期）',
+      width: 200,
       render: (m) => {
         /* P1-M14：运行期越界标红（日期 > planEnd）。YYYY-MM-DD 定长字符串，字典序即可比较 */
         const outOfRange = Boolean(project?.planEnd) && m.currentDate > project!.planEnd;
         const rangeTip = outOfRange ? `已超出项目计划结束日 ${project!.planEnd}` : undefined;
+        /* R3-10：currentDate !== baselineDate → 追加「已变更」弱标记 + tooltip（含变更单号） */
+        const changed = m.currentDate !== m.baselineDate;
+        const changedTip = changed
+          ? `基线 ${m.baselineDate} → 计划 ${m.currentDate}（变更单 ${m.lastChangeId ?? '—'}）`
+          : undefined;
+        const dateTip = outOfRange ? rangeTip : changedTip;
+        const dateNode = (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Typography sx={{ fontSize: 13, color: outOfRange ? toneColor.danger : undefined }}>
+              {fmtDate(m.currentDate)}
+            </Typography>
+            {changed && (
+              <Chip size="small" label="已变更" variant="outlined" sx={{ height: 16, fontSize: 10 }} />
+            )}
+          </Stack>
+        );
         return editable && !m.done ? (
-          <Tooltip title={outOfRange ? rangeTip : '点击改期（提前直接生效，延后走变更单）'} arrow>
+          <Tooltip title={dateTip ?? '点击改期（提前直接生效，延后走变更单）'} arrow>
             <Box
               component="button"
               type="button"
@@ -400,12 +395,12 @@ export function MilestonesPage(): JSX.Element {
               }}
             >
               <EditCalendarOutlinedIcon sx={{ fontSize: 15, color: outOfRange ? toneColor.danger : tokens.brand.primary }} />
-              {fmtDate(m.currentDate)}
+              {dateNode}
             </Box>
           </Tooltip>
         ) : (
-          <Tooltip title={rangeTip} arrow>
-            <Typography sx={{ fontSize: 13, color: outOfRange ? toneColor.danger : undefined }}>{fmtDate(m.currentDate)}</Typography>
+          <Tooltip title={dateTip} arrow>
+            <span>{dateNode}</span>
           </Tooltip>
         );
       },
@@ -521,8 +516,8 @@ export function MilestonesPage(): JSX.Element {
   return (
     <Stack spacing={2.5}>
       <Alert severity="info" variant="outlined">
-        <strong>单向规则</strong>：基线日期永不修改；当前计划<strong>提前可直接改</strong>，
-        <strong>延后必须提交变更单</strong>并经 CCB 审批后由系统回写，杜绝私自改期。
+        <strong>计划日期（到期）</strong>为当前生效计划，<strong>提前可直接改</strong>，
+        <strong>延后须走变更单</strong>；基线日期仅用于审计对比。
         里程碑状态由引擎派生，达成可由手动标记触发；里程碑可自由编辑与删除。
       </Alert>
 
@@ -563,7 +558,7 @@ export function MilestonesPage(): JSX.Element {
       >
         <Stack spacing={0.5}>
           <Typography variant="caption" color="text.secondary">
-            基线日期（永不修改）
+            基线日期（创建时原始日期，仅作对比，不是到期日）
           </Typography>
           <Typography sx={{ fontSize: 14 }}>{fmtDate(reschedule?.ms.baselineDate)}</Typography>
         </Stack>
@@ -685,16 +680,9 @@ export function MilestonesPage(): JSX.Element {
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void handleDelete()}
         content={
-          !deleteTarget ? '' : deleteTarget.required ? (
-            <>
-              「{deleteTarget.code} {deleteTarget.name}」是
-              <strong>{PROJECT_TYPE_SHORT[project?.type ?? 'A']}</strong> 模板的
-              <strong>必备里程碑</strong>，删除后本项目将偏离该生命周期规范。
-              关联 WBS 节点会解绑（<strong>不删除任务</strong>）。该操作不可撤销。
-            </>
-          ) : (
-            `确定删除「${deleteTarget.code} ${deleteTarget.name}」？关联 WBS 节点会解绑（不删除）。该操作不可撤销。`
-          )
+          deleteTarget
+            ? `确定删除「${deleteTarget.code} ${deleteTarget.name}」？关联 WBS 节点会解绑（不删除任务）。该操作不可撤销。`
+            : ''
         }
       />
 
@@ -736,16 +724,8 @@ export function MilestonesPage(): JSX.Element {
         {edit && (
           <Stack spacing={0.5}>
             <Typography variant="caption" color="text.secondary">
-              基线日期（永不修改）：{fmtDate(edit.ms.baselineDate)}
+              基线日期（创建时原始日期，仅作对比，不是到期日）：{fmtDate(edit.ms.baselineDate)}
             </Typography>
-            {edit.ms.required && (
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Chip size="small" color="primary" variant="outlined" label="模板必备" />
-                <Typography variant="caption" color="text.secondary">
-                  必备标记来自模板，不可编辑
-                </Typography>
-              </Stack>
-            )}
           </Stack>
         )}
       </FormDialog>

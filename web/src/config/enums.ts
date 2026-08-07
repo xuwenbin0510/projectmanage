@@ -304,4 +304,6 @@ export const REPORT_SECTION_TITLE = {
   plan: '② 下周计划',
   risks: '③ 风险与问题（每条必须有责任人和截止日）',
   resource: '④ 需要协调的资源',
+  /** R3-6：任务关联区固定标题（新建 / 编辑共用） */
+  taskAssoc: '任务关联（勾选本日志涉及的任务，可同步更新进度）',
 } as const;
