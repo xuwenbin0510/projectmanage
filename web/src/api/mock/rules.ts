@@ -583,3 +583,18 @@ export function validateWbsEstimate(input: {
 export function rollupProjectProgress(nodes: WbsNode[]): number {
   return weightedProgress(leafNodesOf(nodes));
 }
+
+/**
+ * R4-P0-3 任务状态自动流转（D2 规则**唯一实现**，禁止页面散落判断）：
+ * 1. 强规则：progress >= 100 → '完成'（无条件，含 阻塞/待评审）
+ * 2. 弱规则：progress === 0 且当前 ∈ {进行中, 完成} → '待办'
+ * 3. 弱规则：0 < progress < 100 且当前 ∈ {待办, 完成} → '进行中'
+ * 4. 人工态边界：当前为 待评审/阻塞 时，除规则1外不被覆盖
+ *
+ * 引擎 `syncWbsProgressStatus` 与视图层共用；叶子与父节点同规则收敛。
+ */
+export function syncNodeStatusFromProgress(status: TaskStatus, progress: number): TaskStatus {
+  if (progress >= 100) return '完成';
+  if (progress === 0) return status === '进行中' || status === '完成' ? '待办' : status;
+  return status === '待办' || status === '完成' ? '进行中' : status;
+}

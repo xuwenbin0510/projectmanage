@@ -1,73 +1,121 @@
-%% 第三轮优化（round3-optimize）类图：数据模型 + 服务工具关系
-%% 详见 docs/delta-design-round3-optimize.md §3.5
+%% ═══════════════════════════════════════════════════════════
+%% pm-app · 第四轮增量（round4-optimize）类图
+%% 对应 docs/delta-design-round4-optimize.md §3
+%% ═══════════════════════════════════════════════════════════
 
 classDiagram
-    class MilestoneWithGate {
-        +string id
-        +string code
-        +string name
-        +boolean required
-        +string baselineDate
-        +string currentDate
-        +string lastChangeId
-        +QualityGate gate
-        +MilestoneTaskStats taskStats
-    }
-    class WbsNode {
-        +string id
-        +string wbsCode
-        +string name
-        +string dueDate
-        +string milestoneId
-        +number progress
-    }
-    class Report {
-        +string id
-        +string week
-        +string status
-        +string authorName
-        +string submittedAt
-        +string doneNote
-        +string[] planItems
-        +string resourceNote
-        +ReportTaskRow[] tasks
-        +ReportRisk[] risks
-        +string createdAt
-    }
-    class ReportTaskRow {
-        +string nodeId
-        +string nodeName
-        +number progressBefore
-        +number progressAfter
-        +boolean selected
-    }
-    class ReportRisk {
-        +string description
-        +string owner
-        +string dueDate
-    }
-    class ProjectMember {
-        +string userOpenId
-        +string userName
-    }
-    class ReportAgg {
-        <<util>>
-        +reportCountByNode(reports) Map~string,number~
-        +nodeReportsOf(reports, nodeId) Report[]
-    }
-    class MemberUtil {
-        <<util>>
-        +memberNameOf(members, openId) string
-    }
-    class MilestonesPage
-    class WbsPage
-    class ReportsPage
+  direction LR
 
-    Report "1" --> "*" ReportTaskRow
-    Report "1" --> "*" ReportRisk
-    ReportTaskRow --> WbsNode : nodeId
-    WbsNode --> MilestoneWithGate : milestoneId
-    WbsPage --> ReportAgg : 徽标/详情聚合
-    WbsPage --> MemberUtil : 责任人姓名
-    ReportsPage --> MemberUtil : 责任人姓名
-    MilestonesPage --> MilestoneWithGate : 列表/改期/编辑
+  %% ── 领域模型（已有） ─────────────────────────────
+  class WbsNode {
+    +string id
+    +string projectId
+    +string parentId
+    +string wbsCode
+    +int level
+    +WbsNodeType nodeType
+    +string name
+    +string owner
+    +int estimateDays
+    +string dueDate
+    +TaskStatus status
+    +int progress
+    +string milestoneId
+  }
+  class WbsTreeNode {
+    +WbsTreeNode[] children
+    +string[] warnings
+  }
+  class TaskStatus {
+    <<enum>>
+    待办
+    进行中
+    待评审
+    完成
+    阻塞
+  }
+  WbsTreeNode --|> WbsNode : extends
+  WbsNode --> TaskStatus : status
+
+  %% ── 纯函数（本轮新增/重构） ──────────────────────
+  class TaskStatusRules {
+    <<纯函数 · src/api/mock/rules.ts>>
+    +syncNodeStatusFromProgress(status: TaskStatus, progress: number) TaskStatus
+  }
+  class WbsUtils {
+    <<纯函数 · src/utils/wbs.ts>>
+    +rollupProgress(node: WbsTreeNode) int
+    +rollupProgressFlat(nodes: WbsNode[], nodeId: string) int
+    +weightedProgress(leaves: WbsNode[]) int
+  }
+  class Tokens {
+    <<纯函数 · src/theme/tokens.ts>>
+    +progressToneOf(status: string) SemanticTone
+    +toneOf(status: string) SemanticTone
+  }
+
+  %% ── 引擎编排（本轮新增） ─────────────────────────
+  class MockApiClient {
+    <<Mock 引擎 · src/api/mock/index.ts>>
+    +createWbsNode(projectId, payload) WbsNode
+    +updateWbsNode(id, payload) WbsNode
+    +deleteWbsNode(id) void
+    +moveWbsNode(id, newParentId, index) WbsNode[]
+    +moveTask(nodeId, status, order) BoardView
+    +upsertReport(payload, status) Report
+    -syncWbsProgressStatus(db, projectId) void
+  }
+  MockApiClient ..> TaskStatusRules : 调用
+  MockApiClient ..> WbsUtils : 调用(rollupProgressFlat)
+
+  %% ── 共享组件（本轮新增） ─────────────────────────
+  class ReportFormModalProps {
+    +boolean open
+    +string projectId
+    +Report editingReport
+    +string lockNodeId
+    +(report: Report) => void onSubmitted
+    +boolean keepOpenOnSubmit
+    +() => void onClose
+  }
+  class ReportFormModal {
+    <<React 组件 · src/components/report/ReportFormModal.tsx>>
+    +renderTaskTree(list, depth) JSX.Element[]
+    +assemble(values) ReportPayload
+    +doSave(values, submit) Promise~void~
+    -resetForContinuousAdd() void
+  }
+  ReportFormModal ..> ReportFormModalProps : props
+  ReportFormModal ..> WbsUtils : 进度条值(存储 progress)
+  ReportFormModal ..> Tokens : 进度条色调(progressToneOf)
+
+  %% ── 页面（本轮改动） ─────────────────────────────
+  class WbsPage {
+    <<React 组件 · src/pages/projects/WbsPage.tsx>>
+    +renderNode(node) JSX.Element
+    +openReportModal(nodeId) void
+    +state reportModalOpen/reportLockNodeId
+  }
+  class ReportsPage {
+    <<React 组件 · src/pages/projects/ReportsPage.tsx>>
+    +openCreate() void
+    +openEditReport(r) void
+    +openCreateWithPrefill(nodeId) void
+  }
+  class MilestonesPage {
+    <<React 组件 · src/pages/projects/MilestonesPage.tsx>>
+    +handleAchieve(m) Promise~void~
+    +sourceOf(m) 'time' | 'task'
+  }
+  class ProjectCreatePage {
+    <<React 组件 · src/pages/projects/ProjectCreatePage.tsx>>
+    +renderMilestones() JSX.Element
+  }
+
+  WbsPage --> ReportFormModal : 打开(lockNodeId, keepOpenOnSubmit)
+  ReportsPage --> ReportFormModal : 打开(editingReport, keepOpen=false)
+  WbsPage ..> WbsUtils : rollupProgress
+  WbsPage ..> Tokens : progressToneOf
+  WbsPage ..> MockApiClient : createNode/updateNode(经 store)
+  MilestonesPage ..> TaskStatusRules : milestoneStartFrom(引用)
+  MilestonesPage ..> MockApiClient : updateMilestone{achieved}

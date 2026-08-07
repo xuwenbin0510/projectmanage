@@ -527,7 +527,7 @@ export function ProjectCreatePage(): JSX.Element {
 
       <Box>
         <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          最终分类（决定生命周期模板与质量门）
+          最终分类（决定生命周期模板与默认里程碑）
         </Typography>
         <ToggleButtonGroup
           exclusive
@@ -725,9 +725,6 @@ export function ProjectCreatePage(): JSX.Element {
               <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
                 <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
                   <Typography variant="subtitle2">{m.code}</Typography>
-                  {m.gate && (
-                    <Chip size="small" variant="outlined" label="有质量门" sx={{ height: 16, fontSize: 10 }} />
-                  )}
                 </Stack>
                 <TextField
                   label="里程碑名称"

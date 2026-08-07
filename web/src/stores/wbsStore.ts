@@ -106,6 +106,8 @@ export const useWbsStore = create<WbsState>((set, get) => ({
     if (projectId) {
       const nodes = await api.listWbs(projectId);
       set({ nodes, tree: buildTree(nodes, projectType) });
+      /* R4-P0-3：看板拖拽改变进度后里程碑 taskStats/状态实时联动（D3） */
+      void syncMilestones(projectId);
     }
   },
 

@@ -291,15 +291,24 @@ try {
     nodeAReps.every((r) => r.tasks.some((t) => t.nodeId === nodeA.id && t.selected)),
     'R3-5② 每条均含该节点 selected 行（进度 before→after 有源）',
   );
-  /* 写日志跳转约定：源码核验（WbsPage navigate state + ReportsPage prefill 接收） */
+  /* 写日志约定：源码核验（R4-P0-4 后 WBS 页内开 ReportFormModal 锁定节点，不再 navigate；
+   * ReportsPage 保留 prefillNodeId 兼容旧链接） */
   ok(
-    wbsSrc.includes("navigate(ROUTES.projectReports(id), { state: { prefillNodeId: node.id } })"),
-    'R3-5③ 源码核验：WbsPage「写日志」以路由 state prefillNodeId 跳转',
+    wbsSrc.includes('setReportLockNodeId(node.id)') &&
+      wbsSrc.includes('setReportModalOpen(true)') &&
+      wbsSrc.includes('<ReportFormModal') &&
+      wbsSrc.includes('keepOpenOnSubmit'),
+    'R3-5③/R4-P0-4 源码核验：WbsPage「写日志」页内开 ReportFormModal（lockNodeId + keepOpenOnSubmit，不再 navigate）',
+  );
+  ok(
+    !wbsSrc.includes("navigate(ROUTES.projectReports(id)"),
+    'R3-5③/R4-P0-4 源码核验：WbsPage 不再 navigate 跳转工作日志页',
   );
   const reportsSrc = readFileSync(new URL('../src/pages/projects/ReportsPage.tsx', import.meta.url), 'utf8');
+  const modalSrc = readFileSync(new URL('../src/components/report/ReportFormModal.tsx', import.meta.url), 'utf8');
   ok(
     reportsSrc.includes('prefillNodeId') && reportsSrc.includes('openCreateWithPrefill') && reportsSrc.includes('prefilledRef'),
-    'R3-5③ 源码核验：ReportsPage 接收 prefillNodeId + ref 防重复触发 + 预勾选',
+    'R3-5③ 源码核验：ReportsPage 接收 prefillNodeId + ref 防重复触发 + 预勾选（旧链接兼容）',
   );
 
   /* ═══════════════════════════════════════════════════
@@ -393,26 +402,26 @@ try {
   /* ═══════════════════════════════════════════════════
    * R3-6 源码核验：任务关联区标题 + 编辑态只读说明
    * ═══════════════════════════════════════════════════ */
-  section('R3-6 · 任务关联区标题 / 编辑态只读（源码核验）');
+  section('R3-6 · 任务关联区标题 / 编辑态只读（源码核验 · R4 后位于 ReportFormModal）');
   ok(
-    reportsSrc.includes('REPORT_SECTION_TITLE.taskAssoc'),
-    'R3-6 源码核验：任务关联区引用 taskAssoc 标题',
+    modalSrc.includes('REPORT_SECTION_TITLE.taskAssoc'),
+    'R3-6 源码核验：任务关联区引用 taskAssoc 标题（ReportFormModal）',
   );
   ok(
-    reportsSrc.includes('编辑已提交日志时该区域只读'),
-    'R3-6 源码核验：编辑态追加只读说明',
+    modalSrc.includes('编辑已提交日志时该区域只读'),
+    'R3-6 源码核验：编辑态追加只读说明（ReportFormModal）',
   );
   ok(
-    reportsSrc.includes('disabled={readOnly}') && reportsSrc.includes('const readOnly = Boolean(editingReport)'),
-    'R3-7② 源码核验：编辑态任务勾选/进度 disabled',
+    modalSrc.includes('disabled={readOnly}') && modalSrc.includes('const readOnly = Boolean(editingReport)'),
+    'R3-7② 源码核验：编辑态任务勾选/进度 disabled（ReportFormModal）',
   );
   ok(
-    reportsSrc.includes('editingReport.tasks.map<ReportTaskRef>') ||
-      (reportsSrc.includes('editingReport.tasks.map') && reportsSrc.includes('ReportTaskRef')),
-    'R3-7④ 源码核验：assemble 编辑态原样回传 editingReport.tasks',
+    modalSrc.includes('editingReport.tasks.map<ReportTaskRef>') ||
+      (modalSrc.includes('editingReport.tasks.map') && modalSrc.includes('ReportTaskRef')),
+    'R3-7④ 源码核验：assemble 编辑态原样回传 editingReport.tasks（ReportFormModal）',
   );
   ok(
-    reportsSrc.includes('memberNameOf(members, rk.owner)'),
+    modalSrc.includes('memberNameOf(members, ') || reportsSrc.includes('memberNameOf(members, rk.owner)'),
     'R3-8 源码核验：详情/编辑态责任人走 memberNameOf',
   );
 

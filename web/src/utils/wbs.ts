@@ -269,17 +269,44 @@ export function leavesOf(tree: WbsTreeNode[]): WbsTreeNode[] {
   return flattenTree(tree).filter((n) => n.children.length === 0);
 }
 
-/** 汇总进度：叶子按估算加权，非叶子取子树加权平均 */
+/**
+ * R4-P0-2 父节点进度口径（重构）：子树**真叶子**按 estimateDays 加权（口径 Y，
+ * 与 milestoneTaskStats 一致）；叶子返回自身 progress。
+ * ⚠️ 本函数与 rollupProgressFlat 是唯一实现，展示/回写共用，禁止另写加权逻辑。
+ */
 export function rollupProgress(node: WbsTreeNode): number {
-  if (node.children.length === 0) return node.progress;
-  let totalWeight = 0;
-  let acc = 0;
-  for (const c of node.children) {
-    const w = c.estimateDays > 0 ? c.estimateDays : 1;
-    totalWeight += w;
-    acc += rollupProgress(c) * w;
+  const leaves: WbsTreeNode[] = [];
+  const collect = (n: WbsTreeNode): void => {
+    if (n.children.length === 0) {
+      leaves.push(n);
+      return;
+    }
+    n.children.forEach(collect);
+  };
+  collect(node);
+  // WbsTreeNode extends WbsNode，类型兼容
+  return weightedProgress(leaves);
+}
+
+/**
+ * R4-P0-3 扁平版（引擎 syncWbsProgressStatus 回写用）：与 rollupProgress 同算法。
+ * 对 `nodeId` 的子树真叶子按 estimateDays 加权；叶子自身返回其 progress。
+ */
+export function rollupProgressFlat(nodes: WbsNode[], nodeId: string): number {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const hasChild = new Set(nodes.filter((n) => n.parentId).map((n) => n.parentId as string));
+  const leaves: WbsNode[] = [];
+  const stack: string[] = [nodeId];
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (!hasChild.has(id)) {
+      const leaf = byId.get(id);
+      if (leaf) leaves.push(leaf);
+      continue;
+    }
+    nodes.filter((n) => n.parentId === id).forEach((n) => stack.push(n.id));
   }
-  return totalWeight === 0 ? 0 : Math.round(acc / totalWeight);
+  return weightedProgress(leaves);
 }
 
 /** 判断 targetId 是否为 nodeId 的后代（移动防环） */

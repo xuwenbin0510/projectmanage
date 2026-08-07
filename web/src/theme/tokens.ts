@@ -274,3 +274,12 @@ export function toneOf(status: string | null | undefined): SemanticTone {
 export function colorOf(status: string | null | undefined): string {
   return toneColor[toneOf(status)];
 }
+
+/**
+ * R4-P0-5 进度条语义色映射（决策 E：进行中=brand 青，与 StatusChip 的 warning 解耦）：
+ * 待办=neutral / 进行中=brand / 待评审=warning / 完成=success / 阻塞=danger
+ */
+export function progressToneOf(status: string | null | undefined): SemanticTone {
+  if (status === '进行中') return 'brand';
+  return toneOf(status);
+}

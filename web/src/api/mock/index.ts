@@ -64,6 +64,7 @@ import {
   milestoneStartFrom,
   sortMilestones,
   compareMilestones,
+  syncNodeStatusFromProgress,
 } from './rules';
 import {
   PROJECT_TRANSITIONS,
@@ -81,6 +82,7 @@ import {
   leafNodesOf,
   isLeafNode,
   milestoneTaskStats,
+  rollupProgressFlat,
 } from '@/utils/wbs';
 
 /* ═══════════════════════════════════════════════════
@@ -301,6 +303,32 @@ function refreshMilestoneStatuses(db: MockDb, projectId: string): void {
   }
 
   project.health = computeHealth(list, db.gates.filter((g) => g.projectId === projectId));
+}
+
+/**
+ * R4-P0-3 单点收口：进度→状态自动流转 + 父节点回写（D2 采用「引擎回写存储字段」）。
+ * 触发点（PRD D2）：createWbsNode / updateWbsNode / 日志提交 upsertReport / moveTask；
+ * 结构性路径（deleteWbsNode / moveWbsNode）同样调用（父子变化会影响汇总，属同口径超集）。
+ *
+ * 流程：① 自底向上回写每个节点 progress —— 叶子保留自身存储值，
+ *         父节点 = 子树真叶子按 estimateDays 加权（rollupProgressFlat，与视图层同算法）；
+ *       ② 每节点 status = syncNodeStatusFromProgress(status, progress) 纯函数收敛；
+ *       ③ 仅实际变化时写 updatedAt（不写审计，避免派生噪音）。
+ */
+function syncWbsProgressStatus(db: MockDb, projectId: string): void {
+  const nodes = db.wbsNodes.filter((n) => n.projectId === projectId);
+  if (!nodes.length) return;
+  const ts = nowIso();
+  nodes.forEach((n) => {
+    const next = rollupProgressFlat(nodes, n.id);
+    const nextStatus = syncNodeStatusFromProgress(n.status, next);
+    if (n.progress !== next || n.status !== nextStatus) {
+      n.progress = next;
+      n.status = nextStatus;
+      n.actualDays = Number(((n.estimateDays * next) / 100).toFixed(1));
+      n.updatedAt = ts;
+    }
+  });
 }
 
 /** 清空人工覆盖三元组 + 基线快照（达成 / 取消达成 / 改期 三个动作共用 · SK-7） */
@@ -1215,6 +1243,8 @@ export class MockApiClient implements ApiClient {
     };
     db.wbsNodes.push(node);
     audit(db, me, 'wbs_node', node.id, 'create', projectId, `新增 WBS 节点「${wbsCode} ${payload.name}」`);
+    /* R4-P0-3：新叶子改变父子汇总 → 父链回写 + 状态收敛 */
+    syncWbsProgressStatus(db, projectId);
     /* 新叶子会改变里程碑完成度 → 触发状态重推 */
     refreshMilestoneStatuses(db, projectId);
     saveDb();
@@ -1321,6 +1351,8 @@ export class MockApiClient implements ApiClient {
     }
     node.updatedAt = nowIso();
     audit(db, me, 'wbs_node', id, 'update', node.projectId, `修改节点「${node.wbsCode} ${node.name}」`, diff);
+    /* R4-P0-3：进度 / 父子结构变化 → 父链回写 + 状态收敛 */
+    syncWbsProgressStatus(db, node.projectId);
     /* 进度 / 挂载关系变化会影响里程碑完成度 → 触发状态重推 */
     refreshMilestoneStatuses(db, node.projectId);
     saveDb();
@@ -1347,6 +1379,8 @@ export class MockApiClient implements ApiClient {
     }
     db.wbsNodes = db.wbsNodes.filter((n) => !toDelete.has(n.id));
     audit(db, me, 'wbs_node', id, 'delete', node.projectId, `删除节点「${node.wbsCode} ${node.name}」及其 ${toDelete.size - 1} 个子节点`);
+    /* R4-P0-3：删除改变父子汇总 → 父链回写 + 状态收敛 */
+    syncWbsProgressStatus(db, node.projectId);
     /* 删除叶子会改变里程碑完成度 → 触发状态重推 */
     refreshMilestoneStatuses(db, node.projectId);
     saveDb();
@@ -1399,6 +1433,8 @@ export class MockApiClient implements ApiClient {
 
     node.updatedAt = nowIso();
     audit(db, me, 'wbs_node', id, 'update', node.projectId, `移动节点「${node.name}」至 ${node.wbsCode}`);
+    /* R4-P0-3：移动改变父子结构 → 父链回写 + 状态收敛 */
+    syncWbsProgressStatus(db, node.projectId);
     saveDb();
     return deepClone(
       db.wbsNodes.filter((n) => n.projectId === node.projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
@@ -1442,6 +1478,11 @@ export class MockApiClient implements ApiClient {
     else if (status === '待办' && node.progress === 100) node.progress = 0;
     node.actualDays = Number(((node.estimateDays * node.progress) / 100).toFixed(1));
     node.updatedAt = nowIso();
+
+    /* R4-P0-3：拖「进行中」但 progress=100 会被强规则收敛回「完成」（PRD 强规则字面语义） */
+    syncWbsProgressStatus(db, node.projectId);
+    /* R4-P1-1 D3 联动缺口修复：看板拖拽改变进度后刷新里程碑 taskStats/状态 */
+    refreshMilestoneStatuses(db, node.projectId);
 
     if (before !== status) {
       audit(db, me, 'wbs_node', nodeId, 'status_change', node.projectId, `任务「${node.name}」状态由「${before}」变更为「${status}」`, [
@@ -1567,11 +1608,15 @@ export class MockApiClient implements ApiClient {
         if (node) {
           node.progress = t.progressAfter;
           node.actualDays = Number(((node.estimateDays * node.progress) / 100).toFixed(1));
-          if (node.progress >= 100) node.status = '完成';
           node.updatedAt = ts;
         }
         snapshot[t.nodeId] = t.progressAfter;
       });
+      /* R4-P0-3：进度→状态自动流转统一收口（父节点回写 + 状态收敛），
+       * 不再散落 if(progress>=100) 类判断（规则唯一实现 syncNodeStatusFromProgress） */
+      syncWbsProgressStatus(db, payload.projectId);
+      /* R4-P1-1 D3 联动缺口修复：日志提交回写进度后刷新里程碑 taskStats/状态 */
+      refreshMilestoneStatuses(db, payload.projectId);
       report.snapshot = snapshot;
       report.submittedAt = ts;
       audit(db, me, 'report', report.id, isNew ? 'create' : 'update', payload.projectId, `提交 ${payload.week} 周报，冻结 ${report.tasks.length} 条任务进度快照`, [

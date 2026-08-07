@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
   Checkbox,
   Chip,
   IconButton,
@@ -23,6 +24,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ConfirmDialog, DataTable, FormDialog, SectionCard, StatusChip, ProgressBar } from '@/components/common';
 import type { Column } from '@/components/common';
 import { api } from '@/api/client';
+import { milestoneStartFrom } from '@/api/mock/rules';
 import { useProjectStore } from '@/stores/projectStore';
 import { usePermission, useToast } from '@/hooks';
 import type { MilestoneWithGate, MilestoneOverride } from '@/types/project';
@@ -31,7 +33,7 @@ import { milestoneTaskDetail, type MilestoneTaskDetail } from '@/utils/wbs';
 import { ROUTES } from '@/config/routes';
 import { MILESTONE_OVERRIDES } from '@/config/enums';
 import { isApiError, ErrorCode } from '@/types/api';
-import { dayjs, fmtDate, DATE_FMT } from '@/utils/date';
+import { dayjs, fmtDate, DATE_FMT, diffDays, today } from '@/utils/date';
 import { fmtDays } from '@/utils/format';
 import type { Dayjs } from 'dayjs';
 import { alphaOf, tokens, toneColor } from '@/theme/tokens';
@@ -422,8 +424,33 @@ export function MilestonesPage(): JSX.Element {
     {
       key: 'status',
       label: '状态',
-      width: 96,
-      render: (m) => <StatusChip status={m.status} />,
+      width: 120,
+      render: (m) => {
+        /* R4-P1-2（决策 B）：进行中且非人工覆盖时，标注来源（纯展示，零契约变更）
+         * 时间驱动 = taskStats.progress === 0 且 startFrom <= today；任务驱动 = progress > 0 */
+        const showDriven = m.status === '进行中' && !m.statusOverride;
+        const startFrom = milestoneStartFrom(milestones, m, project?.planStart ?? '');
+        const timeDriven = showDriven && m.taskStats.progress === 0 && diffDays(startFrom, today()) >= 0;
+        return (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <StatusChip status={m.status} />
+            {showDriven && (
+              <Tooltip
+                title={
+                  timeDriven
+                    ? `已到计划起算日 ${startFrom}，按时间轴自动进入进行中；如需调整可人工覆盖状态`
+                    : `关联任务推进中（完成度 ${m.taskStats.progress}%），按任务完成度进入进行中；如需调整可人工覆盖状态`
+                }
+                arrow
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                  {timeDriven ? '时间驱动' : '任务驱动'}
+                </Typography>
+              </Tooltip>
+            )}
+          </Stack>
+        );
+      },
     },
     {
       key: 'achieved',
@@ -442,38 +469,51 @@ export function MilestonesPage(): JSX.Element {
     {
       key: 'tasks',
       label: '关联任务',
-      width: 150,
+      width: 170,
       render: (m) =>
         m.taskStats.total === 0 ? (
           <Typography variant="caption" color="text.disabled">
             未关联
           </Typography>
         ) : (
-          <Box
-            component="button"
-            type="button"
-            onClick={() => void openDrill(m)}
-            title="点击查看关联任务"
-            sx={{
-              display: 'inline-flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              gap: 0.25,
-              minWidth: 116,
-              font: 'inherit',
-              cursor: 'pointer',
-              bgcolor: 'transparent',
-              border: 'none',
-              p: 0.25,
-              textAlign: 'left',
-              borderRadius: 1,
-              '&:hover': { bgcolor: alphaOf(tokens.brand.primary, 0.08) },
-            }}
-          >
-            <ProgressBar value={m.taskStats.progress} height={5} showLabel={false} />
-            <Typography variant="caption" color="text.secondary">
-              {m.taskStats.done}/{m.taskStats.total} 完成 · {m.taskStats.progress}%
-            </Typography>
+          <Box>
+            <Box
+              component="button"
+              type="button"
+              onClick={() => void openDrill(m)}
+              title="点击查看关联任务"
+              sx={{
+                display: 'inline-flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                gap: 0.25,
+                minWidth: 116,
+                font: 'inherit',
+                cursor: 'pointer',
+                bgcolor: 'transparent',
+                border: 'none',
+                p: 0.25,
+                textAlign: 'left',
+                borderRadius: 1,
+                '&:hover': { bgcolor: alphaOf(tokens.brand.primary, 0.08) },
+              }}
+            >
+              <ProgressBar value={m.taskStats.progress} height={5} showLabel={false} />
+              <Typography variant="caption" color="text.secondary">
+                {m.taskStats.done}/{m.taskStats.total} 完成 · {m.taskStats.progress}%
+              </Typography>
+            </Box>
+            {/* R4-P1-1（决策 D3）：关联叶子全部 100% 且未达成时，提示 + 一键标记达成（走既有 handleAchieve，审计留痕） */}
+            {m.taskStats.progress === 100 && !m.done && editable && (
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.5, flexWrap: 'wrap' }}>
+                <Typography variant="caption" color="text.secondary">
+                  关联任务已全部完成
+                </Typography>
+                <Button size="small" variant="outlined" onClick={() => void handleAchieve(m)}>
+                  标记达成
+                </Button>
+              </Stack>
+            )}
           </Box>
         ),
     },
@@ -518,7 +558,7 @@ export function MilestonesPage(): JSX.Element {
       <Alert severity="info" variant="outlined">
         <strong>计划日期（到期）</strong>为当前生效计划，<strong>提前可直接改</strong>，
         <strong>延后须走变更单</strong>；基线日期仅用于审计对比。
-        里程碑状态由引擎派生，达成可由手动标记触发；里程碑可自由编辑与删除。
+        里程碑状态由引擎派生，达成可由手动标记触发；任务全部完成不会自动达成里程碑，需人工确认；里程碑可自由编辑与删除。
       </Alert>
 
       <SectionCard

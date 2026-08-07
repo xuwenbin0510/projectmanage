@@ -17,7 +17,7 @@ import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { SimpleTreeView, TreeItem } from '@mui/x-tree-view';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import {
   ConfirmDialog,
@@ -30,6 +30,7 @@ import {
   StatusChip,
   UserAvatar,
 } from '@/components/common';
+import { ReportFormModal } from '@/components/report/ReportFormModal';
 import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules } from '@/types/wbs';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useProjectStore } from '@/stores/projectStore';
@@ -43,8 +44,7 @@ import {
   TASK_STATUSES,
   WBS_NODE_TYPE_LABEL,
 } from '@/config/enums';
-import { ROUTES } from '@/config/routes';
-import { tokens, alphaOf, toneColor } from '@/theme/tokens';
+import { tokens, alphaOf, toneColor, progressToneOf } from '@/theme/tokens';
 import { flattenTree, rollupProgress } from '@/utils/wbs';
 import { fmtDays } from '@/utils/format';
 import { dayjs, fmtDate, DATE_FMT } from '@/utils/date';
@@ -83,7 +83,6 @@ const EMPTY_FORM: NodeForm = {
  */
 export function WbsPage(): JSX.Element {
   const { id = '' } = useParams();
-  const navigate = useNavigate();
   const toast = useToast();
   const { can } = usePermission();
 
@@ -111,6 +110,9 @@ export function WbsPage(): JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<WbsTreeNode | null>(null);
   /** R3-5：日志详情弹窗的目标节点 */
   const [logDetailNode, setLogDetailNode] = useState<WbsTreeNode | null>(null);
+  /** R4-P0-4：页内写日志 Modal 开关 + 预关联锁定节点 id（不再跳转 ReportsPage） */
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportLockNodeId, setReportLockNodeId] = useState<string | null>(null);
   /** 创建子任务时里程碑若继承自上级则锁定（用户反馈④a：避免误改继承关系） */
   const [lockMilestone, setLockMilestone] = useState<boolean>(false);
   const [rules, setRules] = useState<WbsRules>(DEFAULT_WBS_RULES);
@@ -321,6 +323,12 @@ export function WbsPage(): JSX.Element {
             <Typography sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto' }} noWrap>
               {node.name}
             </Typography>
+            {/* R4-P0-5：节点行状态标识（全节点可见，父/叶同规则） */}
+            <StatusChip
+              status={node.status}
+              variant="soft"
+              sx={{ width: 52, justifyContent: 'center', flexShrink: 0 }}
+            />
             {boundMs && (
               <Chip
                 size="small"
@@ -346,7 +354,7 @@ export function WbsPage(): JSX.Element {
                 setLogDetailNode(node);
               }}
             />
-            {/* R3-5：写日志入口（跳转工作日志页，自动打开新建弹窗并预勾选本任务） */}
+            {/* R4-P0-4：写日志入口（页内开 ReportFormModal，不再跳转工作日志页；锁定当前节点可连续添加） */}
             {canWriteLog && (
               <PermissionButton
                 action="report:write"
@@ -355,7 +363,8 @@ export function WbsPage(): JSX.Element {
                 sx={{ height: 24, minWidth: 0, px: 1, fontSize: 12, flexShrink: 0 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  navigate(ROUTES.projectReports(id), { state: { prefillNodeId: node.id } });
+                  setReportLockNodeId(node.id);
+                  setReportModalOpen(true);
                 }}
               >
                 写日志
@@ -366,11 +375,13 @@ export function WbsPage(): JSX.Element {
                 <WarningAmberIcon sx={{ fontSize: 16, color: toneColor.warning }} />
               </Tooltip>
             )}
-            {isLeaf && (
+            {/* R4-P0-5：进度条全节点渲染（父节点=子树叶子加权汇总，D1）+ 悬停百分比/状态 + 状态色调 */}
+            <Tooltip title={`${node.name} ${progress}%（${node.status}）`} arrow>
               <Box sx={{ width: 120, flexShrink: 0 }}>
-                <ProgressBar value={progress} height={5} showLabel={false} />
+                <ProgressBar value={progress} height={5} showLabel={false} tone={progressToneOf(node.status)} />
               </Box>
-            )}
+            </Tooltip>
+            {/* 估算列保持叶子条件（父节点无估算展示，120px 进度条保证行对齐） */}
             {isLeaf && (
               <Typography variant="caption" sx={{ color: 'text.secondary', width: 56, flexShrink: 0 }}>
                 {fmtDays(node.estimateDays)}
@@ -568,6 +579,7 @@ export function WbsPage(): JSX.Element {
           value={form.status}
           onChange={(e) => setForm({ ...form, status: e.target.value })}
           fullWidth
+          helperText="进度达 100% 自动置为完成；0~100% 自动置为进行中（待评审/阻塞除外）"
         >
           {TASK_STATUSES.map((s) => (
             <MenuItem key={s} value={s}>
@@ -660,6 +672,19 @@ export function WbsPage(): JSX.Element {
           </Stack>
         )}
       </FormDialog>
+
+      {/* R4-P0-4：页内写日志 Modal（lockNodeId=当前节点，keepOpenOnSubmit=连续添加；提交后刷新 WBS 树 + 里程碑） */}
+      <ReportFormModal
+        open={reportModalOpen}
+        projectId={id}
+        lockNodeId={reportLockNodeId}
+        keepOpenOnSubmit
+        onSubmitted={() => {
+          void fetchWbs(id, projectType);
+          void refreshMilestones(id);
+        }}
+        onClose={() => setReportModalOpen(false)}
+      />
     </Stack>
   );
 }
