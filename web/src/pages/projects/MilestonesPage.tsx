@@ -78,7 +78,6 @@ export function MilestonesPage(): JSX.Element {
   const [reschedule, setReschedule] = useState<RescheduleState | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [draft, setDraft] = useState<ChangeDraft | null>(null);
-  const [toggleTarget, setToggleTarget] = useState<MilestoneWithGate | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MilestoneWithGate | null>(null);
   const [createOpen, setCreateOpen] = useState<boolean>(false);
   const [createForm, setCreateForm] = useState<CreateState>({ name: '', date: '', target: '' });

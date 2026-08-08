@@ -14,6 +14,16 @@
  *   边界（已拍板）：moveTask 拖「进行中」但 progress=100 → 强规则拉回「完成」；
  *                  拖 0% 到「进行中」→ 回落「待办」
  *
+ * ── R5 断言维护记录（严过关 · 只改测试脚本，未动产品源码）──
+ * R5 落地后本脚本 5 条源码核验断言过期（全部源于 R5 有意变更，非源码 bug），已就地更新为
+ * 反映新行为的断言，其余 85 条保持原样：
+ *   ① WbsPage keepOpenOnSubmit → 由 true 断言改为 `{false}`（R5-P0-1 提交后关窗）※连带收紧
+ *   ② checkbox disabled → `readOnly || locked || hasChildren`（R5-P0-3 父行禁用）
+ *   ③ locked 判定 → `effectiveLockNodeId` + 非叶子降级（R5-P0-3 AC-3.8）
+ *   ④ 「完%」disabled → `readOnly || hasChildren`（R5-P0-3 AC-3.3；仍不含 locked）
+ *   ⑤ 重置保留勾选 → `selected: n.id === effectiveLockNodeId`（R5-P0-3）
+ * R5 三条 P0 新行为的正向覆盖由 R5 专项脚本承担，本脚本仅维持 R4 回归口径。
+ *
  * 用法：node scripts/qa_round4_optimize.mjs
  */
 import { createServer } from 'vite';
@@ -366,9 +376,11 @@ try {
     'R4-P0-4① WbsPage「写日志」不再 navigate，改为页内开 Modal（lockNodeId=当前节点）',
   );
   ok(!wbsSrc.includes("navigate(ROUTES.projectReports(id)"), 'R4-P0-4① 无 navigate 跳转工作日志页');
+  /* R5-P0-1 变更：WBS 入口由 keepOpenOnSubmit={true} 改为 {false}
+     → 提交 / 存草稿成功后关窗，页面停留 WBS（AC-1.1/1.2/1.3） */
   ok(
-    wbsSrc.includes('<ReportFormModal') && wbsSrc.includes('keepOpenOnSubmit') && wbsSrc.includes('lockNodeId={reportLockNodeId}'),
-    'R4-P0-4① WbsPage 渲染 ReportFormModal（keepOpenOnSubmit=true，lockNodeId 传入）',
+    wbsSrc.includes('<ReportFormModal') && wbsSrc.includes('keepOpenOnSubmit={false}') && wbsSrc.includes('lockNodeId={reportLockNodeId}'),
+    'R4-P0-4①/R5-P0-1 WbsPage 渲染 ReportFormModal（keepOpenOnSubmit=false → 提交后关窗，lockNodeId 传入）',
   );
   ok(
     wbsSrc.includes('void fetchWbs(id, projectType)') && wbsSrc.includes('void refreshMilestones(id)'),
@@ -376,34 +388,45 @@ try {
   );
   /* ReportFormModal 内部：锁定 + 连续添加 */
   const modalSrc = readFileSync(new URL('../src/components/report/ReportFormModal.tsx', import.meta.url), 'utf8');
+  /* R5-P0-3 变更：父节点行 checkbox 一并禁用，disabled 表达式追加 hasChildren；
+     checked 表达式保持不动（AC-3.9：历史父节点关联在编辑态仍如实展示为已勾选） */
   ok(
-    modalSrc.includes('checked={t.selected || locked}') && modalSrc.includes('disabled={readOnly || locked}'),
-    'R4-P0-4② 锁定节点 checkbox checked+disabled（不可取消）',
+    modalSrc.includes('checked={t.selected || locked}') &&
+      modalSrc.includes('disabled={readOnly || locked || hasChildren}'),
+    'R4-P0-4②/R5-P0-3 锁定节点 checkbox checked+disabled，且父节点行（hasChildren）一并禁用',
   );
   ok(
     modalSrc.includes('LockOutlinedIcon') && modalSrc.includes('由「写日志」进入，该任务已锁定；可继续勾选其他任务'),
     'R4-P0-4② 锁图标 + tooltip',
   );
+  /* R5-P0-3/AC-3.8 变更：锁定判定由 lockNodeId 改走 effectiveLockNodeId
+     —— lockNodeId 指向「有下级」的节点时自动降级为不锁定（保护 ReportsPage 旧链接兼容路径） */
   ok(
-    modalSrc.includes('const locked = !editingReport && lockNodeId === n.id'),
-    'R4-P0-4② 锁定仅新建态生效（编辑态只读走 readOnly）',
+    modalSrc.includes('const locked = !editingReport && effectiveLockNodeId === n.id') &&
+      modalSrc.includes('lockNodeId && !parentIds.has(lockNodeId) ? lockNodeId : null'),
+    'R4-P0-4②/R5-P0-3 锁定仅新建态生效，且 lockNodeId 指向非叶子时降级不锁定（effectiveLockNodeId）',
   );
+  /* R5-P0-3 变更：「完%」输入 disabled 由 readOnly 扩为 readOnly || hasChildren
+     —— 父节点灰显子树汇总值不可录入（AC-3.3），叶子行为不变（AC-3.4） */
   ok(
-    modalSrc.includes('disabled={readOnly}') &&
+    modalSrc.includes('disabled={readOnly || hasChildren}') &&
       modalSrc.includes('label="完%"'),
-    'R4-P0-4③ 进度值输入保持可编辑（锁不影响进度输入）',
+    'R4-P0-4③/R5-P0-3 「完%」输入：叶子保持可编辑、父节点（hasChildren）禁用',
   );
-  /* 精确核验：进度输入 disabled 只用 readOnly（不含 locked） */
-  const progressBlock = modalSrc.slice(modalSrc.indexOf('label="完%"') - 260, modalSrc.indexOf('label="完%"') + 160);
+  /* 精确核验：进度输入 disabled 只含 readOnly || hasChildren，绝不含 locked
+     （R4-P0-4③ 不变量在 R5 仍成立：锁定只锁关联关系，不锁进度录入） */
+  const progressBlock = modalSrc.slice(modalSrc.indexOf('label="完%"') - 260, modalSrc.indexOf('label="完%"') + 320);
   ok(
-    progressBlock.includes('disabled={readOnly}') && !progressBlock.includes('disabled={readOnly || locked}'),
-    'R4-P0-4③ 进度输入 disabled={readOnly}（锁节点进度仍可编辑）',
+    progressBlock.includes('disabled={readOnly || hasChildren}') && !progressBlock.includes('locked'),
+    'R4-P0-4③/R5-P0-3 进度输入 disabled={readOnly || hasChildren}（锁定节点进度仍可编辑，仅父节点禁用）',
   );
+  /* R5-P0-1：两入口均传 keepOpenOnSubmit=false，但「连续填报」分支作为备用能力保留、不删；
+     R5-P0-3：重置后的保留勾选判定同步改走 effectiveLockNodeId */
   ok(
     modalSrc.includes('if (keepOpenOnSubmit)') &&
       modalSrc.includes('reset({ week: weekOptions[0], doneNote: \'\', resourceNote: \'\', planItems: [\'\'], risks: [] })') &&
-      modalSrc.includes('selected: n.id === lockNodeId'),
-    'R4-P0-4④ keepOpenOnSubmit=true → 保持打开并重置（周次本周、锁定任务保留勾选）→ 连续添加',
+      modalSrc.includes('selected: n.id === effectiveLockNodeId'),
+    'R4-P0-4④ keepOpenOnSubmit 分支保留：保持打开并重置（周次本周、按 effectiveLockNodeId 保留勾选）',
   );
   /* ReportsPage 入口行为不变（keepOpenOnSubmit=false） */
   const reportsSrc = readFileSync(new URL('../src/pages/projects/ReportsPage.tsx', import.meta.url), 'utf8');

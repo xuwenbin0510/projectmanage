@@ -30,7 +30,6 @@ import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
 import { CHANGE_ROUTE_LABEL, CHANGE_TYPE_LABEL, CCB_EFFORT_THRESHOLD } from '@/config/enums';
 import { DATE_FMT, dayjs } from '@/utils/date';
-import { tokens } from '@/theme/tokens';
 
 const CHANGE_TYPES: ChangeType[] = ['milestone_date', 'requirement_baseline', 'scope', 'other'];
 const TARGET_TYPES = [

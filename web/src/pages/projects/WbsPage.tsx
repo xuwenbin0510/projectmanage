@@ -44,7 +44,7 @@ import {
   TASK_STATUSES,
   WBS_NODE_TYPE_LABEL,
 } from '@/config/enums';
-import { tokens, alphaOf, toneColor, progressToneOf } from '@/theme/tokens';
+import { tokens, toneColor, progressToneOf } from '@/theme/tokens';
 import { flattenTree, rollupProgress } from '@/utils/wbs';
 import { fmtDays } from '@/utils/format';
 import { dayjs, fmtDate, DATE_FMT } from '@/utils/date';
