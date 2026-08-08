@@ -28,11 +28,20 @@ import { REPORT_SECTION_TITLE } from '@/config/enums';
 import { dayjs, weekCode, shiftWeek } from '@/utils/date';
 import { tokens, progressToneOf } from '@/theme/tokens';
 import { memberNameOf } from '@/utils/member';
+import { flattenTree, parentIdSet } from '@/utils/wbs';
 
 interface TaskProgress {
   progressAfter: number;
   selected: boolean;
 }
+
+/* ── R5 统一文案（设计 §8.2：逐字使用，禁止改写） ── */
+/** 弹窗任务树父节点行 Tooltip */
+const PARENT_ROW_TIP = '该任务已有下级，进度由子任务加权汇总，请在子任务中记录';
+/** 任务关联区统一说明（新建态恒显） */
+const PARENT_SECTION_TIP = '父任务进度由子任务汇总，不可直接勾选';
+/** lockNodeId 指向非叶子时的降级提示（D-2：caption，不弹 toast） */
+const LOCK_DOWNGRADED_TIP = '该任务已有下级，请到具体子任务记录进度';
 
 const schema = z.object({
   week: z.string().min(1, '请选择周次'),
@@ -66,12 +75,18 @@ export interface ReportFormModalProps {
    * R4-P0-4 新建态预关联锁定节点 id（WBS 入口传入）：
    * checkbox `checked + disabled` + 锁图标 + tooltip「由「写日志」进入，该任务已锁定；可继续勾选其他任务」；
    * 仅锁定关联关系，进度值输入保持可编辑；可额外勾选其他任务。
+   *
+   * R5-P0-3（AC-3.8）：若该 id 指向的节点**已有子节点**，自动降级为不锁定
+   * （见 `effectiveLockNodeId`），并在任务关联区 caption 提示，保护 ReportsPage 旧链接兼容路径。
    */
   lockNodeId?: string | null;
   /**
    * 提交成功回调（组件 resolve 后按 keepOpenOnSubmit 决定行为）：
-   * - true（WBS 入口，主理人拍板）：保持打开并重置（周次默认本周、锁定任务不变）→ 连续添加；
-   * - false（ReportsPage 入口）：调用 onClose 关闭，行为与现状一致。
+   * - true：保持打开并重置（周次默认本周、锁定任务不变）→ 连续添加；
+   * - false：调用 onClose 关闭。
+   *
+   * R5-P0-1：WBS / ReportsPage **两入口均传 `false`**（提交与存草稿后一律关窗）；
+   * `keepOpenOnSubmit` 分支作为「连续填报」备用能力保留，不删除、不新增第二个开关。
    */
   onSubmitted: (report: Report) => void;
   keepOpenOnSubmit?: boolean;
@@ -111,6 +126,17 @@ export function ReportFormModal({
   const [planItems, setPlanItems] = useState<string[]>(['']);
 
   const weekOptions = useMemo(() => buildWeekOptions(weekCode(dayjs())), []);
+
+  /* ── R5-P0-3 派生值（叶子口径唯一入口 SK-4：只走 utils/wbs，禁止自写循环 / nodeType 判定） ── */
+  /** 有子节点的父节点 id 集合（渲染层口径，与 tree 同源） */
+  const parentIds = useMemo(() => parentIdSet(flattenTree(tree)), [tree]);
+  /** AC-3.8：lockNodeId 指向非叶子时降级为不锁定；渲染与 taskMap 初始化统一用它 */
+  const effectiveLockNodeId = useMemo(
+    () => (lockNodeId && !parentIds.has(lockNodeId) ? lockNodeId : null),
+    [lockNodeId, parentIds],
+  );
+  /** 锁定被降级（仅用于区域 caption 提示，D-2：不弹 toast） */
+  const lockDowngraded = Boolean(lockNodeId) && !effectiveLockNodeId;
 
   const {
     control,
@@ -152,12 +178,35 @@ export function ReportFormModal({
       setPlanItems(['']);
       setTaskMap(
         Object.fromEntries(
-          latestNodes.map((n) => [n.id, { progressAfter: n.progress, selected: n.id === lockNodeId }]),
+          latestNodes.map((n) => [n.id, { progressAfter: n.progress, selected: n.id === effectiveLockNodeId }]),
         ),
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  /**
+   * 新建态任务行组装（★ R5-P0-3 数据一致性契约 · 设计 §3.3 唯一真源）：
+   * - 父节点：`selected` 恒 false、`progressAfter` 恒等于提交前存储值
+   *   → 引擎 `upsertReport` 的写入退化为**幂等无副作用写**，随后 `syncWbsProgressStatus`
+   *     照常按真叶子加权回算，父节点进度只有 `rollupProgressFlat` 一个来源（AC-3.5/3.6/3.7/3.10）；
+   * - 叶子：行为完全不变（AC-3.4）。
+   *
+   * ⚠️ 父子判定在此**重新**基于 `latestNodesOf()` 求取，与 payload 数组严格同源，
+   *    避免与渲染用的 `parentIds`（tree 源）在极端刷新时序下漂移。
+   */
+  const buildNewTaskRefs = (): ReportTaskRef[] => {
+    const latest = latestNodesOf();
+    const latestParentIds = parentIdSet(latest);
+    return latest.map<ReportTaskRef>((n) => {
+      const isParent = latestParentIds.has(n.id);
+      return {
+        nodeId: n.id,
+        progressAfter: isParent ? n.progress : (taskMap[n.id]?.progressAfter ?? n.progress),
+        selected: isParent ? false : (taskMap[n.id]?.selected ?? false),
+      };
+    });
+  };
 
   const assemble = (values: FormValues): ReportPayload => ({
     projectId,
@@ -174,11 +223,7 @@ export function ReportFormModal({
           progressAfter: t.progressAfter,
           selected: t.selected,
         }))
-      : latestNodesOf().map((n) => ({
-          nodeId: n.id,
-          progressAfter: taskMap[n.id]?.progressAfter ?? n.progress,
-          selected: taskMap[n.id]?.selected ?? false,
-        })),
+      : buildNewTaskRefs(),
     risks: values.risks,
   });
 
@@ -207,7 +252,7 @@ export function ReportFormModal({
           Object.fromEntries(
             latestNodes.map((n) => [
               n.id,
-              { progressAfter: progressByNode.get(n.id) ?? n.progress, selected: n.id === lockNodeId },
+              { progressAfter: progressByNode.get(n.id) ?? n.progress, selected: n.id === effectiveLockNodeId },
             ]),
           ),
         );
@@ -219,28 +264,50 @@ export function ReportFormModal({
     }
   };
 
-  /** WBS 树形勾选（R4-P0-4：新建态 lockNodeId 锁定勾选 + 锁图标；编辑态只读） */
+  /**
+   * WBS 树形勾选（R4-P0-4：新建态 lockNodeId 锁定勾选 + 锁图标；编辑态只读）。
+   *
+   * R5-P0-3：父节点行「禁用可见」——checkbox 与「完%」`disabled` + Tooltip 解释（AC-3.3），
+   * 叶子行行为完全不变（AC-3.4）。
+   * ⚠️ 不变量：本轮**只动 `disabled` 与文案，绝不动 `checked`**，否则历史父节点关联
+   *    在编辑态会被显示成未勾选（违反 AC-3.9 存量如实展示）。
+   */
   const renderTaskTree = (list: WbsTreeNode[], depth: number): JSX.Element[] =>
     list.map((n) => {
       const t = taskMap[n.id] ?? { progressAfter: n.progress, selected: false };
       const readOnly = Boolean(editingReport);
-      const locked = !editingReport && lockNodeId === n.id;
+      const locked = !editingReport && effectiveLockNodeId === n.id;
+      /** 有子节点 = 父节点：进度纯由子任务加权汇总，不可勾选、不可录入 */
+      const hasChildren = parentIds.has(n.id);
+      const checkbox = (
+        <input
+          type="checkbox"
+          checked={t.selected || locked}
+          disabled={readOnly || locked || hasChildren}
+          onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, selected: e.target.checked } }))}
+          style={{ accentColor: tokens.brand.primary }}
+        />
+      );
       return (
         <Box key={n.id} sx={{ pl: depth * 2 }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', py: 0.25 }}>
-            <input
-              type="checkbox"
-              checked={t.selected || locked}
-              disabled={readOnly || locked}
-              onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, selected: e.target.checked } }))}
-              style={{ accentColor: tokens.brand.primary }}
-            />
+            {/* disabled input 不触发 hover，父节点行必须套 span 才能出 Tooltip（布局不跳动） */}
+            {hasChildren ? (
+              <Tooltip title={PARENT_ROW_TIP} arrow>
+                <span style={{ display: 'inline-flex' }}>{checkbox}</span>
+              </Tooltip>
+            ) : (
+              checkbox
+            )}
             {locked && (
               <Tooltip title="由「写日志」进入，该任务已锁定；可继续勾选其他任务" arrow>
                 <LockOutlinedIcon sx={{ fontSize: 14, color: tokens.text.secondary, flexShrink: 0 }} />
               </Tooltip>
             )}
-            <Typography sx={{ fontSize: 13, flex: '1 1 160px', minWidth: 0 }} noWrap>
+            <Typography
+              sx={{ fontSize: 13, flex: '1 1 160px', minWidth: 0, color: hasChildren ? 'text.secondary' : undefined }}
+              noWrap
+            >
               {n.wbsCode} {n.name}
             </Typography>
             {/* R4-P0-5：进度条包 Tooltip + 状态色调（ReportsPage 树部分） */}
@@ -254,7 +321,8 @@ export function ReportFormModal({
               label="完%"
               size="small"
               value={t.progressAfter}
-              disabled={readOnly}
+              /* R5-P0-3：父节点「完%」禁用，灰显当前汇总值（AC-3.3） */
+              disabled={readOnly || hasChildren}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
               sx={{ width: 92 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
@@ -317,9 +385,21 @@ export function ReportFormModal({
               编辑已提交日志时该区域只读
             </Typography>
           )}
-          {!editingReport && lockNodeId && (
+          {!editingReport && effectiveLockNodeId && (
             <Typography variant="caption" color="text.secondary">
               由「写日志」进入，预关联任务已锁定；可继续勾选其他任务
+            </Typography>
+          )}
+          {/* R5-P0-3：新建态恒显父节点规则说明（AC-3.3） */}
+          {!editingReport && (
+            <Typography variant="caption" color="text.secondary">
+              {PARENT_SECTION_TIP}
+            </Typography>
+          )}
+          {/* AC-3.8：lockNodeId 指向非叶子 → 降级不锁定 + 行内提示（D-2：不弹 toast） */}
+          {!editingReport && lockDowngraded && (
+            <Typography variant="caption" color="text.secondary">
+              {LOCK_DOWNGRADED_TIP}
             </Typography>
           )}
         </Stack>

@@ -1,23 +1,20 @@
 %% ═══════════════════════════════════════════════════════════
-%% pm-app · 第四轮增量（round4-optimize）类图
-%% 对应 docs/delta-design-round4-optimize.md §3
+%% pm-app · 第五轮增量（round5-wbs）类图
+%% 对应 docs/delta-design-round5-wbs.md §3
+%% 图例：★ = R5 新增/改动；其余为 R4 既有，本轮只读复用
 %% ═══════════════════════════════════════════════════════════
 
 classDiagram
   direction LR
 
-  %% ── 领域模型（已有） ─────────────────────────────
+  %% ── 领域模型（不改） ─────────────────────────────
   class WbsNode {
     +string id
-    +string projectId
     +string parentId
     +string wbsCode
-    +int level
     +WbsNodeType nodeType
     +string name
-    +string owner
     +int estimateDays
-    +string dueDate
     +TaskStatus status
     +int progress
     +string milestoneId
@@ -26,96 +23,103 @@ classDiagram
     +WbsTreeNode[] children
     +string[] warnings
   }
-  class TaskStatus {
-    <<enum>>
-    待办
-    进行中
-    待评审
-    完成
-    阻塞
-  }
   WbsTreeNode --|> WbsNode : extends
-  WbsNode --> TaskStatus : status
 
-  %% ── 纯函数（本轮新增/重构） ──────────────────────
-  class TaskStatusRules {
-    <<纯函数 · src/api/mock/rules.ts>>
-    +syncNodeStatusFromProgress(status: TaskStatus, progress: number) TaskStatus
+  class ReportTaskRef {
+    +string nodeId
+    +int progressAfter
+    +boolean selected
   }
+  class ReportPayload {
+    +string projectId
+    +string week
+    +string doneNote
+    +string[] planItems
+    +string resourceNote
+    +ReportTaskRef[] tasks
+    +RiskInput[] risks
+  }
+  ReportPayload o-- ReportTaskRef : tasks
+
+  %% ── 叶子口径唯一入口（只读复用 · SK-4） ──────────
   class WbsUtils {
-    <<纯函数 · src/utils/wbs.ts>>
-    +rollupProgress(node: WbsTreeNode) int
-    +rollupProgressFlat(nodes: WbsNode[], nodeId: string) int
-    +weightedProgress(leaves: WbsNode[]) int
-  }
-  class Tokens {
-    <<纯函数 · src/theme/tokens.ts>>
-    +progressToneOf(status: string) SemanticTone
-    +toneOf(status: string) SemanticTone
+    <<纯函数 · src/utils/wbs.ts · 本轮禁改>>
+    +parentIdSet(nodes) Set~string~
+    +isLeafNode(nodes, nodeId) boolean
+    +flattenTree(tree) WbsTreeNode[]
+    +rollupProgress(node) int
+    +rollupProgressFlat(nodes, nodeId) int
   }
 
-  %% ── 引擎编排（本轮新增） ─────────────────────────
+  %% ── 引擎（本轮禁改，仅标注被调用口径） ───────────
   class MockApiClient {
-    <<Mock 引擎 · src/api/mock/index.ts>>
-    +createWbsNode(projectId, payload) WbsNode
-    +updateWbsNode(id, payload) WbsNode
-    +deleteWbsNode(id) void
-    +moveWbsNode(id, newParentId, index) WbsNode[]
-    +moveTask(nodeId, status, order) BoardView
+    <<Mock 引擎 · src/api/mock/index.ts · 本轮禁改>>
     +upsertReport(payload, status) Report
+    +createWbsNode(projectId, payload) WbsNode
     -syncWbsProgressStatus(db, projectId) void
   }
-  MockApiClient ..> TaskStatusRules : 调用
-  MockApiClient ..> WbsUtils : 调用(rollupProgressFlat)
+  MockApiClient ..> WbsUtils : rollupProgressFlat(父进度唯一口径)
 
-  %% ── 共享组件（本轮新增） ─────────────────────────
+  %% ── 共享弹窗（T1 改动） ──────────────────────────
   class ReportFormModalProps {
+    <<Props 签名 R5 不变 · 仅 JSDoc 更新>>
     +boolean open
     +string projectId
     +Report editingReport
     +string lockNodeId
-    +(report: Report) => void onSubmitted
     +boolean keepOpenOnSubmit
-    +() => void onClose
+    +onSubmitted(report) void
+    +onClose() void
   }
   class ReportFormModal {
     <<React 组件 · src/components/report/ReportFormModal.tsx>>
-    +renderTaskTree(list, depth) JSX.Element[]
-    +assemble(values) ReportPayload
-    +doSave(values, submit) Promise~void~
-    -resetForContinuousAdd() void
+    -Record taskMap
+    -string[] planItems
+    +Set~string~ parentIds ★派生
+    +string effectiveLockNodeId ★派生
+    +boolean lockDowngraded ★派生
+    +renderTaskTree(list, depth) JSX ★父行禁用
+    +assemble(values) ReportPayload ★父节点剔除
+    +doSave(values, submit) Promise ★锁定用派生值
   }
   ReportFormModal ..> ReportFormModalProps : props
-  ReportFormModal ..> WbsUtils : 进度条值(存储 progress)
-  ReportFormModal ..> Tokens : 进度条色调(progressToneOf)
+  ReportFormModal ..> WbsUtils : parentIdSet / flattenTree ★
+  ReportFormModal ..> ReportPayload : assemble 产出
+  ReportFormModal ..> MockApiClient : 经 flowStore 调用
 
-  %% ── 页面（本轮改动） ─────────────────────────────
+  %% ── WBS 页（T2 / T3 改动） ───────────────────────
+  class NodeForm {
+    <<WbsPage 本地表单 state · 字段不变>>
+    +string parentId
+    +WbsNodeType nodeType
+    +string name
+    +string owner
+    +int estimateDays
+    +string status
+    +string milestoneId
+    +string dueDate
+  }
   class WbsPage {
     <<React 组件 · src/pages/projects/WbsPage.tsx>>
-    +renderNode(node) JSX.Element
-    +openReportModal(nodeId) void
-    +state reportModalOpen/reportLockNodeId
+    -boolean dialogOpen
+    -boolean lockMilestone
+    +boolean lockParent ★新增 state
+    -boolean reportModalOpen
+    -string reportLockNodeId
+    +openCreate(parentId) void ★setLockParent
+    +openEdit(node) void ★setLockParent(false)
+    +changeParent(parentId) void 不改
+    +renderNode(node) JSX ★写日志叶子判定
   }
-  class ReportsPage {
-    <<React 组件 · src/pages/projects/ReportsPage.tsx>>
-    +openCreate() void
-    +openEditReport(r) void
-    +openCreateWithPrefill(nodeId) void
-  }
-  class MilestonesPage {
-    <<React 组件 · src/pages/projects/MilestonesPage.tsx>>
-    +handleAchieve(m) Promise~void~
-    +sourceOf(m) 'time' | 'task'
-  }
-  class ProjectCreatePage {
-    <<React 组件 · src/pages/projects/ProjectCreatePage.tsx>>
-    +renderMilestones() JSX.Element
-  }
+  WbsPage o-- NodeForm : form state
+  WbsPage --> ReportFormModal : keepOpenOnSubmit=false ★
+  WbsPage ..> WbsUtils : rollupProgress / isLeaf
 
-  WbsPage --> ReportFormModal : 打开(lockNodeId, keepOpenOnSubmit)
-  ReportsPage --> ReportFormModal : 打开(editingReport, keepOpen=false)
-  WbsPage ..> WbsUtils : rollupProgress
-  WbsPage ..> Tokens : progressToneOf
-  WbsPage ..> MockApiClient : createNode/updateNode(经 store)
-  MilestonesPage ..> TaskStatusRules : milestoneStartFrom(引用)
-  MilestonesPage ..> MockApiClient : updateMilestone{achieved}
+  %% ── 日志页（不改，回归验证） ─────────────────────
+  class ReportsPage {
+    <<React 组件 · 本轮不改动>>
+    +openCreate() void
+    +openCreateWithPrefill(nodeId) void
+    +openEditReport(r) void
+  }
+  ReportsPage --> ReportFormModal : keepOpenOnSubmit=false 现状

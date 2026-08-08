@@ -1,88 +1,82 @@
 %% ═══════════════════════════════════════════════════════════
-%% pm-app · 第四轮增量（round4-optimize）时序图（4 条关键流程）
-%% 对应 docs/delta-design-round4-optimize.md §4
+%% pm-app · 第五轮增量（round5-wbs）时序图（3 条关键流程）
+%% 对应 docs/delta-design-round5-wbs.md §4
 %% ═══════════════════════════════════════════════════════════
 
-%% ── ① 向导清理后建项（R4-P0-1 + P4 时间驱动背景） ──
+%% ── ① WBS 写日志：点击 → 提交/存草稿 → 关闭弹窗（R5-P0-1，AC-1.1~1.7） ──
 sequenceDiagram
   autonumber
-  actor U as PM
-  participant W as ProjectCreatePage
-  participant E as MockApiClient
-  participant MS as MilestonesPage
-  U->>W: 填写向导（里程碑步骤：无「有质量门」Chip，副标题已清理）
-  W->>E: createProject(payload)
-  E->>E: 实例化里程碑 + WBS 骨架(per-milestone)
-  E->>E: renumberMilestones + refreshMilestoneStatuses
-  E-->>W: Project（status=草稿）
-  W-->>U: 建项成功
-  U->>MS: 打开里程碑页
-  MS->>E: listMilestones
-  E->>E: refreshMilestoneStatuses（首碑 startFrom=planStart=今天 → 进行中）
-  E-->>MS: MilestoneWithGate[]
-  MS-->>U: 状态列「进行中」+ 灰字「时间驱动」+ tooltip（起算日已到）
-
-%% ── ② WBS 写日志页内 Modal（R4-P0-4：锁定 → 提交 → 保持打开重置） ──
-sequenceDiagram
-  autonumber
-  actor U2 as 填写人
-  participant W2 as WbsPage
+  actor U as 填报人
+  participant W as WbsPage
   participant M as ReportFormModal
   participant F as flowStore
-  participant E2 as MockApiClient
-  U2->>W2: 点任务行「写日志」（不再 navigate）
-  W2->>W2: setReportLockNodeId(node.id); setReportModalOpen(true)
-  W2->>M: <ReportFormModal open lockNodeId keepOpenOnSubmit />
-  M->>M: 初始化 taskMap：全不选 + lockNodeId checked
-  M-->>U2: 锁定节点 checkbox checked+disabled+锁图标（进度输入可编辑）
-  U2->>M: 填写并提交（可追加勾选其他任务）
-  M->>F: submitReport(payload)
-  F->>E2: upsertReport(payload, '已提交')
-  E2->>E2: 回写节点 progress + syncWbsProgressStatus（父节点回写/状态收敛）
-  E2->>E2: refreshMilestoneStatuses（★ D3 缺口修复：taskStats 实时联动）
-  E2-->>F: Report
-  F-->>M: store.reports 已刷新
-  M->>M: keepOpenOnSubmit=true → 保持打开并重置（周次=本周、锁定任务不变）
-  M-->>U2: 连续添加第二条日志
-  U2->>M: 点「关闭」→ onClose
-  M-->>W2: WbsPage 关闭 Modal，回到 WBS 树
+  participant E as MockApiClient(本轮禁改)
+  U->>W: 点叶子行「写日志」（父节点行 disabled+Tooltip，AC-3.2）
+  W->>W: setReportLockNodeId(node.id); setReportModalOpen(true)
+  W->>M: open=true / lockNodeId=node.id / keepOpenOnSubmit=false ★
+  M->>M: effectiveLockNodeId = 叶子校验(lockNodeId)（AC-3.8）
+  M->>M: open effect 初始化 taskMap：仅 effectiveLockNodeId 预勾
+  M-->>U: 锁定行 checked+disabled+锁图标；父节点行禁用可见
+  U->>M: 填写 → 点「提交」或「存草稿」
+  M->>M: assemble()：父节点 selected=false / progressAfter=存储值（AC-3.5）
+  M->>F: submitReport(payload) 或 saveReport(payload)
+  F->>E: upsertReport(payload, 已提交|草稿)
+  E->>E: 回写叶子 progress → syncWbsProgressStatus → refreshMilestoneStatuses（口径不变）
+  E-->>F: Report
+  F-->>M: resolve(saved)（store.reports 已刷新）
+  M->>M: toast.success「工作日志已提交 / 已存草稿」
+  M->>W: onSubmitted(saved) → fetchWbs + refreshMilestones（AC-1.4）
+  M->>W: onClose() → setReportModalOpen(false)（AC-1.1 / AC-1.2）★
+  W-->>U: 弹窗关闭，仍停留 /projects/:id/wbs，无任何 navigate（AC-1.3）
+  Note over M,W: 失败分支 → catch → toast.error，不调 onSubmitted / onClose，表单内容保留（AC-1.5）
+  U->>W: 再点另一行「写日志」→ 同一 handler 一次 render 内覆盖 lockNodeId（AC-1.6 / AC-1.7）
 
-%% ── ③ 创建/更新子任务 → 父进度汇总 → 状态自动流转 → 里程碑 taskStats（D1/D2/D3） ──
+%% ── ② 创建下级任务：上级节点锁定（R5-P0-2，AC-2.1~2.8） ──
 sequenceDiagram
   autonumber
-  actor U3 as PM
-  participant W3 as WbsPage
+  actor U2 as PM
+  participant W2 as WbsPage
+  participant R as rules.ts(只读)
   participant S as wbsStore
-  participant E3 as MockApiClient
-  participant F3 as flowStore
-  participant MS3 as MilestonesPage
-  U3->>W3: 新建子任务（progress=80）
-  W3->>S: createNode(payload)
-  S->>E3: createWbsNode(projectId, payload)
-  E3->>E3: 校验/编码/落库新节点
-  E3->>E3: syncWbsProgressStatus（★ 父节点 progress=子树叶子加权；叶子 0<p<100 且原待办 → 进行中）
-  E3->>E3: refreshMilestoneStatuses（taskStats.progress 随叶子实时变化）
-  E3-->>S: WbsNode
-  S->>S: listWbs 重建 nodes/tree + syncMilestones
-  S-->>W3: 树刷新
-  W3-->>U3: 父节点行进度条保留且=汇总（悬停 tooltip「{名} {p}%（{状态}）」）
-  U3->>W3: 日志提交把该叶子 progress 改到 100
-  W3->>F3: submitReport → E3.upsertReport
-  E3->>E3: syncWbsProgressStatus（叶子→完成【强规则】；父链全 100 → 完成）
-  E3->>E3: refreshMilestoneStatuses
-  E3-->>MS3: 里程碑页 taskStats.done/progress 更新，出现「关联任务已全部完成」提示（不自动达成）
+  participant E2 as MockApiClient(本轮禁改)
+  U2->>W2: 点节点行「+」（canAddChild=true）
+  W2->>W2: openCreate(node.id)
+  W2->>R: allowedChildTypes(parent, rules)
+  R-->>W2: ['task','subtask']
+  W2->>W2: setForm{parentId=node.id, nodeType=allowed[0], milestoneId/dueDate 继承}
+  W2->>W2: setLockMilestone(Boolean(parent.milestoneId)); setLockParent(true) ★
+  W2-->>U2: 「上级节点（已锁定）」disabled + helperText（AC-2.1/2.2）；与里程碑锁定并存（AC-2.4）
+  Note over W2: 上级锁定 → changeParent 不可触发 → allowedTypes 恒定（AC-2.5）
+  U2->>W2: 填名称/工时/负责人 → 点「创建」
+  W2->>R: validateWbsPlacement({nodeType, parent: formParent}) 前端预校验（AC-2.6）
+  W2->>S: createNode({parentId: form.parentId, ...})
+  S->>E2: createWbsNode → 层级校验 / 编码 / syncWbsProgressStatus
+  E2-->>S: WbsNode（parentId 严格等于入口节点 id，AC-2.3）
+  S-->>W2: listWbs 重建 nodes/tree
+  W2-->>U2: toast「节点已创建」+ 树刷新
+  Note over W2,U2: 顶部「新建任务」openCreate('') → lockParent=false（AC-2.7）；openEdit → lockParent=false（AC-2.8）
 
-%% ── ④ 里程碑页一键标记达成（R4-P1-1 / D3） ──
+%% ── ③ 弹窗 assemble：父节点禁用与剔除（R5-P0-3，AC-3.3~3.10） ──
 sequenceDiagram
   autonumber
-  actor U4 as PM
-  participant MS4 as MilestonesPage
-  participant E4 as MockApiClient
-  participant S4 as projectStore
-  U4->>MS4: 里程碑「关联任务全部完成」提示区点「标记达成」
-  MS4->>E4: updateMilestone(id, { achieved: true })
-  E4->>E4: ms.doneAt=today(); ms.doneBy=currentUser.openId（★ 审计留痕，引擎不代写）
-  E4->>E4: clearOverride + refreshMilestoneStatuses（status → 已达成）
-  E4-->>MS4: MilestoneWithGate
-  MS4->>S4: refreshMilestones(id)
-  MS4-->>U4: 状态列「已达成」（success 绿），来源标识消失
+  actor U3 as 填报人(WBS 或 ReportsPage 入口)
+  participant M3 as ReportFormModal
+  participant WU as utils/wbs(只读)
+  participant F3 as flowStore
+  participant E3 as MockApiClient(本轮禁改)
+  M3->>WU: parentIdSet(flattenTree(tree))
+  WU-->>M3: Set(有子节点的 nodeId)
+  M3->>M3: renderTaskTree：hasChildren → checkbox/完% disabled + Tooltip（AC-3.3）
+  M3-->>U3: 叶子行行为完全不变（可勾选、可填进度，AC-3.4）
+  U3->>M3: 勾选若干叶子 + 填「完%」→ 提交
+  M3->>WU: parentIdSet(latestNodesOf())（与 payload 同源，避免 tree/nodes 漂移）
+  M3->>M3: assemble()：父 → {selected:false, progressAfter:n.progress}；叶 → taskMap 值（AC-3.5）
+  M3->>F3: submitReport(payload)
+  F3->>E3: upsertReport(payload, '已提交')
+  E3->>E3: node.progress = t.progressAfter（父节点=原存储值 → 写入无副作用）
+  E3->>E3: syncWbsProgressStatus：父 progress = rollupProgressFlat(子树真叶子加权)（AC-3.7）
+  E3->>E3: refreshMilestoneStatuses（D3 联动，口径不变）
+  E3-->>F3: Report（父行 selected=false → 不进「日志 N」计数，AC-3.10）
+  F3-->>U3: 日志详情仅渲染 selected=true 行 → progressAfter 恒等于 WBS 当前值（AC-3.6）
+  Note over M3: 编辑态 → assemble 走 editingReport 原样回传分支，历史父节点关联照常展示、不清洗（AC-3.9）
+  Note over M3: lockNodeId 指向父节点（旧链接）→ effectiveLockNodeId=null + caption 降级提示（AC-3.8）

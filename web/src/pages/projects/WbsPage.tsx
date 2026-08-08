@@ -115,6 +115,8 @@ export function WbsPage(): JSX.Element {
   const [reportLockNodeId, setReportLockNodeId] = useState<string | null>(null);
   /** 创建子任务时里程碑若继承自上级则锁定（用户反馈④a：避免误改继承关系） */
   const [lockMilestone, setLockMilestone] = useState<boolean>(false);
+  /** R5-P0-2：从节点行「+」创建下级时锁定「上级节点」（与 lockMilestone 同层同范式；移动节点走「编辑」） */
+  const [lockParent, setLockParent] = useState<boolean>(false);
   const [rules, setRules] = useState<WbsRules>(DEFAULT_WBS_RULES);
 
   useEffect(() => {
@@ -198,12 +200,17 @@ export function WbsPage(): JSX.Element {
     setForm({
       ...EMPTY_FORM,
       parentId,
+      // R5-P0-2（D-4 防御）：上级锁定后用户无法再靠换父触发 changeParent 的类型收敛，
+      // 这里先收敛到该上级允许的首个类型（默认规则下恒为「任务」，行为零变化）
+      nodeType: allowedChildTypes(parent, rules)[0] ?? EMPTY_FORM.nodeType,
       // 用户反馈②：子任务默认继承上级绑定的里程碑与截止日期
       milestoneId: parent?.milestoneId ?? '',
       dueDate: parent?.dueDate ?? '',
     });
     // 用户反馈④a：继承自上二级碑则锁定，避免误改
     setLockMilestone(Boolean(parent?.milestoneId));
+    // R5-P0-2：节点行「+」进入（parentId 非空）锁定上级；顶部「新建任务」openCreate('') 恒不锁（AC-2.7）
+    setLockParent(Boolean(parentId));
     setDialogOpen(true);
   };
 
@@ -220,6 +227,8 @@ export function WbsPage(): JSX.Element {
       dueDate: node.dueDate ?? '',
     });
     setLockMilestone(false);
+    // R5-P0-2（AC-2.8）：编辑是合法的「移动节点」路径，上级保持可改
+    setLockParent(false);
     setDialogOpen(true);
   };
 
@@ -354,11 +363,15 @@ export function WbsPage(): JSX.Element {
                 setLogDetailNode(node);
               }}
             />
-            {/* R4-P0-4：写日志入口（页内开 ReportFormModal，不再跳转工作日志页；锁定当前节点可连续添加） */}
+            {/* R4-P0-4：写日志入口（页内开 ReportFormModal，不再跳转工作日志页）
+                R5-P0-3 源头拦截：仅叶子可点，父节点禁用置灰 + Tooltip 引导（AC-3.1/3.2）；
+                PermissionButton 见 disabledReason 即自动 disabled + Tooltip，无需再加 disabled / 包 span */}
             {canWriteLog && (
               <PermissionButton
                 action="report:write"
-                disabledReason={archived ? '项目已归档' : ''}
+                disabledReason={
+                  archived ? '项目已归档' : isLeaf ? '' : '该任务已有下级，请在具体子任务上记录工作日志'
+                }
                 size="small"
                 sx={{ height: 24, minWidth: 0, px: 1, fontSize: 12, flexShrink: 0 }}
                 onClick={(e) => {
@@ -471,13 +484,19 @@ export function WbsPage(): JSX.Element {
         onClose={() => setDialogOpen(false)}
         onSubmit={() => void handleSubmit()}
       >
+        {/* R5-P0-2：从「创建下级任务」进入时锁定上级（字段级锁定范式，与下方 lockMilestone 一致） */}
         <TextField
           select
-          label="上级节点"
+          label={lockParent ? '上级节点（已锁定）' : '上级节点'}
           value={form.parentId}
           onChange={(e) => changeParent(e.target.value)}
           fullWidth
-          helperText="根层可建任务；任务下可继续挂任务或子任务，子任务为最底层"
+          disabled={lockParent}
+          helperText={
+            lockParent
+              ? '由「创建下级任务」进入，上级节点已锁定；如需调整层级，请到该节点「编辑」中修改上级'
+              : '根层可建任务；任务下可继续挂任务或子任务，子任务为最底层'
+          }
         >
           <MenuItem value="">（根节点）</MenuItem>
           {flatNodes
@@ -673,12 +692,15 @@ export function WbsPage(): JSX.Element {
         )}
       </FormDialog>
 
-      {/* R4-P0-4：页内写日志 Modal（lockNodeId=当前节点，keepOpenOnSubmit=连续添加；提交后刷新 WBS 树 + 里程碑） */}
+      {/* R4-P0-4：页内写日志 Modal（lockNodeId=当前节点；提交后刷新 WBS 树 + 里程碑，不跳转路由）
+          R5-P0-1：keepOpenOnSubmit={false} → 提交 / 存草稿成功后关窗，页面停留 WBS（AC-1.1/1.2/1.3）；
+          失败走 catch 不关窗、内容保留（AC-1.5）。onClose 刻意不清 reportLockNodeId（D-3：
+          清空会在 Dialog 淡出期间闪掉锁图标；下次点击在同一 handler 内被新 id 覆盖，AC-1.6 依然成立） */}
       <ReportFormModal
         open={reportModalOpen}
         projectId={id}
         lockNodeId={reportLockNodeId}
-        keepOpenOnSubmit
+        keepOpenOnSubmit={false}
         onSubmitted={() => {
           void fetchWbs(id, projectType);
           void refreshMilestones(id);
