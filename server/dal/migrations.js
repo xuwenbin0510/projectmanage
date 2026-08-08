@@ -1,0 +1,540 @@
+/**
+ * 版本化数据库迁移（契约 §5）
+ *
+ * 取代原来散落在 db.js 里的「手写 PRAGMA table_info 探测 + ALTER」：
+ *   - `schema_migrations` 记录已应用版本，重复启动幂等
+ *   - 每个迁移在**单个事务**内执行，失败整体回滚，不会留半截 schema
+ *   - 需要重建表时按 SQLite 官方 12 步流程：先关外键 → 事务内重建 → 恢复外键
+ *
+ * ⚠ 列名禁用 SQLite 关键字（决策 D-10）：
+ *   里程碑的「当前计划日期」列名是 `planned_date`，对外 API 字段是 `currentDate`。
+ */
+
+/* ── 内省辅助 ─────────────────────────────────────── */
+
+/**
+ * 判断表是否存在。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} table 表名
+ * @returns {boolean}
+ */
+function tableExists(db, table) {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table);
+  return !!row;
+}
+
+/**
+ * 取表的列名列表；表不存在时返回空数组。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} table 表名
+ * @returns {string[]}
+ */
+function columnsOf(db, table) {
+  if (!tableExists(db, table)) return [];
+  return db.prepare('PRAGMA table_info(' + table + ')').all().map(function (c) {
+    return c.name;
+  });
+}
+
+/**
+ * 判断列是否存在。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} table 表名
+ * @param {string} column 列名
+ * @returns {boolean}
+ */
+function hasColumn(db, table, column) {
+  return columnsOf(db, table).indexOf(column) >= 0;
+}
+
+/** 允许的全局角色（与 server/config/enums.js GLOBAL_ROLES 一致，此处内联避免迁移层依赖业务层） */
+const VALID_GLOBAL_ROLES = [
+  'admin', 'management', 'pmo', 'pm', 'tl', 'qa', 'cm', 'po', 'member',
+];
+
+/** 允许的项目状态（与 enums.PROJECT_STATUSES 一致） */
+const VALID_PROJECT_STATUSES = [
+  '草稿', '审批中', '已批准', '进行中', '挂起', '已结项', '已终止', '已驳回',
+];
+
+/**
+ * 遗留项目类别（中文）→ 新契约 ProjectType（A / B / C）。
+ * 旧值形如 'A类（交付类）' / 'B类（产品迭代）' / 'C类（基建类）'，取首字母即可。
+ * @param {string|null|undefined} legacyType
+ * @returns {'A'|'B'|'C'}
+ */
+function normalizeProjectType(legacyType) {
+  const s = String(legacyType || '').trim().toUpperCase();
+  if (s.charAt(0) === 'A') return 'A';
+  if (s.charAt(0) === 'C') return 'C';
+  return 'B';
+}
+
+/**
+ * 遗留金额（TEXT，可能带「万」等后缀）→ 数值（万元）。
+ * @param {*} raw
+ * @returns {number}
+ */
+function normalizeAmount(raw) {
+  if (raw === null || raw === undefined) return 0;
+  const m = String(raw).match(/-?\d+(\.\d+)?/);
+  if (!m) return 0;
+  const n = parseFloat(m[0]);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * 遗留 goal（可能是 `{text,progress,target}` 对象 JSON / 纯文本）→ 新契约 `string[]` 的 JSON 串。
+ * @param {*} raw
+ * @returns {string} JSON 字符串
+ */
+function normalizeGoal(raw) {
+  if (raw === null || raw === undefined || raw === '') return '[]';
+  let v = raw;
+  if (typeof v === 'string') {
+    try {
+      v = JSON.parse(v);
+    } catch (e) {
+      return JSON.stringify([String(raw)]);
+    }
+  }
+  if (Array.isArray(v)) {
+    return JSON.stringify(v.map(function (x) {
+      return typeof x === 'string' ? x : String(x && x.text ? x.text : JSON.stringify(x));
+    }).filter(Boolean));
+  }
+  if (v && typeof v === 'object') {
+    const text = v.text || v.target || '';
+    return JSON.stringify(text ? [String(text)] : []);
+  }
+  return JSON.stringify([String(v)]);
+}
+
+/* ── 迁移 v1：Connect v1 基线 ─────────────────────── */
+
+/**
+ * v1 = 「遗留基线表」+「新契约表结构」一次到位。
+ *
+ * 拆解：
+ *  1. 遗留表（tasks / reports / report_tasks / approvals）—— 原 db.js 的 DDL 平移过来，
+ *     供 @deprecated 老路由与 devcheck / test_runner 继续使用（决策 D-9）。
+ *  2. users 重建：role → global_role，补 email / dept / avatar_url / status / updated_at
+ *  3. lifecycle_templates 新建
+ *  4. projects 重建：补分类/健康度/计划区间/模板/软删等列，type 中文 → A/B/C
+ *  5. project_members 新建（并从遗留 projects.pm 回填一条 pm 成员）
+ *  6. milestones 重建：code/target/required/baseline_date/planned_date/done_at/... （done、status 为派生值，不落库）
+ *  7. quality_gates / gate_checklist_items 新建
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ */
+function migrationV1(db, now) {
+  /* ---------- 1. projects（先建/重建，后续表都外键指向它） ---------- */
+
+  const legacyProjects = tableExists(db, 'projects') && !hasColumn(db, 'projects', 'health')
+    ? db.prepare('SELECT * FROM projects').all()
+    : null;
+
+  if (legacyProjects || !tableExists(db, 'projects')) {
+    if (legacyProjects) db.exec('DROP TABLE projects');
+    db.exec(`
+      CREATE TABLE projects (
+        id                       TEXT PRIMARY KEY,
+        code                     TEXT,
+        name                     TEXT NOT NULL,
+        type                     TEXT NOT NULL DEFAULT 'B',
+        classify_input           TEXT,
+        classify_suggested       TEXT,
+        classify_override_reason TEXT,
+        customer                 TEXT,
+        contract_amount          REAL NOT NULL DEFAULT 0,
+        amount                   TEXT,
+        background               TEXT,
+        goal                     TEXT NOT NULL DEFAULT '[]',
+        status                   TEXT NOT NULL DEFAULT '草稿',
+        health                   TEXT NOT NULL DEFAULT 'green',
+        plan_start               TEXT,
+        plan_end                 TEXT,
+        actual_end               TEXT,
+        approval_step            INTEGER NOT NULL DEFAULT -1,
+        template_id              TEXT,
+        pm                       TEXT,
+        approved_by              TEXT,
+        created_by               TEXT,
+        created_at               TEXT NOT NULL,
+        updated_at               TEXT NOT NULL,
+        deleted_at               TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+      CREATE INDEX IF NOT EXISTS idx_projects_type ON projects(type);
+      CREATE INDEX IF NOT EXISTS idx_projects_deleted ON projects(deleted_at);
+    `);
+
+    if (legacyProjects && legacyProjects.length) {
+      const ins = db.prepare(`
+        INSERT INTO projects (
+          id, code, name, type, customer, contract_amount, amount, background, goal,
+          status, health, approval_step, pm, approved_by, created_by, created_at, updated_at
+        ) VALUES (
+          @id, @code, @name, @type, @customer, @contract_amount, @amount, @background, @goal,
+          @status, @health, @approval_step, @pm, @approved_by, @created_by, @created_at, @updated_at
+        )
+      `);
+      legacyProjects.forEach(function (p) {
+        const status = VALID_PROJECT_STATUSES.indexOf(p.status) >= 0 ? p.status : '草稿';
+        ins.run({
+          id: p.id,
+          code: p.code || null,
+          name: p.name || '(未命名项目)',
+          type: normalizeProjectType(p.type),
+          customer: p.customer || null,
+          contract_amount: normalizeAmount(p.amount),
+          amount: p.amount === undefined ? null : p.amount,
+          background: p.background || null,
+          goal: normalizeGoal(p.goal),
+          status: status,
+          health: 'green',
+          approval_step: Number.isFinite(p.approval_step) ? p.approval_step : -1,
+          pm: p.pm || null,
+          approved_by: p.approved_by || null,
+          created_by: p.created_by || null,
+          created_at: p.created_at || now,
+          updated_at: p.updated_at || p.created_at || now,
+        });
+      });
+    }
+  }
+
+  /* ---------- 2. users ---------- */
+
+  const legacyUsers = tableExists(db, 'users') && !hasColumn(db, 'users', 'global_role')
+    ? db.prepare('SELECT * FROM users').all()
+    : null;
+
+  if (legacyUsers || !tableExists(db, 'users')) {
+    if (legacyUsers) db.exec('DROP TABLE users');
+    db.exec(`
+      CREATE TABLE users (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        open_id     TEXT UNIQUE NOT NULL,
+        employee_id TEXT,
+        name        TEXT NOT NULL,
+        email       TEXT,
+        dept        TEXT,
+        avatar_url  TEXT,
+        global_role TEXT NOT NULL DEFAULT 'member',
+        status      TEXT NOT NULL DEFAULT 'active',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_users_role ON users(global_role);
+    `);
+
+    if (legacyUsers && legacyUsers.length) {
+      const ins = db.prepare(`
+        INSERT INTO users (id, open_id, employee_id, name, global_role, status, created_at, updated_at)
+        VALUES (@id, @open_id, @employee_id, @name, @global_role, 'active', @created_at, @updated_at)
+      `);
+      legacyUsers.forEach(function (u) {
+        const role = VALID_GLOBAL_ROLES.indexOf(u.role) >= 0 ? u.role : 'member';
+        ins.run({
+          id: u.id,
+          open_id: u.open_id,
+          employee_id: u.employee_id || null,
+          name: u.name || u.open_id,
+          global_role: role,
+          created_at: u.created_at || now,
+          updated_at: u.created_at || now,
+        });
+      });
+    }
+  }
+
+  /* ---------- 3. lifecycle_templates ---------- */
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lifecycle_templates (
+      id           TEXT PRIMARY KEY,
+      project_type TEXT NOT NULL,
+      version      INTEGER NOT NULL DEFAULT 1,
+      name         TEXT NOT NULL,
+      definition   TEXT NOT NULL,
+      is_active    INTEGER NOT NULL DEFAULT 1,
+      created_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_lifecycle_templates_type
+      ON lifecycle_templates(project_type, is_active);
+  `);
+
+  /* ---------- 4. project_members ---------- */
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_members (
+      id           TEXT PRIMARY KEY,
+      project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_open_id TEXT NOT NULL,
+      project_role TEXT NOT NULL,
+      assigned_by  TEXT,
+      assigned_at  TEXT NOT NULL,
+      UNIQUE (project_id, user_open_id, project_role)
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id);
+    CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_open_id);
+  `);
+
+  // 从遗留 projects.pm 回填一条 pm 成员，保证老数据在新契约下也能显示负责人
+  const pmRows = db
+    .prepare("SELECT id, pm, created_by, created_at FROM projects WHERE pm IS NOT NULL AND pm <> ''")
+    .all();
+  const insMember = db.prepare(`
+    INSERT OR IGNORE INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at)
+    VALUES (?, ?, ?, 'pm', ?, ?)
+  `);
+  pmRows.forEach(function (p) {
+    insMember.run(p.id + '-MB1', p.id, p.pm, p.created_by || null, p.created_at || now);
+  });
+
+  /* ---------- 5. milestones（重建） ---------- */
+
+  const legacyMilestones = tableExists(db, 'milestones') && !hasColumn(db, 'milestones', 'planned_date')
+    ? db.prepare('SELECT * FROM milestones').all()
+    : null;
+
+  if (legacyMilestones || !tableExists(db, 'milestones')) {
+    if (legacyMilestones) db.exec('DROP TABLE milestones');
+    // 说明：status / done 是**派生值**（rules.deriveMilestoneStatus），不落库，
+    //      避免出现「库里写 已达成、算出来 已逾期」的双真源。
+    db.exec(`
+      CREATE TABLE milestones (
+        id                 TEXT PRIMARY KEY,
+        project_id         TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        code               TEXT,
+        name               TEXT NOT NULL,
+        target             TEXT,
+        required           INTEGER NOT NULL DEFAULT 0,
+        baseline_date      TEXT,
+        planned_date       TEXT,
+        done_at            TEXT,
+        done_by            TEXT,
+        status_override    TEXT,
+        override_by        TEXT,
+        override_at        TEXT,
+        override_base_date TEXT,
+        last_change_id     TEXT,
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
+      CREATE INDEX IF NOT EXISTS idx_milestones_planned ON milestones(project_id, planned_date);
+    `);
+
+    if (legacyMilestones && legacyMilestones.length) {
+      const ins = db.prepare(`
+        INSERT INTO milestones (
+          id, project_id, code, name, required, baseline_date, planned_date,
+          done_at, created_at, updated_at
+        ) VALUES (
+          @id, @project_id, @code, @name, 0, @baseline_date, @planned_date,
+          @done_at, @created_at, @updated_at
+        )
+      `);
+      // 遗留表无 code，按项目内顺序补 M1/M2/...
+      const seqByProject = {};
+      legacyMilestones.forEach(function (m) {
+        const pid = m.project_id;
+        seqByProject[pid] = (seqByProject[pid] || 0) + 1;
+        ins.run({
+          id: m.id,
+          project_id: pid,
+          code: 'M' + seqByProject[pid],
+          name: m.name || '(未命名里程碑)',
+          baseline_date: m.due || null,
+          planned_date: m.due || null,
+          done_at: Number(m.done) === 1 ? (m.created_at || now) : null,
+          created_at: m.created_at || now,
+          updated_at: m.created_at || now,
+        });
+      });
+    }
+  }
+
+  /* ---------- 6. quality_gates / gate_checklist_items ---------- */
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS quality_gates (
+      id           TEXT PRIMARY KEY,
+      project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      milestone_id TEXT NOT NULL REFERENCES milestones(id) ON DELETE CASCADE,
+      code         TEXT NOT NULL,
+      name         TEXT NOT NULL,
+      owner_role   TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT '未开始',
+      conclusion   TEXT,
+      comment      TEXT,
+      decided_by   TEXT,
+      decided_at   TEXT,
+      created_at   TEXT NOT NULL,
+      UNIQUE (project_id, milestone_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_quality_gates_project ON quality_gates(project_id);
+
+    CREATE TABLE IF NOT EXISTS gate_checklist_items (
+      id         TEXT PRIMARY KEY,
+      gate_id    TEXT NOT NULL REFERENCES quality_gates(id) ON DELETE CASCADE,
+      seq        INTEGER NOT NULL DEFAULT 0,
+      content    TEXT NOT NULL,
+      owner_role TEXT,
+      checked    INTEGER NOT NULL DEFAULT 0,
+      checked_by TEXT,
+      checked_at TEXT,
+      source     TEXT NOT NULL DEFAULT 'template'
+    );
+    CREATE INDEX IF NOT EXISTS idx_gate_items_gate ON gate_checklist_items(gate_id, seq);
+  `);
+
+  /* ---------- 7. 遗留基线表（原 db.js DDL，供 @deprecated 老路由使用 · D-9） ---------- */
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      ms_id       TEXT,
+      code        TEXT,
+      name        TEXT,
+      owner       TEXT,
+      est         TEXT,
+      start       TEXT,
+      due         TEXT,
+      status      TEXT DEFAULT '待开始',
+      progress    INTEGER DEFAULT 0,
+      crit        INTEGER DEFAULT 0,
+      created_at  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reports (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      week        TEXT,
+      author      TEXT,
+      done        TEXT,
+      plan        TEXT,
+      risk        TEXT,
+      risk_due    TEXT,
+      res         TEXT,
+      snap        TEXT,
+      created_at  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS report_tasks (
+      report_id   TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      PRIMARY KEY (report_id, task_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS approvals (
+      id               TEXT PRIMARY KEY,
+      project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      step_index       INTEGER NOT NULL,
+      step_role        TEXT NOT NULL,
+      approver_open_id TEXT,
+      approver_name    TEXT,
+      action           TEXT NOT NULL,
+      comment          TEXT,
+      created_at       TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_reports_project ON reports(project_id);
+    CREATE INDEX IF NOT EXISTS idx_report_tasks_task ON report_tasks(task_id);
+    CREATE INDEX IF NOT EXISTS idx_approvals_project ON approvals(project_id);
+  `);
+
+  // 遗留库可能缺 tasks.name（早期 schema 漏建）
+  if (!hasColumn(db, 'tasks', 'name')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN name TEXT');
+  }
+}
+
+/* ── 迁移注册表 ───────────────────────────────────── */
+
+/**
+ * 有序迁移列表。**只追加，不修改已发布项**。
+ * @type {{version: number, name: string, up: Function}[]}
+ */
+const MIGRATIONS = [
+  { version: 1, name: 'connect-v1-baseline', up: migrationV1 },
+];
+
+/**
+ * 执行所有未应用的迁移（幂等）。
+ * @param {import('better-sqlite3').Database} db
+ * @returns {number[]} 本次实际应用的版本号
+ */
+function run(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version    INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+  `);
+
+  const applied = new Set(
+    db.prepare('SELECT version FROM schema_migrations').all().map(function (r) {
+      return r.version;
+    })
+  );
+
+  const done = [];
+  const record = db.prepare(
+    'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)'
+  );
+
+  MIGRATIONS.forEach(function (m) {
+    if (applied.has(m.version)) return;
+
+    // 重建表需要临时关闭外键（SQLite 官方 12 步流程）。
+    // PRAGMA foreign_keys 在事务内无效，必须先于 BEGIN 设置。
+    const fkOn = db.pragma('foreign_keys', { simple: true }) === 1;
+    if (fkOn) db.pragma('foreign_keys = OFF');
+
+    const now = new Date().toISOString();
+    const tx = db.transaction(function () {
+      m.up(db, now);
+      record.run(m.version, m.name, now);
+    });
+
+    try {
+      tx();
+      done.push(m.version);
+      console.log('[migrations] applied v%d %s', m.version, m.name);
+    } finally {
+      if (fkOn) db.pragma('foreign_keys = ON');
+    }
+  });
+
+  return done;
+}
+
+/**
+ * 当前 schema 版本（未初始化返回 0）。
+ * @param {import('better-sqlite3').Database} db
+ * @returns {number}
+ */
+function currentVersion(db) {
+  if (!tableExists(db, 'schema_migrations')) return 0;
+  const row = db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get();
+  return (row && row.v) || 0;
+}
+
+module.exports = {
+  run,
+  currentVersion,
+  MIGRATIONS,
+  // 导出内省工具，供 seed / 其他 DAL 复用
+  tableExists,
+  columnsOf,
+  hasColumn,
+};

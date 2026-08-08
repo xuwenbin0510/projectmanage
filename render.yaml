@@ -1,39 +1,51 @@
-# Render 部署蓝图（Blueprint）
+# Render 部署蓝图（Blueprint）— Connect v1
 # 用法：Render 控制台 → New → Blueprint → 连接本 GitHub 仓库 → 自动按此文件部署。
 # 文档：https://render.com/docs/blueprint-spec
+#
+# 与 Connect v1 的对应关系：
+#   - SESSION_SECRET 由平台自动生成（config.js 决策 D-7：缺失即 exit(1)，不会静默降级）
+#   - DB_PATH 指向挂载盘 /data，重启/重新部署数据不丢（SQLite 必须落在持久化磁盘上）
+#   - ALLOW_DEV_LOGIN 独立开关（决策 D-8），演示阶段为 true；正式接入飞书后改 false
 services:
   - type: web
     name: astrbytes-pm
     runtime: node
-    plan: free              # 免费额度；持久化数据库需升级付费计划并挂载 disk（见下方注释）
+    # starter 及以上计划才能挂载 disk。free 计划为临时文件系统，
+    # 每次重启都会清空 SQLite 文件，与「数据持久化」验收标准冲突。
+    plan: starter
     region: singapore       # 离国内近；也可改 oregon / frankfurt
     branch: main
     buildCommand: npm install && cd web && npm install && npm run build
     startCommand: node server.js
     healthCheckPath: /
+    # 持久化磁盘：SQLite 数据库文件存放处。切勿改 mountPath 而不同步改 DB_PATH。
+    disk:
+      name: pm-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # 生产务必用强随机密钥；generateValue 让 Render 自动生成并保密存储
+      # 生产务必用强随机密钥；generateValue 让 Render 自动生成并保密存储。
+      # 未注入时 config.js 会直接 process.exit(1)（决策 D-7）。
       - key: SESSION_SECRET
         generateValue: true
-      # 飞书免登凭证：留空 = 启用「开发登录」模式（输入姓名即可登录，首个用户为管理员）
+      # 飞书免登凭证：留空 = 走开发登录（devlogin）。
       # 接飞书时在飞书开放平台拿到后填这里，并配置重定向到 https://<本服务域名>/
       - key: FEISHU_APP_ID
         value: ""
       - key: FEISHU_APP_SECRET
         value: ""
-      # SQLite 文件路径；免费盘为临时文件系统，重启/重新部署会清空数据（演示够用）
-      # 需要持久化：升级付费计划后挂载 disk 到 /data，并把这里改为 /data/pm.db
+      # 开发登录独立开关（决策 D-8）。演示阶段保持 true；
+      # 正式对外前必须改为 false，否则任何人可用 open_id 直接登录。
+      - key: ALLOW_DEV_LOGIN
+        value: "true"
+      # SQLite 文件路径：必须落在上面挂载的 /data 盘内，否则重启数据全丢。
       - key: DB_PATH
-        value: "./pm.db"
+        value: "/data/pm.db"
+      # 逗号分隔的飞书 open_id，这些用户首次登录即为管理员
       - key: ADMIN_OPEN_IDS
         value: ""
+      # 服务对外基址（部署后填 https://<本服务域名>，可选）
       - key: BASE_URL
         value: ""
-# 持久化数据库（可选，需付费计划）：
-# 取消注释并在上面 plan 改为 starter/标准计划后生效
-#    disk:
-#      name: pm-data
-#      mountPath: /data
-#      sizeGB: 1
