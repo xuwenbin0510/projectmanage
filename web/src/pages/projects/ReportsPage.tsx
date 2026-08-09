@@ -161,7 +161,6 @@ export function ReportsPage(): JSX.Element {
         </Typography>
       ),
     },
-    { key: 'submittedAt', label: '提交时间', width: 150, render: (r) => <Typography variant="caption" color="text.secondary" title={r.submittedAt || undefined} sx={{ whiteSpace: 'nowrap' }}>{fmtDateTime(r.submittedAt)}</Typography> },
     {
       key: 'actions',
       label: '操作',
@@ -256,7 +255,7 @@ export function ReportsPage(): JSX.Element {
       >
         {detail && (
           <Stack spacing={1.5}>
-            {/* B5-R4：顶部 meta 行 = 状态 Chip + 填报人 + 填报时间 + 提交时间（caption 次要色） */}
+            {/* B5-R4：顶部 meta 行 = 状态 Chip + 填报人 + 填报时间（caption 次要色） */}
             <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexWrap: 'wrap' }}>
               <StatusChip status={detail.status} />
               <Typography variant="caption" color="text.secondary">
@@ -264,9 +263,6 @@ export function ReportsPage(): JSX.Element {
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 填报：{fmtDateTime(detail.createdAt)}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                提交：{fmtDateTime(detail.submittedAt)}
               </Typography>
             </Stack>
             <Box>

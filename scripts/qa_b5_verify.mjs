@@ -11,7 +11,7 @@
  *  【R3】列表排序：
  *    - R3-1 后端 listReports 默认按填报时间（createdAt）倒序（连续创建 3 条验证序列）
  *    - R3-2 草稿（submittedAt=null）正常出现在列表且 createdAt 有值（前端空值兜底口径）
- *    - R3-3 「提交时间」（submittedAt）列字段保留，草稿为 null、已提交有值
+ *    - R3-3 submittedAt 数据字段保留（UI 已不展示「提交时间」列），草稿为 null、已提交有值
  *  【R5】清库脚本已在副本库（/tmp）独立验证：备份生成 / 业务表清零 / 保留集 / 幂等 / fk_check 空 / 回滚还原
  *
  * 用法：
@@ -219,12 +219,12 @@ async function main() {
   const draftRow = rows.filter((r) => r.week === '2033-W05')[0];
   assert(!!draftRow, 'R3-2 草稿出现在列表中');
   assert(!!draftRow.createdAt, 'R3-2 草稿 createdAt 有值（可正常排序展示）');
-  assertEq(draftRow.submittedAt, null, 'R3-2 草稿提交时间列为 null → 前端显示 —');
+  assertEq(draftRow.submittedAt, null, 'R3-2 草稿 submittedAt 数据字段 = null（数据层保留，UI 不展示）');
 
-  /* R3-3 提交时间列字段保留：已提交记录 submittedAt 有值 */
+  /* R3-3 submittedAt 数据字段保留（UI 已删「提交时间」列）：已提交记录有值 */
   const submittedRows = rows.filter((r) => r.status === '已提交');
   assert(submittedRows.length >= 4, 'R3-3 已提交记录存在', submittedRows.length);
-  assert(submittedRows.every((r) => r.submittedAt), 'R3-3 已提交记录 submittedAt 有值（提交时间列保留）');
+  assert(submittedRows.every((r) => r.submittedAt), 'R3-3 已提交记录 submittedAt 有值（数据字段保留，UI 不展示）');
 
   /* 前端排序逻辑复核依据：sortState 默认 createdAt desc；TableSortLabel 切换 asc/desc —— 静态复核 */
   assert(true, 'R3-4 前端页面级排序静态复核（sortState 默认 desc + TableSortLabel 切换 + 空值兜底 —）');

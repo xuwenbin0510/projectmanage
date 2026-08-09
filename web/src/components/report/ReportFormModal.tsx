@@ -74,7 +74,8 @@ export interface ReportFormModalProps {
   /**
    * B5-R1 锁定入口（WBS「写日志」/ ReportsPage 旧链接传入 lockNodeId）：
    * 任务树全锁定——仅当前节点 `checked + disabled`，其余节点 checkbox 全 disabled；
-   * 全部「完成进度(%)」输入框只读，当前节点值 = WBS 当前进度（系统带入）。
+   * 仅当前关联任务（lockNodeId 对应节点）的「完成进度(%)」可编辑，其余任务进度输入只读；
+   * 当前节点进度初始值 = WBS 当前进度（系统带入，提交后按填写值回写该节点）。
    *
    * R5-P0-3（AC-3.8）：若该 id 指向的节点**已有子节点**，自动降级为不锁定
    * （见 `effectiveLockNodeId`），并在任务关联区 caption 提示，保护 ReportsPage 旧链接兼容路径。
@@ -137,7 +138,8 @@ export function ReportFormModal({
   );
   /** 锁定被降级（仅用于区域 caption 提示，D-2：不弹 toast） */
   const lockDowngraded = Boolean(lockNodeId) && !effectiveLockNodeId;
-  /** B5-R1：新建态 + 锁定入口（WBS「写日志」/ ReportsPage 旧链接）→ 任务树全锁定 + 进度只读 */
+  /** B5-R1：新建态 + 锁定入口（WBS「写日志」/ ReportsPage 旧链接）→ 任务树全锁定；
+   *  仅当前关联任务（effectiveLockNodeId）进度可编辑，其余进度输入只读 */
   const lockMode = !editingReport && effectiveLockNodeId !== null;
 
   const {
@@ -330,8 +332,8 @@ export function ReportFormModal({
               label="完成进度(%)"
               size="small"
               value={t.progressAfter}
-              /* B5-R1：锁定模式下全部「完成进度(%)」输入只读；父节点天然禁用（AC-3.3） */
-              disabled={readOnly || lockMode || hasChildren}
+              /* B5-R1：锁定模式下仅当前关联任务（effectiveLockNodeId）可改进度，其余只读；父节点天然禁用（AC-3.3） */
+              disabled={readOnly || (lockMode && effectiveLockNodeId !== n.id) || hasChildren}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
               sx={{ width: 92 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
@@ -396,7 +398,7 @@ export function ReportFormModal({
           )}
           {!editingReport && effectiveLockNodeId && (
             <Typography variant="caption" color="text.secondary">
-              由「写日志」进入，仅关联当前任务；进度由系统带入，不可修改
+              由「写日志」进入，仅关联当前任务；进度可修改，仅影响当前关联任务
             </Typography>
           )}
           {/* R5-P0-3：新建态恒显父节点规则说明（AC-3.3） */}
