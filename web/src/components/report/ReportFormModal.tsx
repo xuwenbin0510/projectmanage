@@ -361,7 +361,8 @@ export function ReportFormModal({
           checked={t.selected || locked}
           disabled={readOnly || lockMode || hasChildren}
           onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, selected: e.target.checked } }))}
-          style={{ accentColor: tokens.brand.primary }}
+          // 固定尺寸：副行 ml 依赖 checkbox 宽度(16) + Stack spacing(8) 对齐任务名起点
+          style={{ accentColor: tokens.brand.primary, width: 16, height: 16 }}
         />
       );
       return (
@@ -373,6 +374,7 @@ export function ReportFormModal({
             ...(locked ? { backgroundColor: alphaOf(tokens.brand.primary, 0.05), borderRadius: 1 } : {}),
           }}
         >
+          {/* 主行：勾选 + 锁图标 + 任务名 + 进度条（B8 两输入已拆至副行，避免一行 6 元素拥挤） */}
           <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', py: 0.25 }}>
             {/* disabled input 不触发 hover，父节点行必须套 span 才能出 Tooltip（布局不跳动） */}
             {hasChildren ? (
@@ -399,6 +401,10 @@ export function ReportFormModal({
                 <ProgressBar value={n.progress} height={5} showLabel={false} tone={progressToneOf(n.status)} />
               </Box>
             </Tooltip>
+          </Stack>
+          {/* 副行：完成进度(%) + 本周实际工时（人日）—— ml=checkbox 宽度(16)+Stack spacing(8)=24px，
+              与任务名/进度条水平起点对齐；disabled 三态与拆行前完全一致，仅挪位置不改逻辑 */}
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ ml: '24px', mt: 0.25, pb: 0.5 }}>
             <TextField
               type="number"
               label="完成进度(%)"
@@ -407,7 +413,7 @@ export function ReportFormModal({
               /* B5-R1：锁定模式下仅当前关联任务（effectiveLockNodeId）可改进度，其余只读；父节点天然禁用（AC-3.3） */
               disabled={readOnly || (lockMode && effectiveLockNodeId !== n.id) || hasChildren}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
-              sx={{ width: 92 }}
+              sx={{ width: 110 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
             />
             {/* B8（R2）：本周实际工时（人日）—— 仅勾选叶子可填（min 0 / step 0.5 / max WEEK_ACTUAL_DAYS_MAX）；
@@ -419,7 +425,7 @@ export function ReportFormModal({
               value={t.actualDays}
               disabled={actualDaysDisabled}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, actualDays: Number(e.target.value) } }))}
-              sx={{ width: 128 }}
+              sx={{ width: 150 }}
               InputProps={{ inputProps: { min: 0, step: 0.5, max: WEEK_ACTUAL_DAYS_MAX } }}
             />
           </Stack>
