@@ -17,6 +17,7 @@ import type {
 } from '@/types/project';
 import type { WbsNode, WbsNodeType, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
+import type { EffortReport } from '@/types/effort';
 import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
@@ -270,6 +271,9 @@ export interface ApiClient {
   submitReport(payload: ReportPayload): Promise<Report>;
   /** 编辑提交必须原样回传原始 report.tasks（selected/progressAfter 不变），引擎按 payload.tasks 整体重建，否则关联被清空（R3-7） */
   updateReport(id: string, payload: ReportPayload): Promise<Report>;
+
+  /* 工时统计报表 B9（只读聚合，与 WBS/看板同级可见性） */
+  getEffortReport(projectId: string): Promise<EffortReport>;
 
   /* 评审 P0-09 P0-10 */
   listReviews(projectId?: string): Promise<Review[]>;

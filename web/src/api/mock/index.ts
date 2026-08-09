@@ -21,6 +21,7 @@ import type {
 import type { WbsNode, TaskStatus, BoardConfig, BoardView, BoardColumn } from '@/types/wbs';
 import { BOARD_COLUMNS } from '@/types/wbs';
 import type { Report, ReportTaskRow, ReportRisk } from '@/types/report';
+import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem } from '@/types/effort';
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument } from '@/types/audit';
@@ -1844,7 +1845,113 @@ export class MockApiClient implements ApiClient {
     return deepClone(report);
   }
 
-  /* ── 评审 ─────────────────────────────────────── */
+  /* ── 工时统计报表 B9（只读聚合 · 与后端 report.service#getEffortReport 同构） ── */
+
+  /**
+   * B9（R2/R3/R4）：工时统计报表。
+   * 行/汇总复用文件内 `decorateEffort`（与后端 loadNodes 出参同口径），
+   * 父估算 = Σ 子树叶子（读时算、不落库）；breakdown 仅已提交 & weekActualDays>0，周倒序。
+   */
+  async getEffortReport(projectId: string): Promise<EffortReport> {
+    await delay(120);
+    const db = getDb();
+    currentUser(db);
+    const nodes = decorateEffort(db.wbsNodes.filter((n) => n.projectId === projectId));
+
+    /* parentId → 直接子数组（'__root__' = 根层），叶子判定唯一入口（SK-4） */
+    const childrenOf = new Map<string, WbsNode[]>();
+    for (const n of nodes) {
+      const key = n.parentId ?? '__root__';
+      const arr = childrenOf.get(key);
+      if (arr) arr.push(n);
+      else childrenOf.set(key, [n]);
+    }
+    const isLeaf = (n: WbsNode): boolean => !(childrenOf.get(n.id) ?? []).length;
+
+    /* 父估算 = Σ 子树叶子 estimateDays（读时算、不落库，与后端 buildEstimateIndex 同构） */
+    const estMemo = new Map<string, number>();
+    const estimateOf = (n: WbsNode, guard: number): number => {
+      if (guard > 64) return 0; // 防御性：脏数据成环时兜底
+      const cached = estMemo.get(n.id);
+      if (cached !== undefined) return cached;
+      const kids = childrenOf.get(n.id) ?? [];
+      const v = kids.length
+        ? kids.reduce((s, k) => s + estimateOf(k, guard + 1), 0)
+        : (Number(n.estimateDays) || 0);
+      estMemo.set(n.id, v);
+      return v;
+    };
+
+    /* 里程碑 badge：一次查表带 code/name */
+    const msMap = new Map<string, { code: string; name: string }>();
+    for (const m of db.milestones) msMap.set(m.id, { code: m.code, name: m.name });
+
+    const rows: EffortReportRow[] = nodes.map((n) => {
+      const leaf = isLeaf(n);
+      const estimateDays = estimateOf(n, 0);
+      const effortHours = Number(n.effortHours) || 0;
+      const diff = effortHours - estimateDays;
+      const diffRate = estimateDays > 0 ? effortHours / estimateDays - 1 : null;
+      const ms = n.milestoneId ? msMap.get(n.milestoneId) : null;
+      return {
+        id: n.id,
+        parentId: n.parentId,
+        wbsCode: n.wbsCode,
+        level: n.level,
+        nodeType: n.nodeType,
+        name: n.name,
+        owner: n.owner,
+        ownerName: n.ownerName,
+        estimateDays,
+        effortHours,
+        effortChildCount: Number(n.effortChildCount) || 0,
+        diff,
+        diffRate,
+        isOverrun: effortHours > estimateDays,
+        progress: n.progress,
+        status: n.status,
+        isLeaf: leaf,
+        milestoneId: n.milestoneId,
+        milestoneCode: ms?.code ?? '',
+        milestoneName: ms?.name ?? '',
+      };
+    });
+
+    const leaves = nodes.filter((n) => isLeaf(n));
+    const estimateTotal = leaves.reduce((s, n) => s + (Number(n.estimateDays) || 0), 0);
+    const actualTotal = leaves.reduce((s, n) => s + (Number(n.effortHours) || 0), 0);
+    const summary: EffortSummary = {
+      estimateTotal,
+      actualTotal,
+      diff: actualTotal - estimateTotal,
+      diffRate: estimateTotal > 0 ? actualTotal / estimateTotal - 1 : null,
+      overrunCount: leaves.filter((n) => (Number(n.effortHours) || 0) > (Number(n.estimateDays) || 0)).length,
+      leafCount: leaves.length,
+      parentCount: nodes.length - leaves.length,
+    };
+
+    /* breakdown：仅已提交 & selected & weekActualDays>0，周倒序（同周按 submittedAt 升序） */
+    const effortBreakdown: Record<string, EffortBreakdownItem[]> = {};
+    const submitted = db.reports
+      .filter((r) => r.projectId === projectId && r.status === '已提交')
+      .sort((a, b) => {
+        if (a.week !== b.week) return a.week < b.week ? 1 : -1;
+        const sa = a.submittedAt ?? '';
+        const sb = b.submittedAt ?? '';
+        return sa < sb ? -1 : sa > sb ? 1 : 0;
+      });
+    for (const r of submitted) {
+      for (const t of r.tasks) {
+        if (!t.selected) continue;
+        const days = Number(t.weekActualDays) || 0;
+        if (days <= 0) continue;
+        const list = effortBreakdown[t.nodeId] ?? (effortBreakdown[t.nodeId] = []);
+        list.push({ week: r.week, reporterName: r.authorName, submittedAt: r.submittedAt, weekActualDays: days });
+      }
+    }
+
+    return deepClone({ projectId, summary, rows, effortBreakdown });
+  }
 
   async listReviews(projectId?: string): Promise<Review[]> {
     await delay(100);
@@ -1862,6 +1969,8 @@ export class MockApiClient implements ApiClient {
     const rows = db.reviews.filter((r) => canDecide(r, me.openId) !== null);
     return deepClone(rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)));
   }
+
+  /* ── 评审 ─────────────────────────────────────── */
 
   async getReview(id: string): Promise<Review> {
     await delay(80);

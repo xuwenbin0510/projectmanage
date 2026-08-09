@@ -270,6 +270,225 @@ function getReport(db, projectId, week) {
   return rowToApiReport(row, children.tasks[key], children.risks[key]);
 }
 
+/* ── 工时统计报表（B9 · 只读聚合） ─────────────────── */
+
+/**
+ * 构造估算索引：父估算 = Σ 子树**叶子** estimateDays（读时算、不落库，与 decorateEffort 同构）。
+ *
+ * B9 决策 D-B9-3 / 共享约定 B9-3：父节点行的估算仅用于报表行级比较
+ * （与 effortHours 的 Σ 对称），报表汇总口径仍是 Σ 叶子（B9-1）。
+ * 递归深度守卫 ≤64：脏数据成环时兜底，不爆栈。
+ *
+ * @param {Object<string, object[]>} childrenMap parentId → 直接子节点数组（'__root__' = 根层）
+ * @param {Map<string, object>} byId nodeId → 节点（API 形态）
+ * @returns {{isLeaf: (node: object) => boolean, estimateOf: (nodeId: string, guard?: number) => number}}
+ */
+function buildEstimateIndex(childrenMap, byId) {
+  const memo = new Map();
+  const isLeaf = function (node) {
+    return !(childrenMap.get(String(node.id)) || []).length;
+  };
+  const estimateOf = function (nodeId, guard) {
+    if (guard > 64) return 0; // 防御性：脏数据成环时兜底
+    if (memo.has(String(nodeId))) return memo.get(String(nodeId));
+    const node = byId.get(String(nodeId));
+    if (!node) return 0;
+    const kids = childrenMap.get(String(nodeId)) || [];
+    let v;
+    if (kids.length) {
+      v = kids.reduce(function (s, k) {
+        return s + estimateOf(k.id, (guard || 0) + 1);
+      }, 0);
+    } else {
+      v = Number(node.estimateDays) || 0;
+    }
+    memo.set(String(nodeId), v);
+    return v;
+  };
+  return { isLeaf: isLeaf, estimateOf: estimateOf };
+}
+
+/**
+ * 全节点扁平 → 报表明细行（父=容器汇总行、叶=任务行）。
+ *
+ * 每行输出 B9 §3 `EffortReportRow` 全字段；`effortHours` 直接复用
+ * `wbsService.loadNodes`（decorateEffort）的装饰值：叶=累计存储、父=Σ直接子（已递归）。
+ * `diffRate` 估算为 0 → null（前端「—」、排序置底）；超支判定独立于偏差率
+ * （actual > estimate 即超支，估 0 且实 > 0 也计）。
+ *
+ * @param {object[]} nodes 同项目全部节点（decorateEffort 出参，compareWbsCode 树序）
+ * @param {Object<string, object[]>} childrenMap
+ * @param {{isLeaf: Function, estimateOf: Function}} estimateIndex
+ * @param {Map<string, object>} milestoneMap milestoneId → {id, code, name}
+ * @returns {object[]} EffortReportRow[]
+ */
+function buildEffortRows(nodes, childrenMap, estimateIndex, milestoneMap) {
+  return nodes.map(function (n) {
+    const isLeaf = estimateIndex.isLeaf(n);
+    const estimateDays = estimateIndex.estimateOf(n.id, 0);
+    const effortHours = Number(n.effortHours) || 0;
+    const diff = effortHours - estimateDays;
+    const diffRate = estimateDays > 0 ? effortHours / estimateDays - 1 : null;
+    const ms = n.milestoneId ? milestoneMap.get(String(n.milestoneId)) : null;
+    const milestoneId =
+      n.milestoneId === null || n.milestoneId === undefined || n.milestoneId === ''
+        ? null
+        : String(n.milestoneId);
+    return {
+      id: toStr(n.id),
+      parentId: n.parentId === null || n.parentId === undefined ? null : toStr(n.parentId),
+      wbsCode: toStr(n.wbsCode),
+      level: Number(n.level) || 1,
+      nodeType: toStr(n.nodeType, 'task'),
+      name: toStr(n.name),
+      owner: toStr(n.owner),
+      ownerName: toStr(n.ownerName),
+      estimateDays: estimateDays,
+      effortHours: effortHours,
+      effortChildCount: Number(n.effortChildCount) || 0,
+      diff: diff,
+      diffRate: diffRate,
+      isOverrun: effortHours > estimateDays,
+      progress: Number(n.progress) || 0,
+      status: toStr(n.status, '待办'),
+      isLeaf: isLeaf,
+      milestoneId: milestoneId,
+      milestoneCode: ms ? toStr(ms.code) : '',
+      milestoneName: ms ? toStr(ms.name) : '',
+    };
+  });
+}
+
+/**
+ * 汇总卡片口径（共享约定 B9-1）：一律只算**叶子**（SK-4 = 无子节点）。
+ * 偏差率 = Σ实际/Σ估算 − 1，估算总和 0 → null；超支计数 = 叶子中实际 > 估算 的行数。
+ * @param {object[]} nodes 同项目全部节点（decorateEffort 出参）
+ * @param {{isLeaf: Function}} estimateIndex
+ * @returns {object} EffortSummary
+ */
+function buildEffortSummary(nodes, estimateIndex) {
+  const leaves = nodes.filter(estimateIndex.isLeaf);
+  const estimateTotal = leaves.reduce(function (s, n) {
+    return s + (Number(n.estimateDays) || 0);
+  }, 0);
+  const actualTotal = leaves.reduce(function (s, n) {
+    return s + (Number(n.effortHours) || 0);
+  }, 0);
+  return {
+    estimateTotal: estimateTotal,
+    actualTotal: actualTotal,
+    diff: actualTotal - estimateTotal,
+    diffRate: estimateTotal > 0 ? actualTotal / estimateTotal - 1 : null,
+    overrunCount: leaves.filter(function (n) {
+      return (Number(n.effortHours) || 0) > (Number(n.estimateDays) || 0);
+    }).length,
+    leafCount: leaves.length,
+    parentCount: nodes.length - leaves.length,
+  };
+}
+
+/**
+ * 实际工时构成明细（B9 R4）：nodeId → 已提交周报贡献行（周倒序）。
+ *
+ * 1 条 join SQL 聚合：仅 `work_reports.status='已提交'` 且 `selected=1` 且
+ * `week_actual_days > 0` 的行（草稿不累计不展示；selected=1 为防脏数据双保险）。
+ * JS 按 nodeId 分组为 `Record<string, EffortBreakdownItem[]>`；无贡献的节点不出现 key。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} projectId
+ * @returns {Object<string, object[]>}
+ */
+function buildEffortBreakdown(db, projectId) {
+  const rows = db
+    .prepare(
+      'SELECT t.node_id AS nodeId,' +
+        '       r.week AS week,' +
+        '       r.author_name AS reporterName,' +
+        '       r.submitted_at AS submittedAt,' +
+        '       t.week_actual_days AS weekActualDays' +
+        '  FROM work_report_tasks t' +
+        '  JOIN work_reports r ON r.id = t.report_id' +
+        ' WHERE r.project_id = ?' +
+        "   AND r.status = '已提交'" +
+        '   AND t.selected = 1' +
+        '   AND t.week_actual_days > 0' +
+        ' ORDER BY r.week DESC, r.submitted_at ASC'
+    )
+    .all(String(projectId));
+  const out = {};
+  rows.forEach(function (row) {
+    const key = String(row.nodeId);
+    if (!out[key]) out[key] = [];
+    out[key].push({
+      week: toStr(row.week),
+      reporterName: toStr(row.reporterName),
+      submittedAt:
+        row.submittedAt === null || row.submittedAt === undefined
+          ? null
+          : String(row.submittedAt),
+      weekActualDays: Number(row.weekActualDays) || 0,
+    });
+  });
+  return out;
+}
+
+/**
+ * B9（R2/R3/R4）：工时统计报表 —— 只读聚合接口，纯读侧扩展，无迁移 / 无写通道改动。
+ *
+ * 行 / 汇总复用 `wbsService.loadNodes`（decorateEffort 出参：effortHours / effortChildCount /
+ * estimateDays / progress / ownerName / milestoneId），仅「实际工时构成」走 1 条 join SQL；
+ * 父估算 = Σ 子树叶子（读时算、不落库）。无节点项目返回空结构不抛错。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} projectId
+ * @returns {{projectId: string, summary: object, rows: object[], effortBreakdown: Object<string, object[]>}} EffortReport
+ */
+function getEffortReport(db, projectId) {
+  const pid = String(projectId || '');
+  const nodes = wbsService.loadNodes(db, pid);
+  if (!nodes.length) {
+    return {
+      projectId: pid,
+      summary: {
+        estimateTotal: 0,
+        actualTotal: 0,
+        diff: 0,
+        diffRate: null,
+        overrunCount: 0,
+        leafCount: 0,
+        parentCount: 0,
+      },
+      rows: [],
+      effortBreakdown: {},
+    };
+  }
+
+  /* parentId → 直接子数组（'__root__' = 根层），叶子判定唯一入口 */
+  const childrenMap = new Map();
+  const byId = new Map();
+  nodes.forEach(function (n) {
+    byId.set(String(n.id), n);
+    const key = n.parentId === null || n.parentId === undefined ? '__root__' : String(n.parentId);
+    const arr = childrenMap.get(key);
+    if (arr) arr.push(n);
+    else childrenMap.set(key, [n]);
+  });
+
+  /* 里程碑 badge 一次查表带 code/name（前端零状态、零额外请求，D-B9-3 补充4） */
+  const milestoneMap = new Map();
+  db.prepare('SELECT id, code, name FROM milestones WHERE project_id = ?')
+    .all(pid)
+    .forEach(function (m) { milestoneMap.set(String(m.id), m); });
+
+  const estimateIndex = buildEstimateIndex(childrenMap, byId);
+  const rows = buildEffortRows(nodes, childrenMap, estimateIndex, milestoneMap);
+  const summary = buildEffortSummary(nodes, estimateIndex);
+  const effortBreakdown = buildEffortBreakdown(db, pid);
+
+  /* 数值保留原始浮点，前端统一 toFixed(1) 展示（共享约定 B9-8） */
+  return { projectId: pid, summary: summary, rows: rows, effortBreakdown: effortBreakdown };
+}
+
 /* ── 写 ─────────────────────────────────────────────── */
 
 /**
@@ -700,6 +919,8 @@ module.exports = {
   // 读
   listReports,
   getReport,
+  // 工时统计报表（B9 · 只读聚合）
+  getEffortReport,
   // 写
   createReport,
   updateReport,

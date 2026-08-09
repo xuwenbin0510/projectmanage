@@ -394,12 +394,19 @@ export function WbsPage(): JSX.Element {
                 <ProgressBar value={progress} height={5} showLabel={false} tone={progressToneOf(node.status)} />
               </Box>
             </Tooltip>
-            {/* 估算列保持叶子条件（父节点无估算展示，120px 进度条保证行对齐） */}
-            {isLeaf && (
-              <Typography variant="caption" sx={{ color: 'text.secondary', width: 56, flexShrink: 0 }}>
-                {fmtDays(node.estimateDays)}
+            {/* B9（R5）：全节点「估 x.x · 实 x.x 人日」只读（前端零聚合，直接用出参
+                estimateDays/effortHours/effortChildCount；父=Σ 子由服务端 decorateEffort 保证） */}
+            <Tooltip
+              title={isLeaf ? '估算 vs 累计实际工时（人日）' : `实为 Σ ${node.effortChildCount} 个子任务（由工作日志累计）`}
+              arrow
+            >
+              <Typography
+                variant="caption"
+                sx={{ color: 'text.secondary', width: 116, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}
+              >
+                估 {fmtDays(node.estimateDays)} · 实 {fmtDays(node.effortHours)}
               </Typography>
-            )}
+            </Tooltip>
             {node.ownerName ? (
               <UserAvatar name={node.ownerName} size={24} />
             ) : (

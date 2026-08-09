@@ -42,6 +42,18 @@ router.get(
   }),
 );
 
+/** 工时统计报表（B9 · 只读聚合）：loadNodes + 父估算 Σ 叶子 + 已提交日志构成明细。
+ *  `requireAuth` 即可读（与 WBS/看板/周报列表同级可见性，无需 report:write）；
+ *  `rbac.loadProject` 404 兜底（与 WBS 读路径一致）。 */
+router.get(
+  '/projects/:projectId/effort-report',
+  requireAuth,
+  asyncHandler(async function getEffortReport(req, res) {
+    rbac.loadProject(db, req.params.projectId);
+    res.json(ok(reportSvc.getEffortReport(db, req.params.projectId)));
+  }),
+);
+
 /* ── 写 ─────────────────────────────────────────────── */
 
 /** 暂存 / 提交：用 body.submit 区分（对齐 web/src/api/http.ts#saveReport/submitReport） */

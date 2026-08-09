@@ -69,9 +69,21 @@ function CardBody({ card }: CardBodyProps): JSX.Element {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <ProgressBar value={card.progress} height={5} showLabel={false} />
         </Box>
-        <Typography variant="caption" color="text.secondary">
-          {fmtDays(card.estimateDays)}
-        </Typography>
+        {/* B9（R6）：卡片副信息「估 x.x / 实 x.x 人日」，超支（实>估，估 0 且实>0 同判）时「实」值着色 */}
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+          <Typography variant="caption" color="text.secondary">
+            估 {fmtDays(card.estimateDays)}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            /
+          </Typography>
+          <Typography
+            variant="caption"
+            sx={{ color: card.effortHours > card.estimateDays ? tokens.status.danger : 'text.secondary' }}
+          >
+            实 {fmtDays(card.effortHours)}
+          </Typography>
+        </Stack>
         {card.ownerName ? <UserAvatar name={card.ownerName} size={22} /> : null}
       </Stack>
     </>

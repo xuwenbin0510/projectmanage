@@ -17,6 +17,7 @@ import type {
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
+import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
@@ -267,6 +268,11 @@ export class HttpApiClient implements ApiClient {
 
   updateReport(id: string, payload: ReportPayload): Promise<Report> {
     return patch<Report>(`/projects/${payload.projectId}/reports/${id}`, payload);
+  }
+
+  /* 工时统计报表 B9 */
+  getEffortReport(projectId: string): Promise<EffortReport> {
+    return get<EffortReport>(`/projects/${projectId}/effort-report`);
   }
 
   /* 评审 */
