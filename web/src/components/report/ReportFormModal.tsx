@@ -369,13 +369,16 @@ export function ReportFormModal({
         <Box
           key={n.id}
           sx={{
+            // B8.2：任务容器改 column 布局——主行 / 副行 / 子任务三层严格垂直堆叠，互不重叠
+            display: 'flex',
+            flexDirection: 'column',
             pl: depth * 2,
             // B5-R4：锁定节点行品牌青 tint（checked+disabled + 锁图标 + 浅青底）
             ...(locked ? { backgroundColor: alphaOf(tokens.brand.primary, 0.05), borderRadius: 1 } : {}),
           }}
         >
-          {/* 主行：勾选 + 锁图标 + 任务名 + 进度条（B8 两输入已拆至副行，避免一行 6 元素拥挤） */}
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', py: 0.25 }}>
+          {/* 主行：勾选 + 锁图标 + 任务名 + 进度条（flex row + wrap：窄容器内整体换行不挤压） */}
+          <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, py: 0.25 }}>
             {/* disabled input 不触发 hover，父节点行必须套 span 才能出 Tooltip（布局不跳动） */}
             {hasChildren ? (
               <Tooltip title={PARENT_ROW_TIP} arrow>
@@ -390,21 +393,30 @@ export function ReportFormModal({
               </Tooltip>
             )}
             <Typography
-              sx={{ fontSize: 13, flex: '1 1 160px', minWidth: 0, color: hasChildren ? 'text.secondary' : undefined }}
+              sx={{
+                fontSize: 13,
+                flex: '1 1 120px',
+                minWidth: 0,
+                // B8.2：minWidth 0 + ellipsis 才能让 noWrap 在窄容器正常省略而非 shrink 到空白
+                textOverflow: 'ellipsis',
+                overflow: 'hidden',
+                color: hasChildren ? 'text.secondary' : undefined,
+              }}
               noWrap
             >
               {n.wbsCode} {n.name}
             </Typography>
-            {/* R4-P0-5：进度条包 Tooltip + 状态色调（ReportsPage 树部分） */}
+            {/* R4-P0-5：进度条包 Tooltip + 状态色调（ReportsPage 树部分）；flexShrink 0 防被压缩消失 */}
             <Tooltip title={`${n.name} ${n.progress}%（${n.status}）`} arrow>
-              <Box sx={{ width: 90 }}>
+              <Box sx={{ width: 90, flexShrink: 0 }}>
                 <ProgressBar value={n.progress} height={5} showLabel={false} tone={progressToneOf(n.status)} />
               </Box>
             </Tooltip>
-          </Stack>
-          {/* 副行：完成进度(%) + 本周实际工时（人日）—— ml=checkbox 宽度(16)+Stack spacing(8)=24px，
-              与任务名/进度条水平起点对齐；disabled 三态与拆行前完全一致，仅挪位置不改逻辑 */}
-          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ ml: '24px', mt: 0.25, pb: 0.5 }}>
+          </Box>
+          {/* 副行：完成进度(%) + 本周实际工时（人日）—— ml=checkbox 宽度(16)+主行 gap(8)=24px，
+              与任务名/进度条水平起点对齐；flex row + wrap 窄容器换行不溢出；
+              disabled 三态与拆行前完全一致，仅挪位置不改逻辑 */}
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', ml: '24px', mt: 0.25, pb: 0.5 }}>
             <TextField
               type="number"
               label="完成进度(%)"
@@ -428,8 +440,9 @@ export function ReportFormModal({
               sx={{ width: 150 }}
               InputProps={{ inputProps: { min: 0, step: 0.5, max: WEEK_ACTUAL_DAYS_MAX } }}
             />
-          </Stack>
-          {n.children && n.children.length > 0 && renderTaskTree(n.children, depth + 1)}
+          </Box>
+          {/* 子任务递归：外层 mt 让子任务与父副行有视觉间距；子任务行自身继续 column 垂直堆叠 */}
+          {n.children && n.children.length > 0 && <Box sx={{ mt: 0.5 }}>{renderTaskTree(n.children, depth + 1)}</Box>}
         </Box>
       );
     });
