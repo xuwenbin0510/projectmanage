@@ -361,7 +361,7 @@ export function ReportFormModal({
           checked={t.selected || locked}
           disabled={readOnly || lockMode || hasChildren}
           onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, selected: e.target.checked } }))}
-          // 固定尺寸：副行 ml 依赖 checkbox 宽度(16) + Stack spacing(8) 对齐任务名起点
+          // 固定尺寸：checkbox 宽 16 高 16，与行高匹配（单行布局下所有元素垂直居中）
           style={{ accentColor: tokens.brand.primary, width: 16, height: 16 }}
         />
       );
@@ -369,16 +369,15 @@ export function ReportFormModal({
         <Box
           key={n.id}
           sx={{
-            // B8.2：任务容器改 column 布局——主行 / 副行 / 子任务三层严格垂直堆叠，互不重叠
-            display: 'flex',
-            flexDirection: 'column',
             pl: depth * 2,
             // B5-R4：锁定节点行品牌青 tint（checked+disabled + 锁图标 + 浅青底）
             ...(locked ? { backgroundColor: alphaOf(tokens.brand.primary, 0.05), borderRadius: 1 } : {}),
           }}
         >
-          {/* 主行：勾选 + 锁图标 + 任务名 + 进度条（flex row + wrap：窄容器内整体换行不挤压） */}
-          <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, py: 0.25 }}>
+          {/* B8.3：一个任务 = 一行——勾选 + 锁图标 + 任务名 + 进度条 + 完成进度(%) + 本周实际工时（人日）
+              全部在同一行（用户明确要求不换行）；弹窗已加宽 lg(1200px)，一行 6 元素不再拥挤；
+              flexWrap 仅作极端窄屏兜底，正常视口下不触发 */}
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', py: 0.25 }}>
             {/* disabled input 不触发 hover，父节点行必须套 span 才能出 Tooltip（布局不跳动） */}
             {hasChildren ? (
               <Tooltip title={PARENT_ROW_TIP} arrow>
@@ -412,11 +411,7 @@ export function ReportFormModal({
                 <ProgressBar value={n.progress} height={5} showLabel={false} tone={progressToneOf(n.status)} />
               </Box>
             </Tooltip>
-          </Box>
-          {/* 副行：完成进度(%) + 本周实际工时（人日）—— ml=checkbox 宽度(16)+主行 gap(8)=24px，
-              与任务名/进度条水平起点对齐；flex row + wrap 窄容器换行不溢出；
-              disabled 三态与拆行前完全一致，仅挪位置不改逻辑 */}
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', ml: '24px', mt: 0.25, pb: 0.5 }}>
+            {/* B8.3：完成进度(%) 紧接进度条右侧（同行）；disabled 三态与 B8.2 完全一致，仅挪回同行不改逻辑 */}
             <TextField
               type="number"
               label="完成进度(%)"
@@ -425,11 +420,12 @@ export function ReportFormModal({
               /* B5-R1：锁定模式下仅当前关联任务（effectiveLockNodeId）可改进度，其余只读；父节点天然禁用（AC-3.3） */
               disabled={readOnly || (lockMode && effectiveLockNodeId !== n.id) || hasChildren}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
-              sx={{ width: 110 }}
+              sx={{ width: 110, flexShrink: 0 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
             />
             {/* B8（R2）：本周实际工时（人日）—— 仅勾选叶子可填（min 0 / step 0.5 / max WEEK_ACTUAL_DAYS_MAX）；
-                未勾选 disabled 灰显（值保留但不提交）、父节点恒禁用、编辑态勾选行=冲正入口 */}
+                未勾选 disabled 灰显（值保留但不提交）、父节点恒禁用、编辑态勾选行=冲正入口；
+                B8.3：与完成进度(%) 并排同行（在完成进度右侧） */}
             <TextField
               type="number"
               label="本周实际工时（人日）"
@@ -437,12 +433,12 @@ export function ReportFormModal({
               value={t.actualDays}
               disabled={actualDaysDisabled}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, actualDays: Number(e.target.value) } }))}
-              sx={{ width: 150 }}
+              sx={{ width: 150, flexShrink: 0 }}
               InputProps={{ inputProps: { min: 0, step: 0.5, max: WEEK_ACTUAL_DAYS_MAX } }}
             />
-          </Box>
-          {/* 子任务递归：外层 mt 让子任务与父副行有视觉间距；子任务行自身继续 column 垂直堆叠 */}
-          {n.children && n.children.length > 0 && <Box sx={{ mt: 0.5 }}>{renderTaskTree(n.children, depth + 1)}</Box>}
+          </Stack>
+          {/* 子任务递归：子任务行自然换行缩进到下一层 */}
+          {n.children && n.children.length > 0 && renderTaskTree(n.children, depth + 1)}
         </Box>
       );
     });
@@ -452,7 +448,8 @@ export function ReportFormModal({
       open={open}
       title={editingReport ? `编辑工作日志 · ${project?.name ?? ''}` : `新建工作日志 · ${project?.name ?? ''}`}
       submitText="提交"
-      maxWidth="md"
+      // B8.3：弹窗加宽 lg(1200px)，保证一行 6 元素（勾选/名称/进度条/完成进度/实际工时）不换行不拥挤
+      maxWidth="lg"
       onClose={onClose}
       onSubmit={handleSubmit((v) => void doSave(v, true))}
       extraActions={
