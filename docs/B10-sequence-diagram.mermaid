@@ -1,0 +1,73 @@
+sequenceDiagram
+  autonumber
+  actor U as 用户（PM/TL）
+  participant FE as 前端（ReviewsPage/ApprovalsPage/WorkbenchPage）
+  participant RT as reviews.routes
+  participant RS as review.service
+  participant FL as project-flow.service
+  participant DB as SQLite（reviews/review_steps/review_approvals/...）
+  participant AU as audit_logs
+
+  %% ── 发起评审 ──
+  U->>FE: 发起评审（type+title）
+  FE->>RT: POST /api/reviews {projectId, refType, refId, reviewType, title}
+  RT->>RT: rbac.assertWritable（归档 E_PROJECT_ARCHIVED）
+  RT->>RT: rbac.assertCan(review:start)
+  RT->>RS: createReview(db, payload, me)
+  RS->>DB: 读 projects（type → APPROVAL_TEMPLATES[type] 或 REVIEW_TEMPLATES[type]）
+  RS->>RS: buildSteps（assignees>成员>全局>兜底；parallel_veto 全 current）
+  RS->>DB: 事务 INSERT reviews + review_steps + review_approvals(submit, stepIndex=-1)
+  RS->>AU: writeAudit(review, create)
+  RS-->>RT: Review（含 steps + submit 记录）
+  RT-->>FE: {code:0, data: Review}
+  FE-->>U: ReviewStepper 展示审批链
+
+  %% ── 逐级审批 ──
+  U->>FE: 点击通过/驳回
+  FE->>RT: POST /api/reviews/:id/approve|reject {comment, evidenceUrl?}
+  RT->>RS: decide(id, action, payload, me)
+  RS->>RS: status==='审批中' 否则 E_REVIEW_CLOSED(409)
+  RS->>RS: canDecide(me)（含 admin 兜底）否则 E_NOT_APPROVER(403)
+  RS->>RS: customer_rep 缺意见且缺凭证 → E_PROXY_EVIDENCE_REQUIRED(400)
+  RS->>DB: 事务 UPDATE review_steps + INSERT review_approvals
+  alt reject
+    RS->>DB: review.status='已驳回'+closedAt+其余步 skipped
+    RS->>AU: writeAudit(review, reject, diff)
+  else approve && parallel_veto 全票通过
+    RS->>DB: review.status='已通过'+closedAt
+    RS->>RS: onReviewApproved（gate→门已通过+achieveMilestoneByGate；project→UPDATE projects 已批准）
+    RS->>AU: writeAudit(review, approve, diff)
+  else approve && serial 末步
+    RS->>DB: review.status='已通过'+closedAt
+    RS->>RS: onReviewApproved（project→已批准+审计 status_change）
+    RS->>AU: writeAudit(review, approve, diff)
+  else approve && serial 推进
+    RS->>DB: currentStep+1、下一人 current
+    RS->>AU: writeAudit(review, approve)
+  end
+  RS-->>RT: Review
+  RT-->>FE: {code:0, data: Review}
+
+  %% ── 状态机流转 ──
+  U->>FE: 结项/流转
+  FE->>FL: POST /api/projects/:id/transition {to, comment}
+  FL->>FL: assertWritable（归档拦截）+ assertCan(project:transition)
+  FL->>FL: to ∈ PROJECT_TRANSITIONS[from] 否则 E_VALIDATION(400)
+  FL->>FL: Q3 特判：审批中 project 评审存在 → E_VALIDATION
+  alt to==='已结项'
+    FL->>FL: closeBlockers(db, id)
+    FL-->>FE: 有阻塞 → E_CLOSE_BLOCKED(409) + data.blockers
+  end
+  FL->>DB: UPDATE projects.status (+actual_end)
+  FL->>AU: writeAudit(project, status_change, diff)
+  FL-->>FE: {code:0, data: Project}
+
+  %% ── 工作台 ──
+  U->>FE: 打开工作台
+  FE->>RT: GET /api/workbench
+  RT->>RS: listMyApprovals(db, me)
+  RS-->>RT: Review[]（canDecide 命中）
+  RT->>RT: countPendingApprovals = listMyApprovals.length
+  RT->>RT: listReportReminders（我参与且进行中，本周 work_reports 已提交 → filled）
+  RT-->>FE: WorkbenchData（stats 三数字 + 四数组）
+  FE-->>U: StatCard / ReviewStepper / 周报提醒渲染

@@ -18,10 +18,12 @@ const express = require('express');
 const db = require('../../db');
 const { ok, asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
 const { requireAuth } = require('../middleware/auth');
+const rbac = require('../middleware/rbac');
 const projectService = require('../services/project.service');
 const classifyService = require('../services/classify.service');
 const memberService = require('../services/member.service');
 const boardService = require('../services/board.service');
+const projectFlowService = require('../services/project-flow.service');
 
 const router = express.Router();
 
@@ -134,6 +136,27 @@ router.patch(
   asyncHandler(async function updateBoardConfig(req, res) {
     const body = req.body || {};
     res.json(ok(boardService.updateBoardConfig(db, req, req.params.projectId, body.wipLimits), '看板配置已更新'));
+  }),
+);
+
+/** P0-17 项目状态机流转（B10 真实实现，替代 stubs 桩） */
+router.post(
+  '/projects/:id/transition',
+  requireAuth,
+  asyncHandler(async function transitionProject(req, res) {
+    const body = req.body || {};
+    const project = projectFlowService.transitionProject(db, req, req.params.id, body.to, body.comment);
+    res.json(ok(project, '项目状态已更新'));
+  }),
+);
+
+/** P0-17 结项前置检查（B10 真实实现：未过门 / 未达成碑 / 审批中评审 / 未关闭变更） */
+router.get(
+  '/projects/:projectId/close-check',
+  requireAuth,
+  asyncHandler(async function closeCheck(req, res) {
+    rbac.loadProject(db, req.params.projectId);
+    res.json(ok(projectFlowService.checkClose(db, req.params.projectId)));
   }),
 );
 

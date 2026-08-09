@@ -758,6 +758,114 @@ function migrationV5(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v5 为 work_report_tasks 增加 week_actual_days 列（本周实际人日，B8）');
 }
 
+/* ── v6：评审 + 变更（B10 · T01） ────────────────────── */
+
+/**
+ * 迁移 v6：评审三表 + 空 changes 表（B10 D1）。
+ *
+ * 表：
+ *  1. `reviews`          评审主表（对齐 `web/src/types/review.ts#Review`，
+ *                        除 projectName 外全部落库；projectName 读时 join）
+ *  2. `review_steps`     评审步骤（对齐 ReviewStep）
+ *  3. `review_approvals` 审批留痕（对齐 Approval）
+ *  4. `changes`          变更单（Q5 推荐：仅 DDL，本期无服务；
+ *                        close-check 的 kind:'change' 查此表恒返回空，后续变更单直接复用）
+ *
+ * 幂等：全部 `CREATE TABLE IF NOT EXISTS` + 索引 `IF NOT EXISTS`（沿用 v2/v3 范式）。
+ * ⚠ 列名避开 SQLite 关键字（D-10）：无 key/order/group/select 等。
+ * ⚠ `run()` 已统一开事务并处理 `PRAGMA foreign_keys`，此处**不要**自行 BEGIN。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV6(db, now) { // eslint-disable-line no-unused-vars
+  /* ---------- 1. reviews ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id                TEXT PRIMARY KEY,
+      project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      ref_type          TEXT NOT NULL DEFAULT 'project',
+      ref_id            TEXT NOT NULL DEFAULT '',
+      review_type       TEXT NOT NULL,
+      title             TEXT NOT NULL,
+      template_key      TEXT NOT NULL DEFAULT '',
+      mode              TEXT NOT NULL DEFAULT 'serial',
+      status            TEXT NOT NULL DEFAULT '审批中',
+      current_step      INTEGER NOT NULL DEFAULT 0,
+      initiator_open_id TEXT NOT NULL,
+      initiator_name    TEXT NOT NULL DEFAULT '',
+      created_at        TEXT NOT NULL,
+      updated_at        TEXT NOT NULL,
+      closed_at         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_reviews_project   ON reviews(project_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_reviews_status    ON reviews(status);
+    CREATE INDEX IF NOT EXISTS idx_reviews_initiator ON reviews(initiator_open_id);
+  `);
+
+  /* ---------- 2. review_steps ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS review_steps (
+      id               TEXT PRIMARY KEY,
+      review_id        TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      step_index       INTEGER NOT NULL,
+      role             TEXT NOT NULL,
+      assignee_open_id TEXT,
+      assignee_name    TEXT NOT NULL DEFAULT '',
+      required         INTEGER NOT NULL DEFAULT 1,
+      status           TEXT NOT NULL DEFAULT 'pending',
+      decided_by       TEXT,
+      decided_by_name  TEXT NOT NULL DEFAULT '',
+      decided_at       TEXT,
+      comment          TEXT NOT NULL DEFAULT '',
+      UNIQUE (review_id, step_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_steps_review ON review_steps(review_id, step_index);
+  `);
+
+  /* ---------- 3. review_approvals ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS review_approvals (
+      id            TEXT PRIMARY KEY,
+      review_id     TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      project_id    TEXT NOT NULL,
+      step_index    INTEGER NOT NULL,
+      step_role     TEXT NOT NULL,
+      actor_open_id TEXT NOT NULL,
+      actor_name    TEXT NOT NULL DEFAULT '',
+      action        TEXT NOT NULL,
+      comment       TEXT NOT NULL DEFAULT '',
+      evidence_url  TEXT NOT NULL DEFAULT '',
+      created_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_approvals_review ON review_approvals(review_id, created_at);
+  `);
+
+  /* ---------- 4. changes（仅 DDL） ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS changes (
+      id               TEXT PRIMARY KEY,
+      project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      change_type      TEXT NOT NULL,
+      title            TEXT NOT NULL,
+      content          TEXT NOT NULL DEFAULT '',
+      impact_analysis  TEXT NOT NULL DEFAULT '',
+      effort_days      REAL NOT NULL DEFAULT 0,
+      target_type      TEXT NOT NULL DEFAULT '',
+      target_id        TEXT NOT NULL DEFAULT '',
+      status           TEXT NOT NULL DEFAULT '草稿',
+      route            TEXT NOT NULL DEFAULT 'pm_only',
+      created_by       TEXT NOT NULL DEFAULT '',
+      created_at       TEXT NOT NULL,
+      updated_at       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_changes_project ON changes(project_id);
+  `);
+
+  console.log('[migrations] v6 建评审表 reviews / review_steps / review_approvals + changes（B10）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -770,6 +878,7 @@ const MIGRATIONS = [
   { version: 3, name: 'connect-v3-reports', up: migrationV3 },
   { version: 4, name: 'connect-v4-wbs-effort-hours', up: migrationV4 },
   { version: 5, name: 'connect-v5-report-week-actual-days', up: migrationV5 },
+  { version: 6, name: 'connect-v6-reviews-transition', up: migrationV6 },
 ];
 
 /**

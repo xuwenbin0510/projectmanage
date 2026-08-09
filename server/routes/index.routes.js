@@ -31,6 +31,7 @@ const milestonesRoutes = require('./milestones.routes');
 const adminRoutes = require('./admin.routes');
 const workbenchRoutes = require('./workbench.routes');
 const reportsRoutes = require('./reports.routes');
+const reviewsRoutes = require('./reviews.routes');
 const stubsRoutes = require('./stubs.routes');
 const legacyRoutes = require('./legacy.routes');
 
@@ -51,6 +52,10 @@ router.use(workbenchRoutes);
 /* ── 新契约（批次 4：结构化周报 / 工作日志） ─────────── */
 /* ⚠ 必须先于 stubsRoutes，否则周报请求会被 501 桩抢先命中 */
 router.use(reportsRoutes);
+
+/* ── 新契约（B10：评审 7 接口） ─────────────────────── */
+/* ⚠ 必须先于 stubsRoutes，否则评审请求会被 501 桩抢先命中 */
+router.use(reviewsRoutes);
 
 /* ── 降级桩：批次 4 后只兜未实现项（周报桩已删） ─────── */
 router.use(stubsRoutes);

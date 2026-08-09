@@ -1,15 +1,24 @@
 /**
- * 工作台聚合服务（P0-13 · 批次 3 补齐「我的任务」部分）　← `web/src/api/mock/index.ts:2055`
+ * 工作台聚合服务（P0-13）
  *
- * ⚠ Q-3 / SK-4：「我的任务」= 我负责的**真叶子**（无子节点），
- *   **不是** `nodeType === 'task'`。汇总节点不该出现在个人待办里。
+ * B3 已补齐「我的任务」；B10 补齐「评审 / 周报」四函数：
+ *  - `listMyApprovals`     待我审批完整 Review[]（复用 review.service，同一 canDecide 口径）
+ *  - `countPendingApprovals`  = listMyApprovals().length
+ *  - `listReportReminders`  我参与且进行中项目，每项目一行（本周是否已提交周报）
+ *  - `countMissingReports`   = 未填周报行数
  *
- * 待批次 4 补齐的部分（评审 / 周报）仍在 `workbench.routes.js` 里保持降级常量。
+ * ⚠ 口径（docs/B10-任务分解.md D8 / §A3.4）：
+ *  - `reportReminders` 仅「我参与（project_members 含我）且 status='进行中'」的项目；
+ *  - `filled` = 本周存在 `work_reports.status='已提交'`（项目级、任一成员提交即算，草稿不计）；
+ *  - `week` = `dates.weekCode()`（如 `2026-W33`）；
+ *  - `weekStart/weekEnd` = `dates.weekRange(week).start/end` **截前 10 位**（`YYYY-MM-DD`，
+ *    与前端展示逐字一致；服务端 weekRange 返回 ISO 带时区串）。
  */
 
 const dates = require('../lib/dates');
 const mappers = require('../lib/mappers');
 const wbs = require('../lib/wbs');
+const reviewService = require('./review.service');
 
 /**
  * 我负责且未完成的真叶子任务（按 dueDate 升序，与 Mock L2069 一致）。
@@ -71,7 +80,84 @@ function countOverdue(tasks) {
   }).length;
 }
 
+/**
+ * 待我审批：完整 Review[]（含 steps 供 ReviewStepper 渲染）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me users 行
+ * @returns {Array<object>} Review[]
+ */
+function listMyApprovals(db, me) {
+  return reviewService.listMyApprovals(db, me);
+}
+
+/**
+ * 待我审批数：`listMyApprovals().length`（与 myApprovals 同一 canDecide 口径）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me users 行
+ * @returns {number}
+ */
+function countPendingApprovals(db, me) {
+  return listMyApprovals(db, me).length;
+}
+
+/**
+ * 周报提醒：我参与且进行中项目，每项目一行（D8 / Mock L2352-2364）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me users 行
+ * @returns {Array<{projectId: string, projectName: string, week: string, weekStart: string, weekEnd: string, filled: boolean}>} ReportReminder[]
+ */
+function listReportReminders(db, me) {
+  const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
+  if (!openId) return [];
+
+  const curWeek = dates.weekCode();
+  const range = dates.weekRange(curWeek);
+  const weekStart = String((range && range.start) || '').slice(0, 10);
+  const weekEnd = String((range && range.end) || '').slice(0, 10);
+
+  const rows = db
+    .prepare(
+      `SELECT p.id, p.name
+         FROM projects p
+        WHERE p.deleted_at IS NULL
+          AND p.status = '进行中'
+          AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)
+        ORDER BY p.updated_at DESC, p.id DESC`,
+    )
+    .all(openId);
+
+  const filledStmt = db.prepare(
+    "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已提交'",
+  );
+
+  return rows.map(function (r) {
+    const filled = (filledStmt.get(mappers.toStr(r.id), curWeek) || {}).c > 0;
+    return {
+      projectId: mappers.toStr(r.id),
+      projectName: mappers.toStr(r.name),
+      week: curWeek,
+      weekStart: weekStart,
+      weekEnd: weekEnd,
+      filled: !!filled,
+    };
+  });
+}
+
+/**
+ * 本周待填周报数：`reportReminders` 中未填行数。
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me users 行
+ * @returns {number}
+ */
+function countMissingReports(db, me) {
+  return listReportReminders(db, me).filter(function (r) { return !r.filled; }).length;
+}
+
 module.exports = {
   listMyTasks,
   countOverdue,
+  listMyApprovals,
+  countPendingApprovals,
+  listReportReminders,
+  countMissingReports,
 };

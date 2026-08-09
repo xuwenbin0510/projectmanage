@@ -158,6 +158,13 @@ const REVIEW_STATUSES = ['草稿', '审批中', '已通过', '已驳回', '已�
 
 const REVIEW_STEP_STATUSES = ['pending', 'current', 'approved', 'rejected', 'skipped'];
 
+/**
+ * 审批链角色兜底顺序（B10 D3）：某步骤绑不到「项目成员角色 / 全局角色」时，
+ * 按此顺序取第一个有用户可绑的全局角色；`customer_rep` 等虚拟角色也走兜底。
+ * ⚠ 与 `web/src/api/mock/index.ts#ROLE_FALLBACK_ORDER`（L98）逐字一致。
+ */
+const REVIEW_ROLE_FALLBACK_ORDER = ['pmo', 'management', 'tl', 'qa', 'cm', 'po', 'pm'];
+
 /** 评审模板（服务端为准，GET /api/meta 直接下发给前端） */
 const REVIEW_TEMPLATES = {
   formal: {
@@ -269,6 +276,7 @@ module.exports = {
   REVIEW_STATUSES,
   REVIEW_STEP_STATUSES,
   REVIEW_TEMPLATES,
+  REVIEW_ROLE_FALLBACK_ORDER,
   CHANGE_TYPES,
   CHANGE_ROUTES,
   CHANGE_STATUSES,

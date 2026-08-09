@@ -3,11 +3,13 @@
  *
  *  GET /api/workbench → WorkbenchData
  *
- * 批次 1 为**降级实现**（§3.9）：
- *  - `stats.pendingApprovals` / `stats.missingReports` → 0（评审 / 周报属批次 4）
- *  - `stats.overdueTasks`                             → 0（WBS 属批次 3）
- *  - `myProjects`                                     → **真实**（我参与的项目列表项）
- *  - `myTasks` / `myApprovals` / `reportReminders`    → `[]`
+ * B10（R3）：`stats.pendingApprovals` / `stats.missingReports` / `myApprovals` /
+ * `reportReminders` 全部接真数据；`myProjects` / `myTasks` / `overdueTasks` 已真实不动。
+ *
+ * 口径（docs/B10-任务分解.md §A3.4）：
+ *  - `pendingApprovals === myApprovals.length`（同一 canDecide 判定）
+ *  - `missingReports === reportReminders 未填数`
+ *  - `reportReminders` 每「我参与且进行中」项目一行（week / weekStart / weekEnd / filled）
  *
  * 注意返回结构必须字段齐全，缺字段会让前端 `data.stats.xxx` 取到 undefined 后渲染 NaN。
  */
@@ -28,20 +30,20 @@ router.get(
   asyncHandler(async function getWorkbench(req, res) {
     const myProjects = projectService.listMyProjectItems(db, req.user);
     const myTasks = workbenchService.listMyTasks(db, req.user);
+    const myApprovals = workbenchService.listMyApprovals(db, req.user);
+    const reportReminders = workbenchService.listReportReminders(db, req.user);
 
     res.json(
       ok({
         stats: {
-          // TODO(批次4): 接入 reviews 表后统计待我审批数
-          pendingApprovals: 0,
+          pendingApprovals: myApprovals.length,
           overdueTasks: workbenchService.countOverdue(myTasks),
-          // TODO(批次4): 接入 reports 表后统计我应填未填的周报数
-          missingReports: 0,
+          missingReports: reportReminders.filter(function (r) { return !r.filled; }).length,
         },
         myProjects: myProjects,
         myTasks: myTasks,
-        myApprovals: [],      // TODO(批次4)
-        reportReminders: [],  // TODO(批次4)
+        myApprovals: myApprovals,
+        reportReminders: reportReminders,
       }),
     );
   }),

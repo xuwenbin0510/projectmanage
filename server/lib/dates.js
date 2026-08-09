@@ -209,6 +209,48 @@ function weekRange(code) {
   return { start: fmt(monday) + 'T00:00:00Z', end: fmt(sunday) + 'T00:00:00Z' };
 }
 
+/**
+ * 日期（或缺省今天）→ ISO 8601 周编码 `'YYYY-Www'`，与前端
+ * `web/src/utils/date.ts#weekCode`（dayjs isoWeekYear/isoWeek）逐字一致（B10）。
+ *
+ * 算法（原生 Date，UTC 日粒度，与 `toUtcDay` 同源）：
+ *  1. 本周四决定 ISO 周编号年（跨年周归属正确）。
+ *  2. 该年 1 月 4 日必落在第 1 周，反推 week1 的周一。
+ *  3. `floor((周四 - week1周一) / 7天) + 1` 得周号，补零两位。
+ *
+ * 边界样例（QA 单测）：`2026-01-01 → 2026-W01`、`2025-01-01 → 2025-W01`、
+ * `2021-01-01 → 2020-W53`、`2022-01-01 → 2021-W52`。
+ *
+ * @param {string} [dateStr] 日期 `YYYY-MM-DD`；缺省取今天（服务器本地）
+ * @returns {string} 周编码；非法输入返回空串
+ */
+function weekCode(dateStr) {
+  let ms;
+  if (dateStr === undefined || dateStr === null || String(dateStr).trim() === '') {
+    const d = new Date();
+    ms = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  } else {
+    ms = toUtcDay(dateStr);
+    if (!Number.isFinite(ms)) return '';
+  }
+
+  /* 1. 本周四决定 ISO 年 */
+  const dow = (new Date(ms).getUTCDay() + 6) % 7; // 周一 = 0 ... 周日 = 6
+  const thursday = new Date(ms);
+  thursday.setUTCDate(thursday.getUTCDate() + (3 - dow));
+  const isoYear = thursday.getUTCFullYear();
+
+  /* 2. 该年 1 月 4 日所在周为第 1 周 → week1 周一 */
+  const jan4 = new Date(Date.UTC(isoYear, 0, 4));
+  const jan4Dow = (jan4.getUTCDay() + 6) % 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setUTCDate(jan4.getUTCDate() - jan4Dow);
+
+  /* 3. 周号 */
+  const week = Math.floor((thursday.getTime() - week1Monday.getTime()) / 86400000 / 7) + 1;
+  return isoYear + '-W' + String(week).padStart(2, '0');
+}
+
 module.exports = {
   today,
   nowIso,
@@ -218,4 +260,5 @@ module.exports = {
   fitMilestoneDates,
   fitMilestoneDatesEx,
   weekRange,
+  weekCode,
 };

@@ -72,25 +72,9 @@ function notImplemented(route) {
   });
 }
 
-/* ── 项目：状态流转 / 结项检查 ───────────────────────── */
-
-// TODO(批次4): 项目状态机流转（审批链 + 归档态拦截）
-router.post('/projects/:id/transition', requireAuth, notImplemented('POST /api/projects/:id/transition'));
-// TODO(批次4): 结项前置检查（未过门 / 未达成碑 / 未闭环变更与评审）
-router.get('/projects/:projectId/close-check', requireAuth, emptyList());
-
 /* ── 周报：桩已于批次 4 移除，真实实现见 server/routes/reports.routes.js ── */
 
-/* ── 评审（静态段 my-approvals 必须早于 :id） ─────────── */
-
-// TODO(批次4): 评审列表 / 待我审批 / 详情 / 发起 / 通过 / 驳回 / 撤回
-router.get('/reviews/my-approvals', requireAuth, emptyList());
-router.get('/reviews', requireAuth, emptyList());
-router.get('/reviews/:id', requireAuth, notImplemented('GET /api/reviews/:id'));
-router.post('/reviews', requireAuth, notImplemented('POST /api/reviews'));
-router.post('/reviews/:id/approve', requireAuth, notImplemented('POST /api/reviews/:id/approve'));
-router.post('/reviews/:id/reject', requireAuth, notImplemented('POST /api/reviews/:id/reject'));
-router.post('/reviews/:id/withdraw', requireAuth, notImplemented('POST /api/reviews/:id/withdraw'));
+/* ── 评审：桩已于 B10 移除，真实实现见 server/routes/reviews.routes.js ── */
 
 /* ── 变更（静态段 route 必须早于 :id） ────────────────── */
 
