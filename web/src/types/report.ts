@@ -11,6 +11,8 @@ export interface ReportTaskRow {
   progressAfter: number;
   /** 是否被作者勾选计入本周完成 */
   selected: boolean;
+  /** 本周实际工时（人日，B8 R3）：该日志行登记值；编辑态冲正回填源 */
+  weekActualDays: number;
 }
 
 export interface ReportRisk {
@@ -56,8 +58,13 @@ export interface Report {
  * 编辑回传任务行的最小契约：nodeId + progressAfter + selected 必须与原始 report.tasks 完全一致（R3-7）。
  * 引擎 `updateReport` 按 `payload.tasks` 整体重建 `report.tasks`，编辑提交必须原样回传，
  * 否则关联会被清空。
+ *
+ * B8（R2）：`actualDays` 为本周实际工时（人日）入参，**仅勾选叶子行携带**（未勾选 / 父节点携带 → 后端 400 E_VALIDATION）。
  */
-export type ReportTaskRef = Pick<ReportTaskRow, 'nodeId' | 'progressAfter' | 'selected'>;
+export type ReportTaskRef = Pick<ReportTaskRow, 'nodeId' | 'progressAfter' | 'selected'> & {
+  /** 本周实际工时（人日，B8 R2）：仅勾选叶子携带；0 ≤ v ≤ 100、最多 2 位小数 */
+  actualDays?: number;
+};
 
 /** 周报校验结果（提交前本地强校验，服务端会再判一次） */
 export interface ReportValidation {

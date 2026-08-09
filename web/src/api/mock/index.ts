@@ -70,7 +70,8 @@ import {
   PROJECT_TRANSITIONS,
   REVIEW_TEMPLATES,
   DEFAULT_WIP_LIMIT,
-  EFFORT_HOURS_MAX,
+  WEEK_ACTUAL_DAYS_MAX,
+  EFFORT_DAYS_CUM_MAX,
   AUDIT_ACTION_LABEL,
   GATE_PASSED_STATUSES,
 } from '@/config/enums';
@@ -82,6 +83,7 @@ import {
   nextChildCode,
   leafNodesOf,
   isLeafNode,
+  parentIdSet,
   milestoneTaskStats,
   rollupProgressFlat,
 } from '@/utils/wbs';
@@ -99,8 +101,9 @@ function nf(): never {
 }
 
 /**
- * B7（与后端 `server/lib/wbs.js#decorateEffort` 同口径）：工时读时汇总。
- * 叶子=存储值（缺省 0）；父=Σ直接子节点；补充 effortChildCount（直接子节点数）。
+ * B8（与后端 `server/lib/wbs.js#decorateEffort` 同口径）：工时读时汇总。
+ * `effortHours` 恒指「累计实际工时（人日）」：叶子=历次已提交日志累加存储值（缺省 0）；
+ * 父=Σ直接子节点；补充 effortChildCount（直接子节点数）。
  * 返回**新数组**，不改入参。Mock 与真实后端出参形态保持一致。
  */
 function decorateEffort(nodes: WbsNode[]): WbsNode[] {
@@ -131,21 +134,38 @@ function decorateEffort(nodes: WbsNode[]): WbsNode[] {
 }
 
 /**
- * B7（R2/R4）：工时数值校验（与后端 assertEffortHours 同口径）。
- * 有子节点禁止手填 → E_WBS_EFFORT_PARENT；叶子数值非法 → E_VALIDATION。
+ * B8（D4）工时写通道守卫（与后端 assertEffortWriteDisabled 同口径）：
+ * 任意 WBS 写（create/update）携带 effortHours → E_WBS_EFFORT_WRITE_DISABLED。
+ * 工时唯一写入方 = 工作日志 submit / 已提交日志编辑（upsertReport / updateReport）。
  */
-function assertEffortHours(payload: WbsNodePayload | Partial<WbsNodePayload>, isParent: boolean, nodeId: string, childCount: number): void {
-  if (payload.effortHours === undefined) return;
-  if (isParent) {
-    throw new ApiError(ErrorCode.E_WBS_EFFORT_PARENT, '有子节点的节点工时由子任务自动汇总，不可手填', { nodeId, childCount });
+function assertEffortWriteDisabled(payload: object): void {
+  const p = payload as { effortHours?: unknown };
+  if (p.effortHours !== undefined) {
+    throw new ApiError(ErrorCode.E_WBS_EFFORT_WRITE_DISABLED, '工时登记已移至工作日志，WBS 不再支持填写工时', {});
   }
-  const v = Number(payload.effortHours);
-  if (!Number.isFinite(v) || v < 0 || v > EFFORT_HOURS_MAX) {
+}
+
+/**
+ * B8（R5）日志行 actualDays 校验（与后端 resolveTaskRefs 同口径，仅勾选叶子可携带）：
+ * - 0 ≤ v ≤ WEEK_ACTUAL_DAYS_MAX、最多 2 位小数（非法 → E_VALIDATION）
+ * - 未勾选携带 → E_VALIDATION（拒绝）
+ * - 有子节点（父节点）携带 → E_VALIDATION（拒绝）
+ */
+function assertActualDaysValid(t: { nodeId: string; selected: boolean; actualDays?: number }, isParent: boolean): void {
+  if (t.actualDays === undefined) return;
+  const v = Number(t.actualDays);
+  if (!Number.isFinite(v) || v < 0 || v > WEEK_ACTUAL_DAYS_MAX || Math.round(v * 100) / 100 !== v) {
     throw new ApiError(
       ErrorCode.E_VALIDATION,
-      `工时须为 0~${EFFORT_HOURS_MAX} 的数字（可含 0.5 小数）`,
-      { fields: { effortHours: '非法取值' } },
+      `本周实际工时（人日）须为 0~${WEEK_ACTUAL_DAYS_MAX} 的数字，最多 2 位小数`,
+      { nodeId: t.nodeId, fields: { actualDays: '非法取值' } },
     );
+  }
+  if (!t.selected) {
+    throw new ApiError(ErrorCode.E_VALIDATION, '未勾选的任务不能登记本周实际工时（人日）', { nodeId: t.nodeId, actualDays: t.actualDays });
+  }
+  if (isParent) {
+    throw new ApiError(ErrorCode.E_VALIDATION, '父节点不可登记本周实际工时（人日），请在具体子任务上登记', { nodeId: t.nodeId });
   }
 }
 
@@ -1251,6 +1271,9 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_VALIDATION, '父节点不属于当前项目', { parentId: parent.id });
     }
 
+    /* B8（D4）：WBS 写通道关闭 —— 携带 effortHours → E_WBS_EFFORT_WRITE_DISABLED */
+    assertEffortWriteDisabled(payload);
+
     // W-1 深度 / W-2 父子类型 —— fail-fast，先于叶子完整性
     const rules = resolveWbsRules(projectTemplateOf(db, projectId));
     const placementError = validateWbsPlacement({ nodeType: payload.nodeType, parent }, rules);
@@ -1263,9 +1286,7 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_WBS_LEAF_INCOMPLETE);
     }
 
-    /* B7：新节点恒叶子 → 工时数值校验 */
     const newId = genId('W');
-    assertEffortHours(payload, false, newId, 0);
 
     // 关联里程碑：显式传入用传入值；未传则默认继承上级节点的里程碑（用户反馈②）
     const milestoneId = payload.milestoneId !== undefined ? payload.milestoneId : (parent?.milestoneId ?? null);
@@ -1308,8 +1329,8 @@ export class MockApiClient implements ApiClient {
       ownerName: u?.name ?? '',
       estimateDays: payload.estimateDays ?? 0,
       actualDays: 0,
-      // B7：新节点恒叶子 → 存实际值，缺省按 0
-      effortHours: Number(payload.effortHours) || 0,
+      // B8（D9）：新节点 effortHours 存储值恒 0（后端列 NULL → 展示 0）；由日志 submit 累加
+      effortHours: 0,
       effortChildCount: 0,
       startDate: payload.startDate ?? today(),
       dueDate: effectiveDue,
@@ -1323,8 +1344,7 @@ export class MockApiClient implements ApiClient {
       updatedAt: ts,
     };
     db.wbsNodes.push(node);
-    /* B7（D-B7-3）：父节点此前若是叶子存过值 → 成为父即清（读时由 decorateEffort 覆盖） */
-    if (parent) parent.effortHours = 0;
+    /* B8（D9）：WBS 写路径不再触碰 effort_hours —— 不再「成为父即清」父节点存储值 */
     audit(db, me, 'wbs_node', node.id, 'create', projectId, `新增 WBS 节点「${wbsCode} ${payload.name}」`);
     /* R4-P0-3：新叶子改变父子汇总 → 父链回写 + 状态收敛 */
     syncWbsProgressStatus(db, projectId);
@@ -1341,27 +1361,13 @@ export class MockApiClient implements ApiClient {
     assertWritable(db, node.projectId);
     const me = assertCan(db, 'wbs.edit', node.projectId);
 
+    /* B8（D4）：WBS 写通道关闭 —— 携带 effortHours → E_WBS_EFFORT_WRITE_DISABLED */
+    assertEffortWriteDisabled(payload);
+
     const diff: AuditDiffEntry[] = [];
 
     // R-4 类型锁：已有子节点的节点不可改 nodeType
     const children = db.wbsNodes.filter((n) => n.parentId === node.id);
-
-    /* B7 工时：父节点提交抛 E_WBS_EFFORT_PARENT；叶子校验后写存储值 */
-    if (payload.effortHours !== undefined) {
-      assertEffortHours(payload, children.length > 0, node.id, children.length);
-      if (children.length === 0) {
-        const effEffort = Number(payload.effortHours) || 0;
-        if (effEffort !== node.effortHours) {
-          diff.push({
-            field: 'effortHours',
-            label: '工时(h)',
-            before: String(node.effortHours ?? 0),
-            after: String(effEffort),
-          });
-          node.effortHours = effEffort;
-        }
-      }
-    }
 
     if (payload.nodeType !== undefined && payload.nodeType !== node.nodeType) {
       if (children.length > 0) {
@@ -1480,11 +1486,7 @@ export class MockApiClient implements ApiClient {
       }
     }
     db.wbsNodes = db.wbsNodes.filter((n) => !toDelete.has(n.id));
-    /* B7（D-B7-3）：删子树后清其原父 effort_hours（读时由 decorateEffort 覆盖） */
-    if (node.parentId) {
-      const parent = db.wbsNodes.find((n) => n.id === node.parentId);
-      if (parent) parent.effortHours = 0;
-    }
+    /* B8（D9）：WBS 写路径不再触碰 effort_hours —— 删除不再清父节点存储值 */
     audit(db, me, 'wbs_node', id, 'delete', node.projectId, `删除节点「${node.wbsCode} ${node.name}」及其 ${toDelete.size - 1} 个子节点`);
     /* R4-P0-3：删除改变父子汇总 → 父链回写 + 状态收敛 */
     syncWbsProgressStatus(db, node.projectId);
@@ -1526,16 +1528,8 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(placementError.code, placementError.message, placementError.data);
     }
 
-    /* B7（D-B7-3）：移动改变父子结构 → 原父与新父一并清 effort_hours（成为父即清） */
-    const oldParentId = node.parentId;
+    /* B8（D9）：移动不再清原父/新父 effort_hours —— 叶子积累后成为父 → 存储值保留、展示走 Σ 子 */
     node.parentId = newParentId;
-    const parentIdsToClear = new Set<string>();
-    if (oldParentId) parentIdsToClear.add(oldParentId);
-    if (newParentId) parentIdsToClear.add(newParentId);
-    parentIdsToClear.forEach((pid) => {
-      const p = db.wbsNodes.find((n) => n.id === pid);
-      if (p) p.effortHours = 0;
-    });
     const siblings = db.wbsNodes
       .filter((n) => n.projectId === node.projectId && n.parentId === newParentId && n.id !== id)
       .sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode));
@@ -1666,6 +1660,12 @@ export class MockApiClient implements ApiClient {
     const range = weekRange(payload.week);
     const ts = nowIso();
 
+    /* B8（R5）：mock 与后端同构 —— actualDays 结构校验（0~100/≤2 位小数/未勾选拒绝/父节点拒绝） */
+    const parentIdsOf = parentIdSet(db.wbsNodes);
+    payload.tasks.forEach((t) => {
+      assertActualDaysValid(t, parentIdsOf.has(t.nodeId));
+    });
+
     // 用户反馈⑤：工作日志允许同周多次提交，不再按周次查重；每次存/交均新建一条
     const report: Report = {
       id: genId('RP'),
@@ -1705,6 +1705,8 @@ export class MockApiClient implements ApiClient {
         progressBefore: node?.progress ?? 0,
         progressAfter: t.progressAfter,
         selected: t.selected,
+        // B8（R3）：本周实际人日（仅勾选行携带；未勾选 / 父节点为 0）
+        weekActualDays: t.actualDays ?? 0,
       };
     });
 
@@ -1729,6 +1731,21 @@ export class MockApiClient implements ApiClient {
           node.updatedAt = ts;
         }
         snapshot[t.nodeId] = t.progressAfter;
+      });
+      /* B8（R3）：提交日志 → 累加实际工时（人日）到节点（仅勾选；草稿不累加） */
+      report.tasks.forEach((t) => {
+        const node = db.wbsNodes.find((n) => n.id === t.nodeId);
+        if (node && t.selected) {
+          const next = (node.effortHours ?? 0) + (t.weekActualDays ?? 0);
+          if (next < 0 || next > EFFORT_DAYS_CUM_MAX) {
+            throw new ApiError(
+              ErrorCode.E_VALIDATION,
+              `累计实际工时（人日）须为 0~${EFFORT_DAYS_CUM_MAX}，当前操作将超出该范围`,
+              { nodeId: t.nodeId, next },
+            );
+          }
+          node.effortHours = next;
+        }
       });
       /* R4-P0-3：进度→状态自动流转统一收口（父节点回写 + 状态收敛），
        * 不再散落 if(progress>=100) 类判断（规则唯一实现 syncNodeStatusFromProgress） */
@@ -1755,6 +1772,46 @@ export class MockApiClient implements ApiClient {
     const me = assertCan(db, 'report.write', report.projectId);
     const ts = nowIso();
 
+    /* B8（R5）：mock 与后端同构 —— actualDays 结构校验（0~100/≤2 位小数/未勾选拒绝/父节点拒绝） */
+    const parentIdsOf = parentIdSet(db.wbsNodes);
+    payload.tasks.forEach((t) => {
+      assertActualDaysValid(t, parentIdsOf.has(t.nodeId));
+    });
+
+    /* B8（R4）：已提交日志先扣旧后加新（同构后端）；草稿不冲正 */
+    const wasSubmitted = report.status === '已提交';
+    const oldTaskRows = report.tasks;
+    if (wasSubmitted) {
+      oldTaskRows.forEach((t) => {
+        const node = db.wbsNodes.find((n) => n.id === t.nodeId);
+        if (node) {
+          const next = (node.effortHours ?? 0) - (t.weekActualDays ?? 0);
+          if (next < 0 || next > EFFORT_DAYS_CUM_MAX) {
+            throw new ApiError(
+              ErrorCode.E_VALIDATION,
+              `累计实际工时（人日）须为 0~${EFFORT_DAYS_CUM_MAX}，当前冲正将超出该范围`,
+              { nodeId: t.nodeId, next },
+            );
+          }
+          node.effortHours = next;
+        }
+      });
+      payload.tasks.forEach((t) => {
+        const node = db.wbsNodes.find((n) => n.id === t.nodeId);
+        if (node && t.selected) {
+          const next = (node.effortHours ?? 0) + (t.actualDays ?? 0);
+          if (next < 0 || next > EFFORT_DAYS_CUM_MAX) {
+            throw new ApiError(
+              ErrorCode.E_VALIDATION,
+              `累计实际工时（人日）须为 0~${EFFORT_DAYS_CUM_MAX}，当前冲正将超出该范围`,
+              { nodeId: t.nodeId, next },
+            );
+          }
+          node.effortHours = next;
+        }
+      });
+    }
+
     report.doneNote = payload.doneNote;
     report.planItems = payload.planItems.filter((p) => p.trim());
     report.resourceNote = payload.resourceNote;
@@ -1769,6 +1826,8 @@ export class MockApiClient implements ApiClient {
         progressBefore: node?.progress ?? 0,
         progressAfter: t.progressAfter,
         selected: t.selected,
+        // B8（R3）：本周实际人日（仅勾选行携带；未勾选 / 父节点为 0）
+        weekActualDays: t.actualDays ?? 0,
       };
     });
     report.risks = payload.risks.map<ReportRisk>((r, i) => ({

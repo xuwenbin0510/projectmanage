@@ -730,6 +730,34 @@ function migrationV4(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v4 为 wbs_nodes 增加 effort_hours 列（工时设置 B7）');
 }
 
+/* ── v5：周报实际工时列（B8 · T01） ──────────────────── */
+
+/**
+ * 迁移 v5：`work_report_tasks` 新增「本周实际工时（人日）」列 `week_actual_days`（B8 R3）。
+ *
+ * 口径（B8）：
+ *  - 该列 = 该日志行本周实际人日（0 ≤ v ≤ 100、≤2 位小数，NOT NULL DEFAULT 0）；
+ *    草稿行也落库但**不累计**。
+ *  - `wbs_nodes.effort_hours` **零 DDL**——列名沿用 v4，语义改为「累计实际工时（人日）」：
+ *    唯一写入方 = 工作日志 submit / 已提交日志编辑（report.service），WBS 写路径不再触碰。
+ *  - 存量处置：pm.db 已清空、无存量业务数据 → 无需单位换算 / 回填（B8 PRD Q4 规则预留）。
+ *
+ * 幂等：`hasColumn` 守卫（沿用 v1 `tasks.name` / v4 追加列范式）；重复执行安全。
+ *
+ * ⚠ `run()` 已统一开事务，此处**不要**自行 BEGIN。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV5(db, now) { // eslint-disable-line no-unused-vars
+  if (!tableExists(db, 'work_report_tasks')) return;
+  if (!hasColumn(db, 'work_report_tasks', 'week_actual_days')) {
+    db.exec('ALTER TABLE work_report_tasks ADD COLUMN week_actual_days REAL NOT NULL DEFAULT 0');
+  }
+  console.log('[migrations] v5 为 work_report_tasks 增加 week_actual_days 列（本周实际人日，B8）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -741,6 +769,7 @@ const MIGRATIONS = [
   { version: 2, name: 'connect-v2-wbs-board-audit', up: migrationV2 },
   { version: 3, name: 'connect-v3-reports', up: migrationV3 },
   { version: 4, name: 'connect-v4-wbs-effort-hours', up: migrationV4 },
+  { version: 5, name: 'connect-v5-report-week-actual-days', up: migrationV5 },
 ];
 
 /**

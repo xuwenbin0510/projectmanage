@@ -13,6 +13,7 @@ const { AppError, ErrorCode } = require('../lib/errors');
 const dates = require('../lib/dates');
 const ids = require('../lib/ids');
 const { writeAudit } = require('../lib/audit');
+const enums = require('../config/enums');
 const wbsService = require('./wbs.service');
 const milestoneService = require('./milestone.service');
 
@@ -118,6 +119,8 @@ function taskRowToApi(row) {
     progressBefore: toProgress(row.progress_before),
     progressAfter: toProgress(row.progress_after),
     selected: Number(row.selected) === 1,
+    // B8（R3）：本周实际工时（人日），编辑态冲正回填源
+    weekActualDays: Number(row.week_actual_days) || 0,
   };
 }
 
@@ -277,16 +280,22 @@ function getReport(db, projectId, week) {
  * 禁止把进度回写到其他项目的 WBS 节点上。不存在的 nodeId 仍按空壳处理
  * （对齐 N4：不崩、快照字段为空），仅对「存在但属于别的项目」的节点报错。
  *
+ * B8（R5）防绕过：`actualDays` 缺失视为 0；携带时校验 `0 ≤ v ≤ WEEK_ACTUAL_DAYS_MAX`
+ * 且 ≤2 位小数（非法 → E_VALIDATION，message 含「人日」口径）；**未勾选携带** /
+ * **非叶子（有子节点）携带** → E_VALIDATION（save 与 submit 同样执行，结构性非法草稿也不该产生）。
+ *
  * @param {import('better-sqlite3').Database} db
- * @param {object[]} rawTasks payload.tasks（`{nodeId, progressAfter, selected}`）
+ * @param {object[]} rawTasks payload.tasks（`{nodeId, progressAfter, selected, actualDays?}`）
  * @param {string} projectId 报告所属项目 id（服务端真源，勿用请求体可伪造字段）
  * @returns {{nodeId: string, nodeCode: string, nodeName: string, progressBefore: number,
- *            progressAfter: number, selected: boolean, estimateDays: number}[]}
- * @throws {AppError} `E_VALIDATION` 引用的 WBS 节点不属于本项目
+ *            progressAfter: number, selected: boolean, estimateDays: number,
+ *            actualDays: number, isLeaf: boolean}[]}
+ * @throws {AppError} `E_VALIDATION` 引用的 WBS 节点不属于本项目 / actualDays 非法 / 未勾选或非叶子携带 actualDays
  */
 function resolveTaskRefs(db, rawTasks, projectId) {
   const list = Array.isArray(rawTasks) ? rawTasks : [];
   const selNode = db.prepare('SELECT * FROM wbs_nodes WHERE id = ?');
+  const countChildren = db.prepare('SELECT COUNT(*) AS c FROM wbs_nodes WHERE parent_id = ?');
   const ownerProjectId = toStr(projectId);
 
   return list.map(function (t) {
@@ -307,14 +316,54 @@ function resolveTaskRefs(db, rawTasks, projectId) {
       );
     }
 
+    const selected = ref.selected === true || ref.selected === 1;
+    /* B8（R5）：叶子口径 SK-4 = 无子节点；节点不存在按叶子处理（不崩） */
+    const childCount = nodeId ? (countChildren.get(nodeId).c || 0) : 0;
+    const isLeaf = childCount === 0;
+
+    /* B8（R5）：actualDays 校验 —— 缺失视为 0；携带时 0~100 / ≤2 位小数 */
+    let actualDays = 0;
+    if (ref.actualDays !== undefined) {
+      const v = Number(ref.actualDays);
+      if (
+        !Number.isFinite(v) ||
+        v < 0 ||
+        v > enums.WEEK_ACTUAL_DAYS_MAX ||
+        Math.round(v * 100) / 100 !== v
+      ) {
+        throw new AppError(
+          ErrorCode.E_VALIDATION,
+          '本周实际工时（人日）须为 0~' + enums.WEEK_ACTUAL_DAYS_MAX + ' 的数字，最多 2 位小数',
+          { nodeId: nodeId, fields: { actualDays: '非法取值' } },
+        );
+      }
+      actualDays = v;
+    }
+    if (!selected && ref.actualDays !== undefined) {
+      throw new AppError(
+        ErrorCode.E_VALIDATION,
+        '未勾选的任务不能登记本周实际工时（人日）',
+        { nodeId: nodeId, actualDays: ref.actualDays },
+      );
+    }
+    if (!isLeaf && ref.actualDays !== undefined) {
+      throw new AppError(
+        ErrorCode.E_VALIDATION,
+        '父节点不可登记本周实际工时（人日），请在具体子任务上登记',
+        { nodeId: nodeId },
+      );
+    }
+
     return {
       nodeId: nodeId,
       nodeCode: node ? toStr(node.wbs_code) : '',
       nodeName: node ? toStr(node.name) : '',
       progressBefore: node ? toProgress(node.progress) : 0,
       progressAfter: toProgress(ref.progressAfter),
-      selected: ref.selected === true || ref.selected === 1,
+      selected: selected,
       estimateDays: node ? Number(node.estimate_days) || 0 : 0,
+      actualDays: actualDays,
+      isLeaf: isLeaf,
     };
   });
 }
@@ -347,8 +396,8 @@ function resolveRiskRefs(rawRisks) {
 function insertChildren(db, reportId, taskRefs, riskRefs) {
   const insTask = db.prepare(`
     INSERT INTO work_report_tasks (
-      id, report_id, node_id, node_code, node_name, progress_before, progress_after, selected
-    ) VALUES (@id, @report_id, @node_id, @node_code, @node_name, @progress_before, @progress_after, @selected)
+      id, report_id, node_id, node_code, node_name, progress_before, progress_after, selected, week_actual_days
+    ) VALUES (@id, @report_id, @node_id, @node_code, @node_name, @progress_before, @progress_after, @selected, @week_actual_days)
   `);
   const insRisk = db.prepare(`
     INSERT INTO work_report_risks (
@@ -366,6 +415,8 @@ function insertChildren(db, reportId, taskRefs, riskRefs) {
       progress_before: t.progressBefore,
       progress_after: t.progressAfter,
       selected: t.selected ? 1 : 0,
+      // B8（R3）：本周实际人日；草稿行也落库（不累计）
+      week_actual_days: Number(t.actualDays) || 0,
     });
   });
 
@@ -382,15 +433,50 @@ function insertChildren(db, reportId, taskRefs, riskRefs) {
 }
 
 /**
+ * B8（R3/R4）：累计实际工时（人日）增量写入 —— 累加与冲正唯一入口（私有，不导出）。
+ *
+ * 一切累计变更在日志事务内经本函数完成，保证原子性：
+ *  1. `delta === 0` → 直接返回（不写库、不碰 updated_at）；
+ *  2. 节点不存在 → 静默返回（节点已删，其累计随行消亡，冲正无意义）；
+ *  3. `next = COALESCE(effort_hours, 0) + delta`（兼容历史 NULL）；
+ *  4. `next < 0 || next > EFFORT_DAYS_CUM_MAX` → `E_VALIDATION`（message 含人日口径；
+ *     冲正扣过头 / 溢出均整体回滚，不产生半更新）；
+ *  5. `UPDATE wbs_nodes SET effort_hours = ?, updated_at = ?`。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} nodeId 节点 id（空串直接跳过）
+ * @param {number} delta 增量（正=累加，负=扣减）
+ * @param {string} ts 事务时间戳
+ * @returns {void}
+ * @throws {AppError} `E_VALIDATION` 新累计超出 [0, EFFORT_DAYS_CUM_MAX]
+ */
+function applyEffortDelta(db, nodeId, delta, ts) {
+  if (!nodeId) return;
+  const d = Number(delta) || 0;
+  if (d === 0) return;
+  const row = db.prepare('SELECT effort_hours FROM wbs_nodes WHERE id = ?').get(String(nodeId));
+  if (!row) return; // 节点已删，静默跳过
+  const next = (Number(row.effort_hours) || 0) + d;
+  if (next < 0 || next > enums.EFFORT_DAYS_CUM_MAX) {
+    throw new AppError(
+      ErrorCode.E_VALIDATION,
+      '累计实际工时（人日）须为 0~' + enums.EFFORT_DAYS_CUM_MAX + '，当前操作将超出该范围',
+      { nodeId: String(nodeId), delta: d, next: next },
+    );
+  }
+  db.prepare('UPDATE wbs_nodes SET effort_hours = ?, updated_at = ? WHERE id = ?').run(next, ts, String(nodeId));
+}
+
+/**
  * 新建周报（暂存或提交）。
  *
  * 同周允许多次提交（不做周次查重，用户反馈⑤）：每次调用均新建一条。
  *
- * `submit=true` 时按共享约定 §6 触发：
+ * `submit=true` 时按共享约定 §6 触发（`snapshot` 在事务前已构建、随 insReport 落库）：
  *  ① 仅 `selected` 的任务回写 `wbs_nodes.progress` / `actual_days`；
- *  ② 冻结 `snapshot`（仅含 selected 节点）；
- *  ③ `syncWbsProgressStatus` → `refreshMilestoneStatuses`（次序恒定）；
- *  ④ 写 `entity_type='report'` 审计。
+ *  ② **B8**：`selected` 任务按 `actualDays` 累加 `wbs_nodes.effort_hours`（草稿不累加）；
+ *  ③ `syncWbsProgressStatus` → `refreshMilestoneStatuses`（引擎收尾次序恒定）；
+ *  ④ 写 `entity_type='report'` 审计（事务外，吞异常）。
  *
  * @param {import('better-sqlite3').Database} db
  * @param {object} payload ReportPayload（`projectId/week/doneNote/planItems/resourceNote/tasks/risks`）
@@ -492,9 +578,15 @@ function createReport(db, payload, me, submit) {
         });
       });
 
-      /* ② 进度 → 状态自动流转统一收口（父节点加权回写 + 状态收敛） */
+      /* ② B8（R3）：提交日志 → 累加实际工时（人日）到节点（草稿不累加；0 为 no-op）。
+           插入点：进度回写之后、引擎收尾之前 —— 与 ① 不同列、次序无关，引擎收尾次序不破坏 */
+      applied.forEach(function (t) {
+        applyEffortDelta(db, t.nodeId, t.actualDays, ts);
+      });
+
+      /* ③ 进度 → 状态自动流转统一收口（父节点加权回写 + 状态收敛） */
       wbsService.syncWbsProgressStatus(db, projectId);
-      /* ③ 联动刷新里程碑 taskStats / 状态（次序：WBS 先，里程碑后） */
+      /* ④ 联动刷新里程碑 taskStats / 状态（次序：WBS 先，里程碑后） */
       milestoneService.refreshMilestoneStatuses(db, projectId);
     }
   });
@@ -547,6 +639,13 @@ function updateReport(db, id, payload, me) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '只能编辑本人提交的工作日志', { id: reportId });
   }
 
+  /* B8（R4）：冲正开关 —— 已提交日志编辑才先扣旧后加新；草稿编辑不触累计 */
+  const wasSubmitted = toStr(row.status) === '已提交';
+  /* 旧行在 delTasks 之前读出（week_actual_days 是冲正数据源） */
+  const oldTaskRows = db
+    .prepare('SELECT * FROM work_report_tasks WHERE report_id = ?')
+    .all(reportId);
+
   const ts = dates.nowIso();
   /* 编辑路径同样执行 D-6 校验：以库内 work_reports 行的 project_id 为真源 */
   const taskRefs = resolveTaskRefs(db, p.tasks, toStr(row.project_id));
@@ -567,6 +666,19 @@ function updateReport(db, id, payload, me) {
   const delRisks = db.prepare('DELETE FROM work_report_risks WHERE report_id = ?');
 
   const tx = db.transaction(function () {
+    /* B8（R4）：已提交日志先扣旧后加新（同事务，任一失败整体回滚）；净效果 = 每节点 new - old。
+       插入点：正文/子行重建之前 —— 冲正失败不产生半更新，编辑周次/正文/风险不影响累计 */
+    if (wasSubmitted) {
+      oldTaskRows.forEach(function (t) {
+        applyEffortDelta(db, toStr(t.node_id), -(Number(t.week_actual_days) || 0), ts);
+      });
+      taskRefs
+        .filter(function (t) { return t.selected && t.nodeId; })
+        .forEach(function (t) {
+          applyEffortDelta(db, t.nodeId, t.actualDays, ts);
+        });
+    }
+
     updReport.run({
       id: reportId,
       done_note: toStr(p.doneNote),

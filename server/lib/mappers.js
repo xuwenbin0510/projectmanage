@@ -404,8 +404,8 @@ function toApiMilestoneWithGate(milestone, gate, gateItems, taskStats) {
  * wbs_nodes 行 → API `WbsNode`（20 字段，全 camelCase）。
  *
  * ⚠ 例外：DB `board_order` → API `boardOrder`（FIELD_EXCEPTIONS 已登记）。
- * ⚠ B7：`effortHours` 映射**存储值**（叶子=实际值/0）；父节点的最终 Σ 由
- *   `wbs.service.loadNodes` 的 `decorateEffort` 装饰覆盖，此处不计算。
+ * ⚠ B8：`effortHours` 映射**存储累计值**（累计实际工时·人日；叶子=历次已提交日志累加值/0）；
+ *   父节点的最终 Σ 由 `wbs.service.loadNodes` 的 `decorateEffort` 装饰覆盖，此处不计算。
  * ⚠ `ownerName`：未指派（owner 为空）时返回 `''` 而非 `'(已移除)'`
  *   —— 「本来就没人」区别于「人被移除」，与 `makeNameLookup` 语义一致。
  * ⚠ `parentId` / `milestoneId`：空串归一为 `null`（契约里是 `string | null`）。
@@ -431,7 +431,7 @@ function toApiWbsNode(row, nameOf) {
     ownerName: ownerName,
     estimateDays: toNum(row.estimate_days, 0),
     actualDays: toNum(row.actual_days, 0),
-    // B7：叶子=存储值（NULL→0）；父节点最终值由 decorateEffort 覆盖（父列恒 NULL）
+    // B8：叶子=存储累计值（累计实际人日，NULL→0）；父节点最终值由 decorateEffort 覆盖（父列恒 NULL，展示走 Σ 子）
     effortHours: toNum(row.effort_hours, 0),
     startDate: toStr(row.start_date),
     dueDate: toStr(row.due_date),

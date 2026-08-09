@@ -20,7 +20,6 @@ const ids = require('../lib/ids');
 const mappers = require('../lib/mappers');
 const rbac = require('../middleware/rbac');
 const { writeAudit, diffEntry } = require('../lib/audit');
-const enums = require('../config/enums');
 const milestoneService = require('./milestone.service');
 
 /** 未传截止日期时的默认工期（天） */
@@ -31,11 +30,12 @@ const DEFAULT_DUE_OFFSET_DAYS = 7;
  * ═══════════════════════════════════════════════════ */
 
 /**
- * 读项目全部 WBS 节点（API 形态，按 `compareWbsCode` 排序，B7 带工时汇总字段）。
+ * 读项目全部 WBS 节点（API 形态，按 `compareWbsCode` 排序，B8 带累计实际工时汇总字段）。
  *
- * B7（D-B7-1）单点收口：所有 WBS 读接口（listWbs / create/update/delete 返回值 /
+ * B8（语义重构，算法不变）：所有 WBS 读接口（listWbs / create/update/delete 返回值 /
  * move 全量数组 / syncWbsProgressStatus 内部读取）统一经 `decorateEffort` 装饰，
- * 出参自动带 `effortHours`（叶=存储值、父=Σ直接子节点）+ `effortChildCount`。
+ * 出参自动带 `effortHours`（累计实际工时·人日：叶=历次已提交日志累加存储值、父=Σ直接子节点）
+ * + `effortChildCount`。
  * **不动** `milestoneService.loadWbsNodes`（里程碑/周报统计不需要 effort 字段）。
  *
  * @param {import('better-sqlite3').Database} db
@@ -47,34 +47,22 @@ function loadNodes(db, projectId) {
 }
 
 /**
- * B7（R2/R4）工时数值校验：有子节点禁止手填；叶子校验 `0 ≤ v ≤ EFFORT_HOURS_MAX`。
+ * B8（D4）工时写通道守卫：WBS API 携带 `effortHours` → 400 `E_WBS_EFFORT_WRITE_DISABLED`。
  *
- * - `p.effortHours === undefined` → 直接放行（未提交该字段不校验）
- * - `isParent` → 抛 `E_WBS_EFFORT_PARENT`（400，方案 A 强制汇总）
- * - 叶子数值非法（非数字 / <0 / >上限）→ 抛 `E_VALIDATION`（400）
+ * B8 后 `effort_hours` / `effortHours` 的唯一写入方 = 工作日志 submit / 已提交日志编辑
+ * （report.service），WBS 创建/编辑一律拒绝该字段（防构造请求绕过前端）。
+ * 任意 WBS 写（create/update）同判，叶与父无差别。
  *
  * @param {object} p 请求体
- * @param {boolean} isParent 该节点是否已有子节点
- * @param {?string} nodeId 节点 id（错误 data 用；新建态可传 null）
- * @param {number} childCount 直接子节点数
  * @returns {void}
- * @throws {AppError} E_WBS_EFFORT_PARENT / E_VALIDATION
+ * @throws {AppError} E_WBS_EFFORT_WRITE_DISABLED
  */
-function assertEffortHours(p, isParent, nodeId, childCount) {
-  if (p.effortHours === undefined) return;
-  if (isParent) {
+function assertEffortWriteDisabled(p) {
+  if (p.effortHours !== undefined) {
     throw new AppError(
-      ErrorCode.E_WBS_EFFORT_PARENT,
-      '有子节点的节点工时由子任务自动汇总，不可手填',
-      { nodeId: nodeId, childCount: childCount }
-    );
-  }
-  const v = Number(p.effortHours);
-  if (!Number.isFinite(v) || v < 0 || v > enums.EFFORT_HOURS_MAX) {
-    throw new AppError(
-      ErrorCode.E_VALIDATION,
-      '工时须为 0~' + enums.EFFORT_HOURS_MAX + ' 的数字（可含 0.5 小数）',
-      { fields: { effortHours: '非法取值' } }
+      ErrorCode.E_WBS_EFFORT_WRITE_DISABLED,
+      '工时登记已移至工作日志，WBS 不再支持填写工时',
+      {}
     );
   }
 }
@@ -240,13 +228,14 @@ function listWbs(db, projectId) {
  * 顺序（不可换）：
  *  1. `assertWritable` → `assertCan('wbs:edit')`
  *  2. 解析父节点（跨项目引用直接拒）
+ *  2.5 B8：`assertEffortWriteDisabled`（携带 effortHours → 400 E_WBS_EFFORT_WRITE_DISABLED）
  *  3. W-1 深度 / W-2 父子类型（fail-fast，**先于**叶子完整性）
  *  4. 叶子完整性（新节点必然是叶子）
  *  5. 关联里程碑（默认继承父节点）+ 同项目校验
  *  6. `nextChildCode`
  *  7. 有效截止日期（默认 +7 天）+ 截止日期硬拦截
  *  8. 工时估算硬拦截
- *  9. INSERT
+ *  9. INSERT（**不写 effort_hours**，新节点该列 NULL → 展示 0）
  * 10. 审计 `'create'`
  * 11. `syncWbsProgressStatus` → `refreshMilestoneStatuses`
  *
@@ -257,7 +246,8 @@ function listWbs(db, projectId) {
  * @returns {object} WbsNode
  * @throws {AppError} E_PROJECT_ARCHIVED / E_FORBIDDEN / E_NOT_FOUND / E_VALIDATION /
  *                    E_WBS_DEPTH / E_WBS_PARENT_TYPE / E_WBS_LEAF_INCOMPLETE /
- *                    E_WBS_DEADLINE_OVERFLOW / E_WBS_ESTIMATE_OVERFLOW
+ *                    E_WBS_DEADLINE_OVERFLOW / E_WBS_ESTIMATE_OVERFLOW /
+ *                    E_WBS_EFFORT_WRITE_DISABLED
  */
 function createWbsNode(db, req, projectId, payload) {
   const p = payload || {};
@@ -280,6 +270,9 @@ function createWbsNode(db, req, projectId, payload) {
       throw new AppError(ErrorCode.E_VALIDATION, '父节点不属于当前项目', { parentId: String(parentId) });
     }
 
+    /* 2.5 B8（D4）：WBS 写通道关闭 —— 携带 effortHours → 400 E_WBS_EFFORT_WRITE_DISABLED（父解析后 fail-fast） */
+    assertEffortWriteDisabled(p);
+
     /* 3. W-1 深度 / W-2 父子类型 —— fail-fast，先于叶子完整性 */
     const nodeType = p.nodeType === undefined || p.nodeType === null || p.nodeType === '' ? 'task' : String(p.nodeType);
     throwIfInvalid(wbs.validateWbsPlacement({ nodeType: nodeType, parent: parent }, wbsRulesOf(db, projectId)));
@@ -293,9 +286,6 @@ function createWbsNode(db, req, projectId, payload) {
         },
       });
     }
-
-    /* 4.5 B7：新节点恒叶子 → 工时数值校验（0 ≤ v ≤ EFFORT_HOURS_MAX） */
-    assertEffortHours(p, false, null, 0);
 
     /* 5. 关联里程碑：显式传入用传入值；未传则默认继承上级节点的里程碑 */
     const milestoneId = p.milestoneId !== undefined
@@ -334,9 +324,9 @@ function createWbsNode(db, req, projectId, payload) {
     db.prepare(
       'INSERT INTO wbs_nodes (' +
         'id, project_id, parent_id, wbs_code, level, node_type, name, description, owner, ' +
-        'estimate_days, actual_days, effort_hours, start_date, due_date, status, progress, board_order, ' +
+        'estimate_days, actual_days, start_date, due_date, status, progress, board_order, ' +
         'is_critical, milestone_id, created_by, created_at, updated_at' +
-        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id,
       String(projectId),
@@ -348,8 +338,6 @@ function createWbsNode(db, req, projectId, payload) {
       String(p.description === undefined || p.description === null ? '' : p.description),
       String(p.owner),
       Number(p.estimateDays) || 0,
-      // B7：新节点恒叶子 → 存实际值，缺省按 0 落库（与 estimate_days NOT NULL DEFAULT 0 一致）
-      Number(p.effortHours) || 0,
       startDate,
       effectiveDue,
       String(p.status === undefined || p.status === null || p.status === '' ? '待办' : p.status),
@@ -362,12 +350,8 @@ function createWbsNode(db, req, projectId, payload) {
       ts
     );
 
-    /* B7（D-B7-3）：父节点此前若是叶子存过值 → 成为父即清 NULL，防「存了值但没算」脏态 */
-    if (parentId) {
-      db.prepare(
-        'UPDATE wbs_nodes SET effort_hours = NULL WHERE id = ? AND effort_hours IS NOT NULL'
-      ).run(String(parentId));
-    }
+    /* B8（D9）：WBS 写路径不再触碰 effort_hours —— 新节点该列恒 NULL（展示 0），
+       「成为父即清 NULL」纪律一并移除（叶子积累后成为父 → 存储值保留、展示走 Σ 子） */
 
     /* 10. 审计 */
     writeAudit(
@@ -379,7 +363,7 @@ function createWbsNode(db, req, projectId, payload) {
     syncWbsProgressStatus(db, projectId);
     milestoneService.refreshMilestoneStatuses(db, projectId);
 
-    /* B7：返回装饰后的单节点（effortHours/effortChildCount 与 listWbs 口径一致） */
+    /* B8：返回装饰后的单节点（effortHours=累计实际人日/effortChildCount 与 listWbs 口径一致） */
     const afterNodes = loadNodes(db, projectId);
     return afterNodes.filter(function (n) { return n.id === id; })[0]
       || mappers.toApiWbsNode(requireNodeRow(db, id), mappers.makeNameLookup(db));
@@ -411,6 +395,9 @@ function updateWbsNode(db, req, id, payload) {
     rbac.assertWritable(db, projectId);
     const me = rbac.assertCan(db, req, 'wbs:edit', projectId);
 
+    /* B8（D4）：WBS 写通道关闭 —— 携带 effortHours → 400 E_WBS_EFFORT_WRITE_DISABLED（requireNodeRow 后 fail-fast） */
+    assertEffortWriteDisabled(p);
+
     const nameOf = mappers.makeNameLookup(db);
     const nodes = loadNodes(db, projectId);
     const node = mappers.toApiWbsNode(row, nameOf);
@@ -430,24 +417,6 @@ function updateWbsNode(db, req, id, payload) {
 
     /* ── R-4 类型锁 ──────────────────────────────────── */
     const children = nodes.filter(function (n) { return n.parentId === node.id; });
-
-    /* ── B7 工时：父节点提交抛 E_WBS_EFFORT_PARENT；叶子校验后写列 ── */
-    if (p.effortHours !== undefined) {
-      assertEffortHours(p, children.length > 0, node.id, children.length);
-      if (children.length === 0) {
-        const effEffort = Number(p.effortHours) || 0;
-        if (effEffort !== node.effortHours) {
-          sets.push('effort_hours = ?');
-          args.push(effEffort);
-          diff.push({
-            field: 'effortHours',
-            label: '工时(h)',
-            before: String(node.effortHours),
-            after: String(effEffort),
-          });
-        }
-      }
-    }
 
     if (p.nodeType !== undefined && String(p.nodeType) !== node.nodeType) {
       if (children.length > 0) {
@@ -588,7 +557,7 @@ function updateWbsNode(db, req, id, payload) {
     syncWbsProgressStatus(db, projectId);
     milestoneService.refreshMilestoneStatuses(db, projectId);
 
-    /* B7：返回装饰后的单节点（父=Σ直接子节点，叶=存储值；与 listWbs 口径一致） */
+    /* B8：返回装饰后的单节点（父=Σ直接子节点，叶=累计存储值；与 listWbs 口径一致） */
     const afterNodes = loadNodes(db, projectId);
     return afterNodes.filter(function (n) { return n.id === String(id); })[0]
       || mappers.toApiWbsNode(requireNodeRow(db, id), mappers.makeNameLookup(db));
@@ -634,12 +603,7 @@ function deleteWbsNode(db, req, id) {
     const placeholders = toDelete.map(function () { return '?'; }).join(',');
     db.prepare('DELETE FROM wbs_nodes WHERE id IN (' + placeholders + ')').run(toDelete);
 
-    /* B7（D-B7-3）：删子树后清其原父 effort_hours（防历史脏数据残留，一行成本） */
-    if (node.parentId) {
-      db.prepare(
-        'UPDATE wbs_nodes SET effort_hours = NULL WHERE id = ? AND effort_hours IS NOT NULL'
-      ).run(node.parentId);
-    }
+    /* B8（D9）：WBS 写路径不再触碰 effort_hours —— 删除不再清父列（父节点展示走 Σ 子，读时自动收敛） */
 
     writeAudit(
       db, me, 'wbs_node', String(id), 'delete', projectId,
@@ -706,22 +670,11 @@ function moveWbsNode(db, req, id, newParentId, index) {
 
     /* 落库改父 + 内存同步 */
     const ts = dates.nowIso();
-    const oldParentId = node.parentId;
     db.prepare('UPDATE wbs_nodes SET parent_id = ?, updated_at = ? WHERE id = ?')
       .run(targetParentId, ts, String(id));
     node.parentId = targetParentId;
 
-    /* B7（D-B7-3）：移动改变父子结构 → 原父与新父一并清 effort_hours（成为父即清） */
-    const parentIdsToClear = [];
-    if (oldParentId) parentIdsToClear.push(oldParentId);
-    if (targetParentId) parentIdsToClear.push(targetParentId);
-    if (parentIdsToClear.length) {
-      db.prepare(
-        'UPDATE wbs_nodes SET effort_hours = NULL WHERE id IN (' +
-        parentIdsToClear.map(function () { return '?'; }).join(',') +
-        ') AND effort_hours IS NOT NULL'
-      ).run(parentIdsToClear);
-    }
+    /* B8（D9）：移动不再清原父/新父 effort_hours —— 叶子积累后成为父 → 存储值保留、展示走 Σ 子 */
 
     /* 目标父下的兄弟按 compareWbsCode 排序后插入指定位置，整体重排编码 */
     const siblings = wbs.sortByWbsCode(

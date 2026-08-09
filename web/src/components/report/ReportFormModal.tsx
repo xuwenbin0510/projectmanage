@@ -17,14 +17,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
 import { FormDialog, ProgressBar } from '@/components/common';
-import type { Report, ReportTaskRef } from '@/types/report';
-import type { WbsTreeNode } from '@/types/wbs';
+import type { Report, ReportTaskRef, ReportTaskRow } from '@/types/report';
+import type { WbsNode, WbsTreeNode } from '@/types/wbs';
 import type { ReportPayload } from '@/api/contract';
 import { useProjectStore } from '@/stores/projectStore';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
-import { REPORT_SECTION_TITLE } from '@/config/enums';
+import { REPORT_SECTION_TITLE, WEEK_ACTUAL_DAYS_MAX } from '@/config/enums';
 import { dayjs, weekCode, shiftWeek } from '@/utils/date';
 import { tokens, alphaOf, progressToneOf } from '@/theme/tokens';
 import { memberNameOf } from '@/utils/member';
@@ -33,6 +33,8 @@ import { flattenTree, parentIdSet } from '@/utils/wbs';
 interface TaskProgress {
   progressAfter: number;
   selected: boolean;
+  /** 本周实际工时（人日，B8 R2）：仅勾选叶子可填；编辑态=冲正入口（回显原值） */
+  actualDays: number;
 }
 
 /* ── R5 统一文案（设计 §8.2：逐字使用，禁止改写） ── */
@@ -173,7 +175,15 @@ export function ReportFormModal({
       setPlanItems(editingReport.planItems.length ? editingReport.planItems : ['']);
       setTaskMap(
         Object.fromEntries(
-          editingReport.tasks.map((t) => [t.nodeId, { progressAfter: t.progressAfter, selected: t.selected }]),
+          editingReport.tasks.map((t) => [
+            t.nodeId,
+            {
+              progressAfter: t.progressAfter,
+              selected: t.selected,
+              // B8（R2）：编辑态回显原日志行本周实际人日（冲正入口）
+              actualDays: t.weekActualDays ?? 0,
+            },
+          ]),
         ),
       );
     } else {
@@ -182,7 +192,15 @@ export function ReportFormModal({
       setPlanItems(['']);
       setTaskMap(
         Object.fromEntries(
-          latestNodes.map((n) => [n.id, { progressAfter: n.progress, selected: n.id === effectiveLockNodeId }]),
+          latestNodes.map((n) => [
+            n.id,
+            {
+              progressAfter: n.progress,
+              selected: n.id === effectiveLockNodeId,
+              // B8（R2）：新建态默认 0
+              actualDays: 0,
+            },
+          ]),
         ),
       );
     }
@@ -204,34 +222,80 @@ export function ReportFormModal({
     const latestParentIds = parentIdSet(latest);
     return latest.map<ReportTaskRef>((n) => {
       const isParent = latestParentIds.has(n.id);
+      const selected = isParent ? false : (taskMap[n.id]?.selected ?? false);
       return {
         nodeId: n.id,
         progressAfter: isParent ? n.progress : (taskMap[n.id]?.progressAfter ?? n.progress),
-        selected: isParent ? false : (taskMap[n.id]?.selected ?? false),
+        selected,
+        // B8（R2）：仅勾选叶子携带 actualDays（父 / 未勾选 undefined → 后端按 0 处理）
+        actualDays: isParent || !selected ? undefined : (taskMap[n.id]?.actualDays ?? 0),
       };
     });
   };
 
-  const assemble = (values: FormValues): ReportPayload => ({
-    projectId,
-    // R3-7：编辑态周次以原始报告为准（引擎不更新 week；也规避 disabled 字段丢失）
-    week: editingReport ? editingReport.week : values.week,
-    doneNote: values.doneNote,
-    planItems: planItems.map((p) => p.trim()).filter(Boolean),
-    resourceNote: values.resourceNote,
-    // ★ R3-7 关键：编辑态原样回传原始 report.tasks（selected / progressAfter 不变），
-    //   引擎按 payload.tasks 整体重建 report.tasks，否则关联会被清空
-    tasks: editingReport
-      ? editingReport.tasks.map<ReportTaskRef>((t) => ({
-          nodeId: t.nodeId,
-          progressAfter: t.progressAfter,
-          selected: t.selected,
-        }))
-      : buildNewTaskRefs(),
-    risks: values.risks,
-  });
+  const assemble = (values: FormValues): ReportPayload => {
+    // B8（R2）修复：编辑分支 = 冲正入口，父子判定与 buildNewTaskRefs 同源（latestNodesOf 重算，
+    // 避免与渲染 tree 时序漂移 —— R5-P0-3 约定）
+    const latestParentIds = parentIdSet(latestNodesOf());
+    return {
+      projectId,
+      // R3-7：编辑态周次以原始报告为准（引擎不更新 week；也规避 disabled 字段丢失）
+      week: editingReport ? editingReport.week : values.week,
+      doneNote: values.doneNote,
+      planItems: planItems.map((p) => p.trim()).filter(Boolean),
+      resourceNote: values.resourceNote,
+      // ★ R3-7 关键：编辑态原样回传原始 report.tasks（selected / progressAfter 不变），
+      //   引擎按 payload.tasks 整体重建 report.tasks，否则关联会被清空
+      tasks: editingReport
+        ? editingReport.tasks.map<ReportTaskRef>((t) => ({
+            nodeId: t.nodeId,
+            progressAfter: t.progressAfter,
+            selected: t.selected,
+            // ★ B8（R2）P0 修复：仅 selected=true 的勾选叶子行携带 actualDays（取表单编辑值=冲正入口）；
+            //   未勾选行与父节点行置 undefined（不携带）→ 后端 resolveTaskRefs 按 0 处理。
+            //   否则每行塞 0 会被「未勾选/父节点携带 actualDays → 400 E_VALIDATION」整体拒绝（R4 冲正入口不可用）
+            actualDays:
+              t.selected && !latestParentIds.has(t.nodeId)
+                ? (taskMap[t.nodeId]?.actualDays ?? t.weekActualDays ?? 0)
+                : undefined,
+          }))
+        : buildNewTaskRefs(),
+      risks: values.risks,
+    };
+  };
+
+  /**
+   * B8（R2）前端校验：提交/编辑时对本轮实际参与提交的「勾选叶子」行校验
+   * `0 ≤ 本周实际工时（人日） ≤ WEEK_ACTUAL_DAYS_MAX`、最多 2 位小数；非法返回提示文案。
+   * 存草稿不校验（同进度语义，服务端仍兜底）。
+   */
+  const validateActualDays = (): string | null => {
+    const latest = latestNodesOf();
+    const latestParentIds = parentIdSet(latest);
+    const rows = editingReport ? editingReport.tasks : latest;
+    for (const row of rows) {
+      const nodeId = 'nodeId' in row ? row.nodeId : row.id;
+      if (latestParentIds.has(nodeId)) continue; // 父节点不可登记（恒禁用，跳过）
+      const t = taskMap[nodeId];
+      if (!t || !t.selected) continue; // 未勾选不提交（disabled 灰显，跳过）
+      const v = Number(t.actualDays);
+      if (!Number.isFinite(v) || v < 0 || v > WEEK_ACTUAL_DAYS_MAX || Math.round(v * 100) / 100 !== v) {
+        const label = 'nodeName' in row ? row.nodeName || nodeId : `${row.wbsCode} ${row.name}`;
+        return `「${label}」本周实际工时（人日）须为 0~${WEEK_ACTUAL_DAYS_MAX} 的数字，最多 2 位小数`;
+      }
+    }
+    return null;
+  };
 
   const doSave = async (values: FormValues, submit: boolean): Promise<void> => {
+    // B8（R2）：提交 / 编辑已提交日志时校验实际工时；存草稿允许任意值（同进度语义）
+    if (submit) {
+      const actualErr = validateActualDays();
+      if (actualErr) {
+        toast.warning(actualErr);
+        return;
+      }
+    }
     const payload = assemble(values);
     try {
       let saved: Report;
@@ -256,7 +320,11 @@ export function ReportFormModal({
           Object.fromEntries(
             latestNodes.map((n) => [
               n.id,
-              { progressAfter: progressByNode.get(n.id) ?? n.progress, selected: n.id === effectiveLockNodeId },
+              {
+                progressAfter: progressByNode.get(n.id) ?? n.progress,
+                selected: n.id === effectiveLockNodeId,
+                actualDays: 0,
+              },
             ]),
           ),
         );
@@ -278,11 +346,15 @@ export function ReportFormModal({
    */
   const renderTaskTree = (list: WbsTreeNode[], depth: number): JSX.Element[] =>
     list.map((n) => {
-      const t = taskMap[n.id] ?? { progressAfter: n.progress, selected: false };
+      const t = taskMap[n.id] ?? { progressAfter: n.progress, selected: false, actualDays: 0 };
       const readOnly = Boolean(editingReport);
       const locked = !editingReport && effectiveLockNodeId === n.id;
       /** 有子节点 = 父节点：进度纯由子任务加权汇总，不可勾选、不可录入 */
       const hasChildren = parentIds.has(n.id);
+      /** B8（R2）交互矩阵（D-B8-7）：实际工时输入 —— 仅勾选叶子可填；
+       *  新建未勾选灰显（值保留不提交）、父节点恒禁用、lockMode 仅锁定行可填、
+       *  编辑态勾选行可编辑 = 冲正入口（勾选/进度仍只读） */
+      const actualDaysDisabled = hasChildren || !t.selected || (lockMode && effectiveLockNodeId !== n.id);
       const checkbox = (
         <input
           type="checkbox"
@@ -337,6 +409,18 @@ export function ReportFormModal({
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
               sx={{ width: 92 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
+            />
+            {/* B8（R2）：本周实际工时（人日）—— 仅勾选叶子可填（min 0 / step 0.5 / max WEEK_ACTUAL_DAYS_MAX）；
+                未勾选 disabled 灰显（值保留但不提交）、父节点恒禁用、编辑态勾选行=冲正入口 */}
+            <TextField
+              type="number"
+              label="本周实际工时（人日）"
+              size="small"
+              value={t.actualDays}
+              disabled={actualDaysDisabled}
+              onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, actualDays: Number(e.target.value) } }))}
+              sx={{ width: 128 }}
+              InputProps={{ inputProps: { min: 0, step: 0.5, max: WEEK_ACTUAL_DAYS_MAX } }}
             />
           </Stack>
           {n.children && n.children.length > 0 && renderTaskTree(n.children, depth + 1)}
@@ -393,7 +477,7 @@ export function ReportFormModal({
           <Typography variant="subtitle2">{REPORT_SECTION_TITLE.taskAssoc}</Typography>
           {editingReport && (
             <Typography variant="caption" color="text.secondary">
-              编辑已提交日志时该区域只读
+              编辑已提交日志：勾选与进度只读，本周实际工时可修改（保存后自动冲正累计）
             </Typography>
           )}
           {!editingReport && effectiveLockNodeId && (
@@ -404,7 +488,7 @@ export function ReportFormModal({
           {/* R5-P0-3：新建态恒显父节点规则说明（AC-3.3） */}
           {!editingReport && (
             <Typography variant="caption" color="text.secondary">
-              {PARENT_SECTION_TIP}
+              {PARENT_SECTION_TIP}；仅勾选任务可登记实际工时
             </Typography>
           )}
           {/* AC-3.8：lockNodeId 指向非叶子 → 降级不锁定 + 行内提示（D-2：不弹 toast） */}

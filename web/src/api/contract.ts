@@ -134,8 +134,6 @@ export interface WbsNodePayload {
   description?: string;
   owner?: string;
   estimateDays?: number;
-  /** 登记工时（小时，B7 R2）：仅叶子可填；父节点提交会被后端 E_WBS_EFFORT_PARENT 拒绝 */
-  effortHours?: number;
   startDate?: string;
   dueDate?: string;
   status?: TaskStatus;
@@ -150,7 +148,8 @@ export interface ReportPayload {
   doneNote: string;
   planItems: string[];
   resourceNote: string;
-  tasks: Array<{ nodeId: string; progressAfter: number; selected: boolean }>;
+  /** B8（R2）：tasks[].actualDays 为本周实际工时（人日）入参，仅勾选叶子行携带 */
+  tasks: Array<{ nodeId: string; progressAfter: number; selected: boolean; actualDays?: number }>;
   risks: Array<{ description: string; owner: string; dueDate: string }>;
 }
 

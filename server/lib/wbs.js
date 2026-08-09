@@ -105,12 +105,12 @@ function indexChildren(nodes) {
 }
 
 /**
- * 工时读时汇总（B7 · R1/R5，方案 A「强制汇总」）。
+ * 工时读时汇总（B8 · R1/R5，语义重构：`effortHours` 恒指「累计实际工时（人日）」）。
  *
- * 输入 API 形态节点数组（每节点带 `effortHours` 存储值，叶子=实际值/0、父=NULL→0），
+ * 输入 API 形态节点数组（每节点带 `effortHours` 存储值，叶子=历次已提交日志累加值/0、父=NULL→0），
  * 返回**新数组**（不改入参，幂等可重复调用），每节点补充：
  *  - `effortChildCount` = 直接子节点数（「由 N 个子任务汇总」的 N）；
- *  - `effortHours` = 叶子取存储值（`Number(n.effortHours) || 0`）；父 = Σ**直接子节点**
+ *  - `effortHours` = 叶子取存储累计值（`Number(n.effortHours) || 0`）；父 = Σ**直接子节点**
  *    `effortHours`（子为父时其值已是递归汇总，天然自底向上）。
  *
  * 后序实现：`indexChildren` 索引 + 记忆化 DFS（父节点在子节点算完后才求值），
@@ -626,7 +626,7 @@ module.exports = {
   subtreeRelativeDepth,
   descendantIdsOf,
   isDescendant,
-  // 工时读时汇总（B7）
+  // 工时读时汇总（B8：effortHours=累计实际工时·人日）
   decorateEffort,
   // 进度汇总
   weightedProgress,

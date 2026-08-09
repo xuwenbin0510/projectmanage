@@ -108,6 +108,8 @@ export function createReports(users: User[], wbsNodes: WbsNode[]): Report[] {
       progressBefore: Math.max(0, n.progress - 20),
       progressAfter: n.progress,
       selected: n.progress > 0,
+      // B8（R3）：本周实际人日（种子按 0，与 wbs fixtures effortHours=0 一致）
+      weekActualDays: 0,
     }));
 
     const risks: ReportRisk[] = spec.risks.map((r, i) => ({
