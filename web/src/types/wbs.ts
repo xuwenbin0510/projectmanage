@@ -51,6 +51,13 @@ export interface WbsNode {
   ownerName: string;
   estimateDays: number;
   actualDays: number;
+  /**
+   * 登记工时（小时，B7 R2/R3）：叶子=存储值（0 ≤ v ≤ EFFORT_HOURS_MAX）；
+   * 父节点=Σ直接子节点（服务端 `decorateEffort` 计算，只读，禁止前端自行求和）
+   */
+  effortHours: number;
+  /** 直接子节点数（「由 N 个子任务汇总」的 N，服务端计算，前端只读引用） */
+  effortChildCount: number;
   startDate: string;
   dueDate: string;
   status: TaskStatus;

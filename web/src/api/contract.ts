@@ -134,6 +134,8 @@ export interface WbsNodePayload {
   description?: string;
   owner?: string;
   estimateDays?: number;
+  /** 登记工时（小时，B7 R2）：仅叶子可填；父节点提交会被后端 E_WBS_EFFORT_PARENT 拒绝 */
+  effortHours?: number;
   startDate?: string;
   dueDate?: string;
   status?: TaskStatus;

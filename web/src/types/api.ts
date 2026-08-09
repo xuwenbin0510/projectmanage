@@ -43,6 +43,8 @@ export const ErrorCode = {
   E_WBS_DEADLINE_OVERFLOW: 'E_WBS_DEADLINE_OVERFLOW',
   /** 工时估算超过起止区间可用天数（用户反馈④b · 硬拦截） */
   E_WBS_ESTIMATE_OVERFLOW: 'E_WBS_ESTIMATE_OVERFLOW',
+  /** 有子节点的节点禁止手填工时（B7 R4 · 方案 A 强制汇总） */
+  E_WBS_EFFORT_PARENT: 'E_WBS_EFFORT_PARENT',
   E_REPORT_RISK_INCOMPLETE: 'E_REPORT_RISK_INCOMPLETE',
   E_REPORT_DUPLICATE: 'E_REPORT_DUPLICATE',
   E_NOT_APPROVER: 'E_NOT_APPROVER',
@@ -84,6 +86,7 @@ export const ERROR_MESSAGE_ZH: Record<string, string> = {
   E_WIP_EXCEEDED: 'WIP 已达上限，请先完成在办任务',
   E_WBS_DEADLINE_OVERFLOW: '子任务截止日期不能超过上级任务或关联里程碑的计划日期',
   E_WBS_ESTIMATE_OVERFLOW: '工时估算不得超过起止区间的可用天数',
+  E_WBS_EFFORT_PARENT: '有子节点的节点工时由子任务自动汇总，不可手填',
   E_REPORT_RISK_INCOMPLETE: '风险条目缺少责任人或截止日',
   E_REPORT_DUPLICATE: '本周周报已存在',
   E_NOT_APPROVER: '当前步骤无需您审批',

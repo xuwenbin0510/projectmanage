@@ -133,6 +133,9 @@ const DEFAULT_WBS_RULES = {
 /** 粒度上限（人日）：A 类 >5 告警，B 类 >2 告警，C 类沿用 A */
 const GRANULARITY_LIMIT = { A: 5, B: 2, C: 5 };
 
+/** 工时上限（小时）：B7 R2，叶子任务登记工时上限，与 web 端 EFFORT_HOURS_MAX 一致 */
+const EFFORT_HOURS_MAX = 1000;
+
 /** WIP 默认上限（架构 O8：进行中 ≤ 5，0 = 不限） */
 const DEFAULT_WIP_LIMIT = 5;
 
@@ -249,6 +252,7 @@ module.exports = {
   LEGACY_TASK_STATUS_MAP,
   DEFAULT_WBS_RULES,
   GRANULARITY_LIMIT,
+  EFFORT_HOURS_MAX,
   DEFAULT_WIP_LIMIT,
   REVIEW_TYPES,
   REVIEW_MODES,

@@ -704,6 +704,32 @@ function migrationV3(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v3 建结构化周报表 work_reports / work_report_tasks / work_report_risks');
 }
 
+/* ── v4：WBS 工时字段（B7 · T01） ──────────────────── */
+
+/**
+ * 迁移 v4：`wbs_nodes` 新增工时列 `effort_hours`（B7 R1）。
+ *
+ * 口径（方案 A「强制汇总」，见 docs/B7-任务分解.md）：
+ *  - 列可空，默认 NULL；**叶子**存实际值（缺省按 0），**父节点恒 NULL**（写路径负责清）。
+ *  - 展示值一律由 `server/lib/wbs.js#decorateEffort` 读时递归求和，不落缓存列。
+ *  - 存量行不回填（NULL → 展示按 0，Q3 推荐）。
+ *
+ * 幂等：`hasColumn` 守卫（沿用 v1 `tasks.name` 追加列范式）；重复执行安全。
+ *
+ * ⚠ `run()` 已统一开事务，此处**不要**自行 BEGIN。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV4(db, now) { // eslint-disable-line no-unused-vars
+  if (!tableExists(db, 'wbs_nodes')) return;
+  if (!hasColumn(db, 'wbs_nodes', 'effort_hours')) {
+    db.exec('ALTER TABLE wbs_nodes ADD COLUMN effort_hours REAL');
+  }
+  console.log('[migrations] v4 为 wbs_nodes 增加 effort_hours 列（工时设置 B7）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -714,6 +740,7 @@ const MIGRATIONS = [
   { version: 1, name: 'connect-v1-baseline', up: migrationV1 },
   { version: 2, name: 'connect-v2-wbs-board-audit', up: migrationV2 },
   { version: 3, name: 'connect-v3-reports', up: migrationV3 },
+  { version: 4, name: 'connect-v4-wbs-effort-hours', up: migrationV4 },
 ];
 
 /**

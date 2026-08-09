@@ -105,6 +105,53 @@ function indexChildren(nodes) {
 }
 
 /**
+ * 工时读时汇总（B7 · R1/R5，方案 A「强制汇总」）。
+ *
+ * 输入 API 形态节点数组（每节点带 `effortHours` 存储值，叶子=实际值/0、父=NULL→0），
+ * 返回**新数组**（不改入参，幂等可重复调用），每节点补充：
+ *  - `effortChildCount` = 直接子节点数（「由 N 个子任务汇总」的 N）；
+ *  - `effortHours` = 叶子取存储值（`Number(n.effortHours) || 0`）；父 = Σ**直接子节点**
+ *    `effortHours`（子为父时其值已是递归汇总，天然自底向上）。
+ *
+ * 后序实现：`indexChildren` 索引 + 记忆化 DFS（父节点在子节点算完后才求值），
+ * 任意输入顺序均正确；脏数据成环时由 guard 兜底（防御性，不爆栈）。
+ * 本期**不落缓存列**（D-B7-1），展示/统计一律走本函数装饰值。
+ *
+ * @param {Array} nodes 同项目全部节点（API 形态）
+ * @returns {Array} 新数组，每节点带 effortHours / effortChildCount
+ */
+function decorateEffort(nodes) {
+  const list = nodes || [];
+  if (!list.length) return [];
+  const childrenOf = indexChildren(list);
+  const memo = new Map();
+
+  const compute = function (node, guard) {
+    if (guard > 64) {
+      return { effortHours: Number(node.effortHours) || 0, effortChildCount: 0 };
+    }
+    if (memo.has(node.id)) return memo.get(node.id);
+    const kids = childrenOf.get(node.id) || [];
+    let effortHours;
+    if (kids.length) {
+      effortHours = kids.reduce(function (s, k) {
+        return s + compute(k, guard + 1).effortHours;
+      }, 0);
+    } else {
+      effortHours = Number(node.effortHours) || 0;
+    }
+    const result = { effortHours: effortHours, effortChildCount: kids.length };
+    memo.set(node.id, result);
+    return result;
+  };
+
+  return list.map(function (n) {
+    const r = compute(n, 0);
+    return Object.assign({}, n, { effortHours: r.effortHours, effortChildCount: r.effortChildCount });
+  });
+}
+
+/**
  * 扁平节点集 → 「拥有子节点」的父 id 集合（O(n)，真叶子判定的统一入口）。
  * @param {Array} nodes
  * @returns {Set<string>}
@@ -579,6 +626,8 @@ module.exports = {
   subtreeRelativeDepth,
   descendantIdsOf,
   isDescendant,
+  // 工时读时汇总（B7）
+  decorateEffort,
   // 进度汇总
   weightedProgress,
   rollupProgressFlat,

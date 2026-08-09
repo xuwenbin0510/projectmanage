@@ -40,6 +40,7 @@ import { api } from '@/api/client';
 import { allowedChildTypes, resolveWbsRules, validateWbsPlacement } from '@/api/mock/rules';
 import {
   DEFAULT_WBS_RULES,
+  EFFORT_HOURS_MAX,
   GRANULARITY_LIMIT,
   TASK_STATUSES,
   WBS_NODE_TYPE_LABEL,
@@ -57,6 +58,8 @@ interface NodeForm {
   name: string;
   owner: string;
   estimateDays: number;
+  /** 登记工时（小时，B7 R2/R3）：叶子可编辑；父节点只读汇总（提交不携带） */
+  effortHours: number;
   status: string;
   /** 关联里程碑 id（任务 / 子任务均可挂） */
   milestoneId: string;
@@ -70,6 +73,7 @@ const EMPTY_FORM: NodeForm = {
   name: '',
   owner: '',
   estimateDays: 1,
+  effortHours: 0,
   status: '待办',
   milestoneId: '',
   dueDate: '',
@@ -169,6 +173,9 @@ export function WbsPage(): JSX.Element {
     [editingId, flatNodes],
   );
 
+  /** B7：工时是否可编辑 —— 叶子（无子节点）可填；父节点只读汇总（新建态恒叶子） */
+  const isEffortEditable = editingNode ? editingNode.children.length === 0 : true;
+
   /** 当前表单「上级节点」对应的节点；空串 = 根层 */
   const formParent = useMemo(
     () => (form.parentId ? flatNodes.find((n) => n.id === form.parentId) ?? null : null),
@@ -222,6 +229,8 @@ export function WbsPage(): JSX.Element {
       name: node.name,
       owner: node.owner,
       estimateDays: node.estimateDays,
+      // B7：叶=存储值，父=服务端 Σ（只读回显）
+      effortHours: node.effortHours,
       status: node.status,
       milestoneId: node.milestoneId ?? '',
       dueDate: node.dueDate ?? '',
@@ -271,12 +280,22 @@ export function WbsPage(): JSX.Element {
       toast.warning(preErr.message);
       return;
     }
+    // B7（R2）：叶子提交前校验工时边界（0 ≤ v ≤ EFFORT_HOURS_MAX）；父节点不校验也不发送
+    if (isEffortEditable) {
+      const effort = Number(form.effortHours);
+      if (!Number.isFinite(effort) || effort < 0 || effort > EFFORT_HOURS_MAX) {
+        toast.warning(`工时须为 0~${EFFORT_HOURS_MAX} 的数字（可含 0.5 小数）`);
+        return;
+      }
+    }
     const payload = {
       parentId: form.parentId || null,
       nodeType: form.nodeType,
       name: form.name.trim(),
       owner: form.owner || undefined,
       estimateDays: Number(form.estimateDays) || 0,
+      // B7：仅叶子携带 effortHours；父节点不发送（即使构造携带，后端也拒绝）
+      ...(isEffortEditable ? { effortHours: Number(form.effortHours) || 0 } : {}),
       status: form.status as TaskStatus,
       // 任务 / 子任务均可挂里程碑
       milestoneId: form.milestoneId || null,
@@ -592,6 +611,36 @@ export function WbsPage(): JSX.Element {
           fullWidth
           InputProps={{ inputProps: { min: 0 } }}
         />
+        {/* B7（R2/R3）：工时(h) —— 叶子可编辑（min 0 / step 0.5 / 上限 EFFORT_HOURS_MAX）；
+            父节点 disabled 灰显 = Σ直接子节点 + 「由 N 个子任务汇总」+ Tooltip（复用 canAddChild 范式） */}
+        {isEffortEditable ? (
+          <TextField
+            label="工时(h)"
+            type="number"
+            value={form.effortHours}
+            onChange={(e) => setForm({ ...form, effortHours: Number(e.target.value) })}
+            fullWidth
+            InputProps={{ inputProps: { min: 0, step: 0.5, max: EFFORT_HOURS_MAX } }}
+            helperText={`登记工时（小时），上限 ${EFFORT_HOURS_MAX}h`}
+          />
+        ) : (
+          <Tooltip
+            title={`由 ${editingNode?.effortChildCount ?? 0} 个子任务汇总：子任务工时之和，不可手填`}
+            arrow
+          >
+            <span>
+              <TextField
+                label="工时(h)"
+                type="number"
+                value={editingNode?.effortHours ?? 0}
+                disabled
+                fullWidth
+                InputProps={{ inputProps: { min: 0, step: 0.5, max: EFFORT_HOURS_MAX } }}
+                helperText={`由 ${editingNode?.effortChildCount ?? 0} 个子任务汇总`}
+              />
+            </span>
+          </Tooltip>
+        )}
         <TextField
           select
           label="状态"

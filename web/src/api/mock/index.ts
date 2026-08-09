@@ -70,6 +70,7 @@ import {
   PROJECT_TRANSITIONS,
   REVIEW_TEMPLATES,
   DEFAULT_WIP_LIMIT,
+  EFFORT_HOURS_MAX,
   AUDIT_ACTION_LABEL,
   GATE_PASSED_STATUSES,
 } from '@/config/enums';
@@ -95,6 +96,57 @@ const ROLE_FALLBACK_ORDER: GlobalRole[] = ['pmo', 'management', 'tl', 'qa', 'cm'
 
 function nf(): never {
   throw new ApiError(ErrorCode.E_NOT_FOUND);
+}
+
+/**
+ * B7（与后端 `server/lib/wbs.js#decorateEffort` 同口径）：工时读时汇总。
+ * 叶子=存储值（缺省 0）；父=Σ直接子节点；补充 effortChildCount（直接子节点数）。
+ * 返回**新数组**，不改入参。Mock 与真实后端出参形态保持一致。
+ */
+function decorateEffort(nodes: WbsNode[]): WbsNode[] {
+  const childrenOf = new Map<string, WbsNode[]>();
+  for (const n of nodes) {
+    const key = n.parentId ?? '__root__';
+    const arr = childrenOf.get(key);
+    if (arr) arr.push(n);
+    else childrenOf.set(key, [n]);
+  }
+  const memo = new Map<string, { effortHours: number; effortChildCount: number }>();
+  const compute = (n: WbsNode, guard: number): { effortHours: number; effortChildCount: number } => {
+    if (guard > 64) return { effortHours: Number(n.effortHours) || 0, effortChildCount: 0 };
+    const cached = memo.get(n.id);
+    if (cached) return cached;
+    const kids = childrenOf.get(n.id) ?? [];
+    const effortHours = kids.length
+      ? kids.reduce((s, k) => s + compute(k, guard + 1).effortHours, 0)
+      : (Number(n.effortHours) || 0);
+    const result = { effortHours, effortChildCount: kids.length };
+    memo.set(n.id, result);
+    return result;
+  };
+  return nodes.map((n) => {
+    const r = compute(n, 0);
+    return { ...n, effortHours: r.effortHours, effortChildCount: r.effortChildCount };
+  });
+}
+
+/**
+ * B7（R2/R4）：工时数值校验（与后端 assertEffortHours 同口径）。
+ * 有子节点禁止手填 → E_WBS_EFFORT_PARENT；叶子数值非法 → E_VALIDATION。
+ */
+function assertEffortHours(payload: WbsNodePayload | Partial<WbsNodePayload>, isParent: boolean, nodeId: string, childCount: number): void {
+  if (payload.effortHours === undefined) return;
+  if (isParent) {
+    throw new ApiError(ErrorCode.E_WBS_EFFORT_PARENT, '有子节点的节点工时由子任务自动汇总，不可手填', { nodeId, childCount });
+  }
+  const v = Number(payload.effortHours);
+  if (!Number.isFinite(v) || v < 0 || v > EFFORT_HOURS_MAX) {
+    throw new ApiError(
+      ErrorCode.E_VALIDATION,
+      `工时须为 0~${EFFORT_HOURS_MAX} 的数字（可含 0.5 小数）`,
+      { fields: { effortHours: '非法取值' } },
+    );
+  }
 }
 
 /** 取当前会话用户，未登录抛 E_UNAUTHORIZED */
@@ -730,6 +782,9 @@ export class MockApiClient implements ApiClient {
             ownerName: '',
             estimateDays: 0,
             actualDays: 0,
+            // B7：骨架根节点此刻是叶子，工时按 0 起步；读时由 decorateEffort 覆盖父节点 Σ
+            effortHours: 0,
+            effortChildCount: 0,
             startDate: '',
             dueDate: ms.currentDate,
             status: '待办',
@@ -1176,7 +1231,9 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     currentUser(db);
     return deepClone(
-      db.wbsNodes.filter((n) => n.projectId === projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      decorateEffort(
+        db.wbsNodes.filter((n) => n.projectId === projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      ),
     );
   }
 
@@ -1205,6 +1262,10 @@ export class MockApiClient implements ApiClient {
     if (!payload.owner || !payload.estimateDays) {
       throw new ApiError(ErrorCode.E_WBS_LEAF_INCOMPLETE);
     }
+
+    /* B7：新节点恒叶子 → 工时数值校验 */
+    const newId = genId('W');
+    assertEffortHours(payload, false, newId, 0);
 
     // 关联里程碑：显式传入用传入值；未传则默认继承上级节点的里程碑（用户反馈②）
     const milestoneId = payload.milestoneId !== undefined ? payload.milestoneId : (parent?.milestoneId ?? null);
@@ -1235,7 +1296,7 @@ export class MockApiClient implements ApiClient {
     }
 
     const node: WbsNode = {
-      id: genId('W'),
+      id: newId,
       projectId,
       parentId: payload.parentId,
       wbsCode,
@@ -1247,6 +1308,9 @@ export class MockApiClient implements ApiClient {
       ownerName: u?.name ?? '',
       estimateDays: payload.estimateDays ?? 0,
       actualDays: 0,
+      // B7：新节点恒叶子 → 存实际值，缺省按 0
+      effortHours: Number(payload.effortHours) || 0,
+      effortChildCount: 0,
       startDate: payload.startDate ?? today(),
       dueDate: effectiveDue,
       status: payload.status ?? '待办',
@@ -1259,13 +1323,15 @@ export class MockApiClient implements ApiClient {
       updatedAt: ts,
     };
     db.wbsNodes.push(node);
+    /* B7（D-B7-3）：父节点此前若是叶子存过值 → 成为父即清（读时由 decorateEffort 覆盖） */
+    if (parent) parent.effortHours = 0;
     audit(db, me, 'wbs_node', node.id, 'create', projectId, `新增 WBS 节点「${wbsCode} ${payload.name}」`);
     /* R4-P0-3：新叶子改变父子汇总 → 父链回写 + 状态收敛 */
     syncWbsProgressStatus(db, projectId);
     /* 新叶子会改变里程碑完成度 → 触发状态重推 */
     refreshMilestoneStatuses(db, projectId);
     saveDb();
-    return deepClone(node);
+    return deepClone(decorateEffort([node])[0]);
   }
 
   async updateWbsNode(id: string, payload: Partial<WbsNodePayload>): Promise<WbsNode> {
@@ -1279,6 +1345,24 @@ export class MockApiClient implements ApiClient {
 
     // R-4 类型锁：已有子节点的节点不可改 nodeType
     const children = db.wbsNodes.filter((n) => n.parentId === node.id);
+
+    /* B7 工时：父节点提交抛 E_WBS_EFFORT_PARENT；叶子校验后写存储值 */
+    if (payload.effortHours !== undefined) {
+      assertEffortHours(payload, children.length > 0, node.id, children.length);
+      if (children.length === 0) {
+        const effEffort = Number(payload.effortHours) || 0;
+        if (effEffort !== node.effortHours) {
+          diff.push({
+            field: 'effortHours',
+            label: '工时(h)',
+            before: String(node.effortHours ?? 0),
+            after: String(effEffort),
+          });
+          node.effortHours = effEffort;
+        }
+      }
+    }
+
     if (payload.nodeType !== undefined && payload.nodeType !== node.nodeType) {
       if (children.length > 0) {
         throw new ApiError(ErrorCode.E_WBS_TYPE_LOCKED, undefined, { nodeId: id, childCount: children.length });
@@ -1373,7 +1457,8 @@ export class MockApiClient implements ApiClient {
     /* 进度 / 挂载关系变化会影响里程碑完成度 → 触发状态重推 */
     refreshMilestoneStatuses(db, node.projectId);
     saveDb();
-    return deepClone(node);
+    /* B7：返回装饰后的单节点（父=Σ直接子节点，叶=存储值） */
+    return deepClone(decorateEffort(db.wbsNodes).find((n) => n.id === id) ?? node);
   }
 
   async deleteWbsNode(id: string): Promise<void> {
@@ -1395,6 +1480,11 @@ export class MockApiClient implements ApiClient {
       }
     }
     db.wbsNodes = db.wbsNodes.filter((n) => !toDelete.has(n.id));
+    /* B7（D-B7-3）：删子树后清其原父 effort_hours（读时由 decorateEffort 覆盖） */
+    if (node.parentId) {
+      const parent = db.wbsNodes.find((n) => n.id === node.parentId);
+      if (parent) parent.effortHours = 0;
+    }
     audit(db, me, 'wbs_node', id, 'delete', node.projectId, `删除节点「${node.wbsCode} ${node.name}」及其 ${toDelete.size - 1} 个子节点`);
     /* R4-P0-3：删除改变父子汇总 → 父链回写 + 状态收敛 */
     syncWbsProgressStatus(db, node.projectId);
@@ -1436,7 +1526,16 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(placementError.code, placementError.message, placementError.data);
     }
 
+    /* B7（D-B7-3）：移动改变父子结构 → 原父与新父一并清 effort_hours（成为父即清） */
+    const oldParentId = node.parentId;
     node.parentId = newParentId;
+    const parentIdsToClear = new Set<string>();
+    if (oldParentId) parentIdsToClear.add(oldParentId);
+    if (newParentId) parentIdsToClear.add(newParentId);
+    parentIdsToClear.forEach((pid) => {
+      const p = db.wbsNodes.find((n) => n.id === pid);
+      if (p) p.effortHours = 0;
+    });
     const siblings = db.wbsNodes
       .filter((n) => n.projectId === node.projectId && n.parentId === newParentId && n.id !== id)
       .sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode));
@@ -1454,7 +1553,9 @@ export class MockApiClient implements ApiClient {
     syncWbsProgressStatus(db, node.projectId);
     saveDb();
     return deepClone(
-      db.wbsNodes.filter((n) => n.projectId === node.projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      decorateEffort(
+        db.wbsNodes.filter((n) => n.projectId === node.projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      ),
     );
   }
 

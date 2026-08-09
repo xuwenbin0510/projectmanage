@@ -159,6 +159,9 @@ export function createWbs(users: User[]): WbsBundle {
         ownerName: nameOf(users, owner),
         estimateDays,
         actualDays: Number(((estimateDays * progress) / 100).toFixed(1)),
+        // B7：存量种子工时按 0 起步（Q3 不回填）；读时由 mock decorateEffort 覆盖父节点 Σ
+        effortHours: 0,
+        effortChildCount: 0,
         startDate: addDays(today(), dueOffset - 10),
         dueDate: addDays(today(), dueOffset),
         status,

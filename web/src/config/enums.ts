@@ -179,6 +179,9 @@ export const DEFAULT_WBS_RULES: WbsRules = {
 /** 粒度上限（人日）：A 类 >5 告警，B 类 >2 告警，C 类沿用 A */
 export const GRANULARITY_LIMIT: Record<ProjectType, number> = { A: 5, B: 2, C: 5 };
 
+/** 工时上限（小时）：B7 R2，叶子任务登记工时上限，与后端 server/config/enums.js 一致 */
+export const EFFORT_HOURS_MAX = 1000;
+
 /** WIP 默认上限（架构 O8：进行中 ≤ 5，0 = 不限） */
 export const DEFAULT_WIP_LIMIT = 5;
 
