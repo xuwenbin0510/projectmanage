@@ -54,6 +54,11 @@ export const ErrorCode = {
   E_PROJECT_ARCHIVED: 'E_PROJECT_ARCHIVED',
   E_CLOSE_BLOCKED: 'E_CLOSE_BLOCKED',
   E_NETWORK: 'E_NETWORK',
+  /* ── 后端专有码（server/lib/errors.js）：前端只消费、不主动产生 ── */
+  /** 501 · 接口尚未实现（Connect v1 降级桩返回，页面应降级为空态而非白屏） */
+  E_NOT_IMPLEMENTED: 'E_NOT_IMPLEMENTED',
+  /** 500 · 服务器内部错误（未捕获异常经 errorMiddleware 兜底） */
+  E_INTERNAL: 'E_INTERNAL',
 } as const;
 
 export type ErrorCodeKey = keyof typeof ErrorCode;
@@ -90,6 +95,8 @@ export const ERROR_MESSAGE_ZH: Record<string, string> = {
   E_PROJECT_ARCHIVED: '项目已结项，处于只读归档状态',
   E_CLOSE_BLOCKED: '结项被阻塞，请先处理阻塞项',
   E_NETWORK: '网络异常，请稍后重试',
+  E_NOT_IMPLEMENTED: '该功能尚未上线',
+  E_INTERNAL: '服务器内部错误',
 };
 
 /** 业务异常（client.ts 抛出，页面统一 catch） */

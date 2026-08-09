@@ -9,7 +9,6 @@ import type { ProjectDocument } from '@/types/audit';
 import { useParams } from 'react-router-dom';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
-import { fmtDate } from '@/utils/date';
 
 /**
  * 文档清单（P1 二期规划占位）

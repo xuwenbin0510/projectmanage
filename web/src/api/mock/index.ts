@@ -475,6 +475,15 @@ function buildBoard(db: MockDb, projectId: string): BoardView {
 export class MockApiClient implements ApiClient {
   /* ── 认证 ─────────────────────────────────────── */
 
+  /**
+   * @prd P0-11 Mock 态没有服务端凭证，恒返回空串。
+   * 登录页据此提示「请改用开发登录」，而不是拿假 AppID 去调 JSSDK。
+   */
+  async getAppId(): Promise<string> {
+    await delay(30);
+    return '';
+  }
+
   /** @prd P0-11 开发态免飞书登录 */
   async devLogin(openId: string): Promise<Session> {
     await delay();

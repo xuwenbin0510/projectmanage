@@ -2,8 +2,17 @@ node_modules/
 pm.db
 pm.db-shm
 pm.db-wal
+# test_runner.js 生成的临时库
+test_pm.db
+test_pm.db-shm
+test_pm.db-wal
 .env
 *.log
+
+# 构建产物与本地缓存（由 CI/本地构建生成，不入库）
+dist/
+.cache/
+vite.config.ts.timestamp-*.mjs
 
 # 开发/调试临时脚本（非应用代码，不入库）
 devcheck.js
@@ -14,3 +23,8 @@ verifydb.js
 verifydev.js
 verifyfix.js
 OVERVIEW.md
+
+# B2/B3 验证临时库
+b2_verify.db
+b2_verify.db-shm
+b2_verify.db-wal

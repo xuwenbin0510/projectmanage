@@ -12,6 +12,14 @@
  *   R3-8         memberNameOf 姓名解析 / openId 回退
  *   R3-11        引擎不再抛 E_MS_REQUIRED_LOCKED / E_GATE_NOT_PASSED（页面死分支清理后的行为）
  *
+ * ── R5 断言维护记录（严过关 · 只改测试脚本，未动产品源码）──
+ * R5 落地后本脚本 1 条源码核验断言过期（源于 R5 有意变更，非源码 bug），已就地更新，其余保持原样：
+ *   · R3-7② 编辑态勾选/进度 disabled → 旧断言 grep 裸 `disabled={readOnly}`；R5-P0-3 令父节点行
+ *     checkbox 与「完%」一并禁用，两处表达式分别变为 `readOnly || locked || hasChildren`
+ *     与 `readOnly || hasChildren`。新断言逐字核验这两处真实表达式 + `const readOnly = Boolean(editingReport)`，
+ *     守住 R3-7② 原不变量：两处均以 `readOnly ||` 打头 → 编辑态无条件双双禁用。
+ * 同类过期在 R4 脚本共 5 条，已另行修复（见 qa_round4_optimize.mjs 头部同名记录）。
+ *
  * 用法：node scripts/qa_round3_optimize.mjs
  */
 import { createServer } from 'vite';
@@ -411,9 +419,16 @@ try {
     modalSrc.includes('编辑已提交日志时该区域只读'),
     'R3-6 源码核验：编辑态追加只读说明（ReportFormModal）',
   );
+  /* R5-P0-3 变更：父节点行 checkbox 与「完%」一并禁用，两处 disabled 表达式均追加 hasChildren
+     （checkbox 为 `readOnly || locked || hasChildren`，「完%」为 `readOnly || hasChildren`），
+     裸 `disabled={readOnly}` 已不存在 → R3 期旧断言过期。
+     R3-7② 的原意是「编辑态勾选与进度双双禁用」，该不变量在 R5 仍成立：两处表达式**均以
+     `readOnly ||` 打头**，readOnly 为真即无条件禁用。故逐字核验两处真实表达式 + readOnly 定义。 */
   ok(
-    modalSrc.includes('disabled={readOnly}') && modalSrc.includes('const readOnly = Boolean(editingReport)'),
-    'R3-7② 源码核验：编辑态任务勾选/进度 disabled（ReportFormModal）',
+    modalSrc.includes('disabled={readOnly || locked || hasChildren}') &&
+      modalSrc.includes('disabled={readOnly || hasChildren}') &&
+      modalSrc.includes('const readOnly = Boolean(editingReport)'),
+    'R3-7②/R5-P0-3 源码核验：编辑态任务勾选（readOnly||locked||hasChildren）与进度（readOnly||hasChildren）均 disabled（ReportFormModal）',
   );
   ok(
     modalSrc.includes('editingReport.tasks.map<ReportTaskRef>') ||

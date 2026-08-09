@@ -204,6 +204,12 @@ export interface MetaData {
  */
 export interface ApiClient {
   /* 认证 P0-11 */
+  /**
+   * 取服务端下发的飞书 AppID（`GET /api/appid`，免鉴权）。
+   * 供 JSSDK `requestAuthCode(appId)` 使用——**不得**用前端环境变量顶替。
+   * 服务端未配置 FEISHU_APP_ID 时返回空串，调用方据此回落到开发登录。
+   */
+  getAppId(): Promise<string>;
   devLogin(openId: string): Promise<Session>;
   feishuLogin(code: string): Promise<Session>;
   me(): Promise<User>;

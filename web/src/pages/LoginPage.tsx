@@ -19,7 +19,7 @@ import { GLOBAL_ROLE_LABEL } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
 import { useToast } from '@/hooks/useToast';
-import { USE_MOCK } from '@/api/client';
+import { api, USE_MOCK } from '@/api/client';
 import { isInFeishu, hasFeishuSdk, requestAuthCode, waitSdkReady } from '@/utils/feishu';
 import { alphaOf as alpha, tokens } from '@/theme/tokens';
 
@@ -70,11 +70,20 @@ export function LoginPage(): JSX.Element {
     }
   };
 
-  /** 飞书免登：JSSDK 取 code → 换会话 */
+  /**
+   * 飞书免登：服务端取真实 AppID → JSSDK 取 code → 换会话。
+   *
+   * ⚠️ AppID **必须**来自服务端 `GET /api/appid`（后端读 FEISHU_APP_ID）。
+   * 历史实现误传了 `VITE_APP_TITLE`（应用标题），JSSDK 一定取不到 code。
+   */
   const handleFeishuLogin = async (): Promise<void> => {
     setFeishuBusy(true);
     try {
-      const code = await requestAuthCode(import.meta.env.VITE_APP_TITLE ?? 'cli_demo_appid');
+      const appId = await api.getAppId();
+      if (!appId) {
+        throw new Error('服务端未配置飞书应用凭证（FEISHU_APP_ID），请改用开发登录');
+      }
+      const code = await requestAuthCode(appId);
       const user = await loginByCode(code);
       toast.success(`欢迎回来，${user.name}`);
       navigate(from, { replace: true });

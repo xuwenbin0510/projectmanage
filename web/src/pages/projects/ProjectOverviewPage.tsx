@@ -144,29 +144,6 @@ export function ProjectOverviewPage(): JSX.Element {
     return list.length ? list : [{ kind: 'gate_status', message: e.message }];
   };
 
-  /** 本地门禁体检：返回全部未通过项（空数组 = 可提交通过） */
-  const collectGateBlockers = (): GateBlocker[] => {
-    const list: GateBlocker[] = [];
-    if (!activeMs?.gate) return list;
-    activeMs.gateItems
-      .filter((i) => !i.checked)
-      .forEach((i) =>
-        list.push({
-          kind: 'gate_item',
-          message: `检查项未确认：${i.seq}. ${i.content}`,
-          hint: `责任角色 ${i.ownerRole.toUpperCase()}`,
-        }),
-      );
-    if (activeMs.gate.status === '不通过') {
-      list.push({
-        kind: 'gate_status',
-        message: `质量门 ${activeMs.gate.code} 结论为「不通过」`,
-        hint: '需整改后重新提交门控结论',
-      });
-    }
-    return list;
-  };
-
   /** 直接标记选中里程碑达成（仅对无门的自建里程碑有效；有门走门控） */
   const handleAchieve = async (): Promise<void> => {
     if (!activeMs) return;

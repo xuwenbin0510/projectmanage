@@ -104,6 +104,11 @@ const del = <T>(p: string): Promise<T> => request<T>('DELETE', p);
 
 export class HttpApiClient implements ApiClient {
   /* 认证 */
+  async getAppId(): Promise<string> {
+    const res = await get<{ appId: string } | null>('/appid');
+    return res && typeof res.appId === 'string' ? res.appId : '';
+  }
+
   async devLogin(openId: string): Promise<Session> {
     const s = await post<Session>('/auth/devlogin', { openId });
     setToken(s.token);
