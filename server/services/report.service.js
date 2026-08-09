@@ -227,14 +227,14 @@ function assembleById(db, reportId) {
 /* ── 读 ─────────────────────────────────────────────── */
 
 /**
- * 列出项目下全部周报（含历史多次提交，倒序）。
+ * 列出项目下全部周报（含历史多次提交，默认填报时间倒序）。
  * @param {import('better-sqlite3').Database} db
  * @param {string} projectId
  * @returns {object[]} Report[]
  */
 function listReports(db, projectId) {
   const rows = db
-    .prepare('SELECT * FROM work_reports WHERE project_id = ? ORDER BY week DESC, created_at DESC')
+    .prepare('SELECT * FROM work_reports WHERE project_id = ? ORDER BY created_at DESC')
     .all(String(projectId));
   if (!rows.length) return [];
 

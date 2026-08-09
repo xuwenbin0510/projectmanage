@@ -491,9 +491,14 @@ async function testSnapshotAndNumbers(proj, otherProj) {
   assertEq(latest.json.data.doneNote, '第三次提交', 'L2 最新一条内容正确');
 
   const listAll = await call('GET', url);
-  const weeks = (listAll.json.data || []).map((r) => r.week);
-  const sortedDesc = weeks.slice().sort().reverse();
-  assertEq(JSON.stringify(weeks), JSON.stringify(sortedDesc), 'L3 列表按 week 倒序');
+  /* B5-R3：listReports 默认排序已由「week 倒序」改为「填报时间（created_at）倒序」，
+     本断言随之更新为 created_at 倒序语义（ISO 字符串可字典序比较，与时间序一致） */
+  const createdAtList = (listAll.json.data || []).map((r) => r.createdAt);
+  const sortedCreatedDesc = createdAtList.slice().sort().reverse();
+  assertEq(
+    JSON.stringify(createdAtList), JSON.stringify(sortedCreatedDesc),
+    'L3 列表按填报时间（createdAt）倒序（B5-R3 默认排序）',
+  );
   assert((listAll.json.data || []).length >= 4, 'L4 列表含历史多次提交（含草稿）', (listAll.json.data || []).length);
 
   /* 不存在的周次 → null */

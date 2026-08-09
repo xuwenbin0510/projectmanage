@@ -26,7 +26,7 @@ import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
 import { REPORT_SECTION_TITLE } from '@/config/enums';
 import { dayjs, weekCode, shiftWeek } from '@/utils/date';
-import { tokens, progressToneOf } from '@/theme/tokens';
+import { tokens, alphaOf, progressToneOf } from '@/theme/tokens';
 import { memberNameOf } from '@/utils/member';
 import { flattenTree, parentIdSet } from '@/utils/wbs';
 
@@ -72,9 +72,9 @@ export interface ReportFormModalProps {
   /** 编辑目标；null/undefined = 新建 */
   editingReport?: Report | null;
   /**
-   * R4-P0-4 新建态预关联锁定节点 id（WBS 入口传入）：
-   * checkbox `checked + disabled` + 锁图标 + tooltip「由「写日志」进入，该任务已锁定；可继续勾选其他任务」；
-   * 仅锁定关联关系，进度值输入保持可编辑；可额外勾选其他任务。
+   * B5-R1 锁定入口（WBS「写日志」/ ReportsPage 旧链接传入 lockNodeId）：
+   * 任务树全锁定——仅当前节点 `checked + disabled`，其余节点 checkbox 全 disabled；
+   * 全部「完成进度(%)」输入框只读，当前节点值 = WBS 当前进度（系统带入）。
    *
    * R5-P0-3（AC-3.8）：若该 id 指向的节点**已有子节点**，自动降级为不锁定
    * （见 `effectiveLockNodeId`），并在任务关联区 caption 提示，保护 ReportsPage 旧链接兼容路径。
@@ -137,6 +137,8 @@ export function ReportFormModal({
   );
   /** 锁定被降级（仅用于区域 caption 提示，D-2：不弹 toast） */
   const lockDowngraded = Boolean(lockNodeId) && !effectiveLockNodeId;
+  /** B5-R1：新建态 + 锁定入口（WBS「写日志」/ ReportsPage 旧链接）→ 任务树全锁定 + 进度只读 */
+  const lockMode = !editingReport && effectiveLockNodeId !== null;
 
   const {
     control,
@@ -267,7 +269,7 @@ export function ReportFormModal({
   /**
    * WBS 树形勾选（R4-P0-4：新建态 lockNodeId 锁定勾选 + 锁图标；编辑态只读）。
    *
-   * R5-P0-3：父节点行「禁用可见」——checkbox 与「完%」`disabled` + Tooltip 解释（AC-3.3），
+   * R5-P0-3：父节点行「禁用可见」——checkbox 与「完成进度(%)」`disabled` + Tooltip 解释（AC-3.3），
    * 叶子行行为完全不变（AC-3.4）。
    * ⚠️ 不变量：本轮**只动 `disabled` 与文案，绝不动 `checked`**，否则历史父节点关联
    *    在编辑态会被显示成未勾选（违反 AC-3.9 存量如实展示）。
@@ -283,13 +285,20 @@ export function ReportFormModal({
         <input
           type="checkbox"
           checked={t.selected || locked}
-          disabled={readOnly || locked || hasChildren}
+          disabled={readOnly || lockMode || hasChildren}
           onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, selected: e.target.checked } }))}
           style={{ accentColor: tokens.brand.primary }}
         />
       );
       return (
-        <Box key={n.id} sx={{ pl: depth * 2 }}>
+        <Box
+          key={n.id}
+          sx={{
+            pl: depth * 2,
+            // B5-R4：锁定节点行品牌青 tint（checked+disabled + 锁图标 + 浅青底）
+            ...(locked ? { backgroundColor: alphaOf(tokens.brand.primary, 0.05), borderRadius: 1 } : {}),
+          }}
+        >
           <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', py: 0.25 }}>
             {/* disabled input 不触发 hover，父节点行必须套 span 才能出 Tooltip（布局不跳动） */}
             {hasChildren ? (
@@ -300,7 +309,7 @@ export function ReportFormModal({
               checkbox
             )}
             {locked && (
-              <Tooltip title="由「写日志」进入，该任务已锁定；可继续勾选其他任务" arrow>
+              <Tooltip title="由「写日志」进入，仅可关联当前任务" arrow>
                 <LockOutlinedIcon sx={{ fontSize: 14, color: tokens.text.secondary, flexShrink: 0 }} />
               </Tooltip>
             )}
@@ -318,11 +327,11 @@ export function ReportFormModal({
             </Tooltip>
             <TextField
               type="number"
-              label="完%"
+              label="完成进度(%)"
               size="small"
               value={t.progressAfter}
-              /* R5-P0-3：父节点「完%」禁用，灰显当前汇总值（AC-3.3） */
-              disabled={readOnly || hasChildren}
+              /* B5-R1：锁定模式下全部「完成进度(%)」输入只读；父节点天然禁用（AC-3.3） */
+              disabled={readOnly || lockMode || hasChildren}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
               sx={{ width: 92 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
@@ -387,7 +396,7 @@ export function ReportFormModal({
           )}
           {!editingReport && effectiveLockNodeId && (
             <Typography variant="caption" color="text.secondary">
-              由「写日志」进入，预关联任务已锁定；可继续勾选其他任务
+              由「写日志」进入，仅关联当前任务；进度由系统带入，不可修改
             </Typography>
           )}
           {/* R5-P0-3：新建态恒显父节点规则说明（AC-3.3） */}

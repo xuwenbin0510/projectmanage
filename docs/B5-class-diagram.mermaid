@@ -1,0 +1,42 @@
+classDiagram
+    class ReportFormModal {
+        +open: boolean
+        +projectId: string
+        +editingReport: Report | null
+        +lockNodeId: string | null
+        +keepOpenOnSubmit: boolean
+        -taskMap: Record<string, TaskProgress>
+        -effectiveLockNodeId: string | null
+        -lockDowngraded: boolean
+        -lockMode: boolean  // R1: effectiveLockNodeId 非空（新建态）
+        +onSubmitted(report: Report): void
+        +onClose(): void
+        -renderTaskTree(list: WbsTreeNode[], depth: number): JSX.Element[]
+        -buildNewTaskRefs(): ReportTaskRef[]
+        -assemble(values: FormValues): ReportPayload
+        -doSave(values: FormValues, submit: boolean): Promise~void~
+    }
+    class ReportsPage {
+        -reports: Report[]
+        -prefillLockNodeId: string | null
+        -sortState: { key: string; order: 'asc' | 'desc' }  // R3
+        +openCreateWithPrefill(nodeId: string): void
+        +openDetail(r: Report): void
+        +openEditReport(r: Report): void
+        -toggleSort(): void  // R3
+    }
+    class WbsPage {
+        -reportLockNodeId: string | null
+        -reportModalOpen: boolean
+        +openReportModal(nodeId: string): void
+    }
+    class reportSvc {
+        +listReports(db, projectId): Report[]  // R3: ORDER BY created_at DESC
+        +createReport(db, payload, me, submit): Report
+        +updateReport(db, id, payload, me): Report
+    }
+    ReportFormModal --> ReportFormModal : lockNodeId 非空 → lockMode
+    ReportFormModal --> WbsPage : onSubmitted → fetchWbs + refreshMilestones
+    ReportsPage --> ReportFormModal : lockNodeId={prefillLockNodeId}
+    WbsPage --> ReportFormModal : lockNodeId={reportLockNodeId}
+    reportSvc ..> ReportsPage : GET /reports（默认 created_at DESC）

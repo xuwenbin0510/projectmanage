@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
   Chip,
   Stack,
+  TableSortLabel,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -28,8 +29,9 @@ import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
 import { REPORT_SECTION_TITLE } from '@/config/enums';
-import { fmtDate } from '@/utils/date';
+import { fmtDateTime } from '@/utils/date';
 import { memberNameOf } from '@/utils/member';
+import { tokens } from '@/theme/tokens';
 
 /**
  * 结构化周报：① 完成 ② 计划 ③ 风险 ④ 协调资源（P0-08）
@@ -112,6 +114,28 @@ export function ReportsPage(): JSX.Element {
     setPrefillLockNodeId(null);
   };
 
+  /** B5-R3：页面级排序状态（默认填报时间倒序；点击表头切换升/降，不改共享 DataTable） */
+  const [sortState, setSortState] = useState<{ key: 'createdAt'; order: 'asc' | 'desc' }>({
+    key: 'createdAt',
+    order: 'desc',
+  });
+
+  const toggleSort = (): void => {
+    setSortState((prev) => ({ key: 'createdAt', order: prev.order === 'desc' ? 'asc' : 'desc' }));
+  };
+
+  /** B5-R3：渲染前按排序状态对行排序（字符串比较，空值兜底排后） */
+  const sortedReports = useMemo(() => {
+    const rows = [...reports];
+    rows.sort((a, b) => {
+      const av = a.createdAt || '';
+      const bv = b.createdAt || '';
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return sortState.order === 'desc' ? -cmp : cmp;
+    });
+    return rows;
+  }, [reports, sortState]);
+
   const columns: Array<Column<Report>> = [
     { key: 'week', label: '周次', width: 110, render: (r) => <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{r.week}</Typography> },
     { key: 'status', label: '状态', width: 90, render: (r) => <StatusChip status={r.status} /> },
@@ -126,7 +150,18 @@ export function ReportsPage(): JSX.Element {
       render: (r) => <Chip size="small" label={r.tasks.filter((t) => t.selected).length} sx={{ height: 20 }} />,
     },
     { key: 'risks', label: '风险项', width: 80, align: 'center', render: (r) => <Chip size="small" label={r.risks.length} color={r.risks.length ? 'warning' : 'default'} sx={{ height: 20 }} /> },
-    { key: 'submittedAt', label: '提交时间', width: 150, render: (r) => <Typography variant="caption" color="text.secondary">{r.submittedAt ? fmtDate(r.submittedAt) : '—'}</Typography> },
+    /* B5-R3：新增「填报时间」列（createdAt，YYYY-MM-DD HH:mm，空值兜底 —，title 放完整时间） */
+    {
+      key: 'createdAt',
+      label: '填报时间',
+      width: 150,
+      render: (r) => (
+        <Typography variant="caption" color="text.secondary" title={r.createdAt || undefined} sx={{ whiteSpace: 'nowrap' }}>
+          {fmtDateTime(r.createdAt)}
+        </Typography>
+      ),
+    },
+    { key: 'submittedAt', label: '提交时间', width: 150, render: (r) => <Typography variant="caption" color="text.secondary" title={r.submittedAt || undefined} sx={{ whiteSpace: 'nowrap' }}>{fmtDateTime(r.submittedAt)}</Typography> },
     {
       key: 'actions',
       label: '操作',
@@ -144,6 +179,17 @@ export function ReportsPage(): JSX.Element {
       ),
     },
   ];
+
+  /** B5-R4：详情分段标题（品牌青左侧竖条装饰 + 统一字号） */
+  const SectionTitle = (props: { title: string; count?: number }): JSX.Element => (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
+      <Box sx={{ width: 3, height: 14, borderRadius: 1, bgcolor: tokens.brand.accent, flexShrink: 0 }} />
+      <Typography variant="subtitle2">
+        {props.title}
+        {props.count !== undefined ? `（${props.count}）` : ''}
+      </Typography>
+    </Stack>
+  );
 
   return (
     <Stack spacing={2.5}>
@@ -170,7 +216,18 @@ export function ReportsPage(): JSX.Element {
         ) : reports.length === 0 ? (
           <EmptyState title="暂无工作日志" description="点击右上角「新建日志」记录本周进展" />
         ) : (
-          <DataTable<Report> columns={columns} rows={reports} rowKey={(r) => r.id} />
+          <>
+            {/* B5-R3：页面级排序控制（默认填报时间倒序，点击切换升/降 + 箭头） */}
+            <Stack direction="row" alignItems="center" justifyContent="flex-end" sx={{ px: 2, pt: 1.25 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                排序：
+              </Typography>
+              <TableSortLabel active direction={sortState.order} onClick={toggleSort} sx={{ fontSize: 13 }}>
+                填报时间
+              </TableSortLabel>
+            </Stack>
+            <DataTable<Report> columns={columns} rows={sortedReports} rowKey={(r) => r.id} />
+          </>
         )}
       </SectionCard>
 
@@ -199,29 +256,35 @@ export function ReportsPage(): JSX.Element {
       >
         {detail && (
           <Stack spacing={1.5}>
-            <Stack direction="row" spacing={1} alignItems="center">
+            {/* B5-R4：顶部 meta 行 = 状态 Chip + 填报人 + 填报时间 + 提交时间（caption 次要色） */}
+            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexWrap: 'wrap' }}>
               <StatusChip status={detail.status} />
               <Typography variant="caption" color="text.secondary">
                 填报人：{detail.authorName}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                提交：{detail.submittedAt ? fmtDate(detail.submittedAt) : '—'}
+                填报：{fmtDateTime(detail.createdAt)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                提交：{fmtDateTime(detail.submittedAt)}
               </Typography>
             </Stack>
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.done}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.done} />
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
                 {detail.doneNote || '—'}
               </Typography>
             </Box>
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.plan}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.plan} />
               {detail.planItems.length ? (
-                detail.planItems.map((p, i) => (
-                  <Typography key={i} variant="body2">
-                    · {p}
-                  </Typography>
-                ))
+                <Stack spacing={0.5}>
+                  {detail.planItems.map((p, i) => (
+                    <Typography key={i} variant="body2">
+                      · {p}
+                    </Typography>
+                  ))}
+                </Stack>
               ) : (
                 <Typography variant="caption" color="text.secondary">
                   —
@@ -229,20 +292,23 @@ export function ReportsPage(): JSX.Element {
               )}
             </Box>
             <Box>
-              <Typography variant="subtitle2">
-                关联任务（{detail.tasks.filter((t) => t.selected).length}）
-              </Typography>
+              <SectionTitle
+                title="关联任务"
+                count={detail.tasks.filter((t) => t.selected).length}
+              />
               {detail.tasks.filter((t) => t.selected).length ? (
-                detail.tasks
-                  .filter((t) => t.selected)
-                  .map((t) => (
-                    <Stack key={t.nodeId} direction="row" spacing={1} alignItems="center">
-                      <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>
-                        {t.nodeName}
-                      </Typography>
-                      <Chip size="small" label={`${t.progressBefore}% → ${t.progressAfter}%`} />
-                    </Stack>
-                  ))
+                <Stack spacing={0.75}>
+                  {detail.tasks
+                    .filter((t) => t.selected)
+                    .map((t) => (
+                      <Stack key={t.nodeId} direction="row" spacing={1} alignItems="center">
+                        <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>
+                          {t.nodeName}
+                        </Typography>
+                        <Chip size="small" label={`${t.progressBefore}% → ${t.progressAfter}%`} sx={{ height: 20 }} />
+                      </Stack>
+                    ))}
+                </Stack>
               ) : (
                 <Typography variant="caption" color="text.secondary">
                   —
@@ -250,14 +316,19 @@ export function ReportsPage(): JSX.Element {
               )}
             </Box>
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.risks}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.risks} />
               {detail.risks.length ? (
-                detail.risks.map((rk) => (
-                  <Typography key={rk.id} variant="body2">
-                    {/* R3-8：责任人显示成员姓名（解析不到显示 openId 原文） */}
-                    · {rk.description}（责任人：{memberNameOf(members, rk.owner)}，截止：{rk.dueDate}）
-                  </Typography>
-                ))
+                <Stack spacing={1}>
+                  {detail.risks.map((rk) => (
+                    <Stack key={rk.id} direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+                      <Typography variant="body2" sx={{ flex: '1 1 220px', minWidth: 0 }}>
+                        · {rk.description}
+                      </Typography>
+                      <Chip size="small" variant="outlined" label={`责任人：${memberNameOf(members, rk.owner)}`} sx={{ height: 20 }} />
+                      <Chip size="small" variant="outlined" label={`截止：${rk.dueDate}`} sx={{ height: 20 }} />
+                    </Stack>
+                  ))}
+                </Stack>
               ) : (
                 <Typography variant="caption" color="text.secondary">
                   —
@@ -265,7 +336,7 @@ export function ReportsPage(): JSX.Element {
               )}
             </Box>
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.resource}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.resource} />
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
                 {detail.resourceNote || '—'}
               </Typography>
