@@ -1,8 +1,9 @@
 /**
  * 认证路由（§3.5）
  *
- *  POST /api/auth/devlogin  {openId}   → Session   （受 ALLOW_DEV_LOGIN 开关控制）
- *  POST /api/auth/feishu    {code}     → Session
+ *  POST /api/auth/devlogin    {openId} → Session   （受 ALLOW_DEV_LOGIN 开关控制）
+ *  POST /api/auth/feishu      {code}   → Session   （飞书客户端内 JSSDK 免登，v1 端点）
+ *  POST /api/auth/feishu/web  {code}   → Session   （普通浏览器 Web OAuth，v2 端点）
  *  GET  /api/auth/me                   → User      （注意：**直接返回 User**，不是 {user}）
  *  POST /api/auth/logout               → null      （无状态令牌，前端清本地即可）
  *  GET  /api/appid                     → {appId}   （免鉴权，飞书 JSSDK 用）
@@ -38,6 +39,37 @@ function requireEnabledUser(openId) {
   if (row.status === 'disabled') {
     throw new AppError(ErrorCode.E_FORBIDDEN, '该账号已停用', { openId: String(openId || '') });
   }
+  return row;
+}
+
+/**
+ * 飞书用户 upsert：按 openId 落 `users` 行，已存在则原样取回（B4 · T03-2）。
+ *
+ * JSSDK 免登（`POST /auth/feishu`）与浏览器 Web OAuth（`POST /auth/feishu/web`）**共用**，
+ * 保证同一 openId 只落同一行、角色判定口径一致。
+ *
+ * @param {string} openId 飞书 open_id
+ * @param {string} accessToken 用户级 access_token（用于取姓名，失败静默回退 openId）
+ * @param {string} [avatarUrl] 头像 URL（v2 端点不返回时传空）
+ * @returns {Promise<object>} users 行
+ * @throws {AppError} E_FORBIDDEN 账号已停用
+ */
+async function upsertFeishuUser(openId, accessToken, avatarUrl) {
+  const ts = nowIso();
+  let row = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
+
+  if (!row) {
+    const name = await feishu.getUserName(accessToken, openId);
+    const isBootstrapAdmin = (cfg.ADMIN_OPEN_IDS || []).indexOf(openId) >= 0;
+    db.prepare(
+      `INSERT INTO users (open_id, employee_id, name, email, dept, avatar_url, global_role, status, created_at, updated_at)
+       VALUES (?, '', ?, '', '', ?, ?, 'active', ?, ?)`,
+    ).run(openId, name, String(avatarUrl || ''), isBootstrapAdmin ? 'admin' : 'member', ts, ts);
+    row = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
+  } else if (row.status === 'disabled') {
+    throw new AppError(ErrorCode.E_FORBIDDEN, '该账号已停用', { openId: openId });
+  }
+
   return row;
 }
 
@@ -82,20 +114,48 @@ router.post(
       throw new AppError(ErrorCode.E_UNAUTHORIZED, '飞书免登失败，请重新进入应用');
     }
 
-    const ts = nowIso();
-    let row = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
-    if (!row) {
-      const name = await feishu.getUserName(session.access_token, openId);
-      const isBootstrapAdmin = (cfg.ADMIN_OPEN_IDS || []).indexOf(openId) >= 0;
-      db.prepare(
-        `INSERT INTO users (open_id, employee_id, name, email, dept, avatar_url, global_role, status, created_at, updated_at)
-         VALUES (?, '', ?, '', '', ?, ?, 'active', ?, ?)`,
-      ).run(openId, name, String(session.avatar_url || ''), isBootstrapAdmin ? 'admin' : 'member', ts, ts);
-      row = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
-    } else if (row.status === 'disabled') {
-      throw new AppError(ErrorCode.E_FORBIDDEN, '该账号已停用', { openId: openId });
+    const row = await upsertFeishuUser(openId, session.access_token, session.avatar_url);
+    res.json(ok({ token: signToken(row), user: toApiUser(row) }, '登录成功'));
+  }),
+);
+
+/* ── 飞书网页登录（普通浏览器，Web OAuth · B4 T03-2） ── */
+
+router.post(
+  '/auth/feishu/web',
+  asyncHandler(async function feishuWebLogin(req, res) {
+    const code = String((req.body && req.body.code) || '').trim();
+    if (!code) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: 'code', message: '缺少飞书授权 code' }],
+      });
     }
 
+    /* 降级路径（偏差 D-7）：未配飞书凭证且显式开启开发登录时，
+       接受哨兵码 `dev:<openId>` 走通「回调 → 换码 → 签发会话」整条链路，
+       待 FEISHU_APP_SECRET / 回调域名补齐后切真连零改动。 */
+    if (!cfg.FEISHU_APP_ID || !cfg.FEISHU_APP_SECRET) {
+      if (cfg.ALLOW_DEV_LOGIN && /^dev:/.test(code)) {
+        const devId = code.slice(4).trim() || (cfg.ADMIN_OPEN_IDS || [])[0] || 'dev';
+        const devRow = requireEnabledUser(devId);
+        res.json(ok({ token: signToken(devRow), user: toApiUser(devRow) }, '登录成功（开发降级）'));
+        return;
+      }
+      throw new AppError(
+        ErrorCode.E_FORBIDDEN,
+        '服务端未配置飞书应用凭证（FEISHU_APP_ID / FEISHU_APP_SECRET）',
+        { required: ['FEISHU_APP_ID', 'FEISHU_APP_SECRET'] },
+      );
+    }
+
+    const appToken = await feishu.getAppAccessToken();
+    const session = await feishu.code2sessionV2(code, appToken);
+    const openId = session && session.open_id ? String(session.open_id) : '';
+    if (!openId) {
+      throw new AppError(ErrorCode.E_UNAUTHORIZED, '飞书授权失败，请重试');
+    }
+
+    const row = await upsertFeishuUser(openId, session.access_token, '');
     res.json(ok({ token: signToken(row), user: toApiUser(row) }, '登录成功'));
   }),
 );

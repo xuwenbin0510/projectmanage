@@ -79,17 +79,7 @@ router.post('/projects/:id/transition', requireAuth, notImplemented('POST /api/p
 // TODO(批次4): 结项前置检查（未过门 / 未达成碑 / 未闭环变更与评审）
 router.get('/projects/:projectId/close-check', requireAuth, emptyList());
 
-/* ── 周报 ───────────────────────────────────────────── */
-
-// TODO(批次4): 周报列表 / 详情 / 暂存 / 提交 / 编辑
-router.get('/projects/:projectId/reports/:week', requireAuth, nullEntity());
-router.get('/projects/:projectId/reports', requireAuth, emptyList());
-router.post('/projects/:projectId/reports', requireAuth, notImplemented('POST /api/projects/:projectId/reports'));
-router.patch(
-  '/projects/:projectId/reports/:id',
-  requireAuth,
-  notImplemented('PATCH /api/projects/:projectId/reports/:id'),
-);
+/* ── 周报：桩已于批次 4 移除，真实实现见 server/routes/reports.routes.js ── */
 
 /* ── 评审（静态段 my-approvals 必须早于 :id） ─────────── */
 

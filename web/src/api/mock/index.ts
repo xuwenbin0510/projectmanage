@@ -506,6 +506,14 @@ export class MockApiClient implements ApiClient {
     return { token: MOCK_TOKEN_PREFIX + user.openId, user: deepClone(user) };
   }
 
+  /** @prd P0-11 / B4-T03 飞书网页登录 Mock：返回与 loginByCode 同形态（当前登录用户） */
+  async loginByFeishuCode(_code: string): Promise<{ token: string; user: User }> {
+    await delay();
+    const db = getDb();
+    const me = currentUser(db);
+    return { token: MOCK_TOKEN_PREFIX + me.openId, user: deepClone(me) };
+  }
+
   async me(): Promise<User> {
     await delay(60);
     return deepClone(currentUser(getDb()));

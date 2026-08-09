@@ -629,6 +629,81 @@ function migrationV2(db, now) {
   console.log('[migrations] v2 迁移遗留任务 %d 条 → wbs_nodes', legacyTasks.length);
 }
 
+/* ── v3：结构化周报（B4 · T02-1） ───────────────────── */
+
+/**
+ * 迁移 v3：建结构化周报三张表。
+ *
+ * 表名统一带 `work_` 前缀（偏差 D-1）：v1 遗留 `reports` 表是扁平旧 schema
+ * （week/author/done/plan/risk/risk_due/res/snap），与新的「主表 + 任务行 + 风险行」
+ * 结构不兼容。新建表另起名，避免迁移冲突与 legacy 路由误读；对外 API 路径仍是
+ * `/projects/:projectId/reports`，调用方无感。
+ *
+ * ⚠ `run()` 已统一开事务并处理 `PRAGMA foreign_keys`，此处**不要**自行 BEGIN。
+ * 全部 `IF NOT EXISTS`，重复执行安全。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV3(db, now) { // eslint-disable-line no-unused-vars
+  /* ---------- 1. work_reports（周报主表） ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS work_reports (
+      id             TEXT PRIMARY KEY,
+      project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      week           TEXT NOT NULL,
+      week_start     TEXT,
+      week_end       TEXT,
+      author_open_id TEXT NOT NULL,
+      author_name    TEXT NOT NULL DEFAULT '',
+      status         TEXT NOT NULL DEFAULT '草稿',
+      done_note      TEXT NOT NULL DEFAULT '',
+      plan_items     TEXT NOT NULL DEFAULT '[]',
+      resource_note  TEXT NOT NULL DEFAULT '',
+      snapshot       TEXT,
+      submitted_at   TEXT,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_work_reports_proj_week
+      ON work_reports(project_id, week, created_at);
+  `);
+
+  /* ---------- 2. work_report_tasks（周报任务进度行） ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS work_report_tasks (
+      id              TEXT PRIMARY KEY,
+      report_id       TEXT NOT NULL REFERENCES work_reports(id) ON DELETE CASCADE,
+      node_id         TEXT,
+      node_code       TEXT NOT NULL DEFAULT '',
+      node_name       TEXT NOT NULL DEFAULT '',
+      progress_before INTEGER NOT NULL DEFAULT 0,
+      progress_after  INTEGER NOT NULL DEFAULT 0,
+      selected        INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_work_report_tasks_report
+      ON work_report_tasks(report_id);
+  `);
+
+  /* ---------- 3. work_report_risks（周报风险行） ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS work_report_risks (
+      id               TEXT PRIMARY KEY,
+      report_id        TEXT NOT NULL REFERENCES work_reports(id) ON DELETE CASCADE,
+      seq              INTEGER NOT NULL DEFAULT 0,
+      description      TEXT NOT NULL DEFAULT '',
+      owner            TEXT NOT NULL DEFAULT '',
+      due_date         TEXT NOT NULL DEFAULT '',
+      promoted_risk_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_work_report_risks_report
+      ON work_report_risks(report_id);
+  `);
+
+  console.log('[migrations] v3 建结构化周报表 work_reports / work_report_tasks / work_report_risks');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -638,6 +713,7 @@ function migrationV2(db, now) {
 const MIGRATIONS = [
   { version: 1, name: 'connect-v1-baseline', up: migrationV1 },
   { version: 2, name: 'connect-v2-wbs-board-audit', up: migrationV2 },
+  { version: 3, name: 'connect-v3-reports', up: migrationV3 },
 ];
 
 /**

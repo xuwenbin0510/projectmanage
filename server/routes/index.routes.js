@@ -30,6 +30,7 @@ const wbsRoutes = require('./wbs.routes');
 const milestonesRoutes = require('./milestones.routes');
 const adminRoutes = require('./admin.routes');
 const workbenchRoutes = require('./workbench.routes');
+const reportsRoutes = require('./reports.routes');
 const stubsRoutes = require('./stubs.routes');
 const legacyRoutes = require('./legacy.routes');
 
@@ -47,7 +48,11 @@ router.use(milestonesRoutes);
 router.use(adminRoutes);
 router.use(workbenchRoutes);
 
-/* ── 降级桩：批次 3 后只兜批次 4 未实现项 ───────────── */
+/* ── 新契约（批次 4：结构化周报 / 工作日志） ─────────── */
+/* ⚠ 必须先于 stubsRoutes，否则周报请求会被 501 桩抢先命中 */
+router.use(reportsRoutes);
+
+/* ── 降级桩：批次 4 后只兜未实现项（周报桩已删） ─────── */
 router.use(stubsRoutes);
 
 /* ── 旧路由兼容层（@deprecated，批次 4 删除） ────────── */

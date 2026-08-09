@@ -179,6 +179,36 @@ function fitMilestoneDates(planStart, planEnd, offsets) {
   return fitMilestoneDatesEx(planStart, planEnd, offsets).dates;
 }
 
+/**
+ * ISO 周编码 → 该周起止（周一 ~ 周日），与前端 `web/src/utils/date.ts#weekRange` 逐字对齐。
+ *
+ * ISO 8601 规则：某年 1 月 4 日必落在该年第 1 周，由此反推第 1 周的周一。
+ *
+ * @param {string} code 周编码 `'YYYY-Www'`（如 `'2025-W07'`）
+ * @returns {{start: string, end: string}} `start`/`end` 为 `'YYYY-MM-DDT00:00:00Z'`；非法编码返回空串
+ */
+function weekRange(code) {
+  const m = /^(\d{4})-W(\d{1,2})$/.exec(String(code || ''));
+  if (!m) return { start: '', end: '' };
+
+  const year = Number(m[1]);
+  const week = Number(m[2]);
+
+  /* 该年 1 月 4 日所在周为第 1 周（ISO）；由此推算第 1 周的周一 */
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const jan4Dow = (jan4.getUTCDay() + 6) % 7; // 周一 = 0
+  const firstMon = new Date(jan4);
+  firstMon.setUTCDate(jan4.getUTCDate() - jan4Dow);
+
+  const monday = new Date(firstMon);
+  monday.setUTCDate(firstMon.getUTCDate() + (week - 1) * 7);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+
+  const fmt = function (d) { return d.toISOString().slice(0, 10); };
+  return { start: fmt(monday) + 'T00:00:00Z', end: fmt(sunday) + 'T00:00:00Z' };
+}
+
 module.exports = {
   today,
   nowIso,
@@ -187,4 +217,5 @@ module.exports = {
   isDate,
   fitMilestoneDates,
   fitMilestoneDatesEx,
+  weekRange,
 };

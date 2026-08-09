@@ -212,6 +212,11 @@ export interface ApiClient {
   getAppId(): Promise<string>;
   devLogin(openId: string): Promise<Session>;
   feishuLogin(code: string): Promise<Session>;
+  /**
+   * 浏览器飞书 Web OAuth 登录（普通浏览器，不经过 JSSDK）。
+   * @prd P0-11 / B4-T03 对应 `POST /api/auth/feishu/web`；返回内联 `{token,user}`（与 `Session` 同构）。
+   */
+  loginByFeishuCode(code: string): Promise<{ token: string; user: User }>;
   me(): Promise<User>;
   logout(): Promise<void>;
 

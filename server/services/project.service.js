@@ -5,7 +5,8 @@
  *  - 事务、校验、错误码在本层；纯算法在 `server/lib/rules.js`；行↔对象在 `server/lib/mappers.js`
  *  - **派生值 `status` / `done` 不落库**（SK-2），读路径统一用 `rules.applyMilestoneStatuses` 推导
  *  - 建项**不自动生成质量门**（K-1）；仅当向导在 `payload.milestones[].gate` 显式提交门规格时才落库
- *  - WBS 骨架 / 看板配置属批次 3，本批次不建表不生成（前端走降级桩）
+ *  - 建项按模板 `wbsRules.skeleton==='per-milestone'` 生成顶层 WBS 骨架节点（B4/B3 补丁）；
+ *    看板配置 `board_configs` 仍由 `board.service.ensureBoardConfig` 惰性创建
  */
 
 const { AppError, ErrorCode } = require('../lib/errors');
@@ -534,6 +535,17 @@ function createProject(db, payload, me) {
     INSERT INTO gate_checklist_items (id, gate_id, seq, content, owner_role, checked, checked_by, checked_at, source)
     VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, 'template')
   `);
+  const insWbsNode = db.prepare(`
+    INSERT INTO wbs_nodes (
+      id, project_id, parent_id, wbs_code, level, node_type, name, description,
+      owner, estimate_days, actual_days, start_date, due_date, status, progress,
+      board_order, is_critical, milestone_id, created_by, created_at, updated_at
+    ) VALUES (
+      @id, @project_id, @parent_id, @wbs_code, @level, @node_type, @name, @description,
+      @owner, @estimate_days, @actual_days, @start_date, @due_date, @status, @progress,
+      @board_order, @is_critical, @milestone_id, @created_by, @created_at, @updated_at
+    )
+  `);
 
   const pmMember = (payload.members || []).filter(function (m) { return m.role === 'pm'; })[0];
   const createdBy = me && me.open_id ? String(me.open_id) : '';
@@ -590,6 +602,35 @@ function createProject(db, payload, me) {
         ts,
       );
 
+      /* B4 / B3补丁：按模板 WBS 规则生成顶层骨架节点，绑定 milestoneId（复刻旧 Mock per-milestone 行为） */
+      const wbsRules = rules.resolveWbsRules(tpl);
+      if (wbsRules && wbsRules.skeleton === 'per-milestone') {
+        insWbsNode.run({
+          id: ids.genId('W'),
+          project_id: projectId,
+          parent_id: null,
+          wbs_code: String(idx + 1),
+          level: 1,
+          node_type: 'task',
+          name: String(spec.name || ''),
+          description: '由 ' + String(tpl.name || '') + ' 模板里程碑「'
+            + String(spec.code || 'M' + (idx + 1)) + ' ' + String(spec.name || '') + '」自动生成',
+          owner: '',
+          estimate_days: 0,
+          actual_days: 0,
+          start_date: '',
+          due_date: date,
+          status: '待办',
+          progress: 0,
+          board_order: idx,
+          is_critical: 0,
+          milestone_id: msId,
+          created_by: createdBy,
+          created_at: ts,
+          updated_at: ts,
+        });
+      }
+
       /* K-1：仅当向导显式提交门规格时才落门；模板回退路径 gate 恒为 null */
       if (spec.gate && typeof spec.gate === 'object') {
         const gateId = msId + '-G';
@@ -621,8 +662,7 @@ function createProject(db, payload, me) {
   /* 落库后统一重排 code（向导可能改过日期 / 加过碑，模板 code 顺序已失效 · P0-M1） */
   listMilestones(db, projectId);
 
-  /* WBS 骨架不在建项时生成：模板只定义里程碑与门，任务由 PM 在 WBS 页按需拆解
-     （与前端 Mock 建项一致）。`board_configs` 由 `board.service.ensureBoardConfig` 惰性创建。 */
+  /* WBS 骨架已在上方按模板 skeleton 规则生成；board_configs 由 board.service 惰性创建 */
 
   // TODO(批次4): 写入 audit 日志（建项审计与项目流转审计一并接入）
 

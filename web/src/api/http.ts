@@ -121,6 +121,13 @@ export class HttpApiClient implements ApiClient {
     return s;
   }
 
+  /** @prd P0-11 / B4-T03 飞书网页登录（浏览器 Web OAuth，对应 `POST /auth/feishu/web`） */
+  async loginByFeishuCode(code: string): Promise<{ token: string; user: User }> {
+    const r = await post<{ token: string; user: User }>('/auth/feishu/web', { code });
+    setToken(r.token);
+    return r;
+  }
+
   me(): Promise<User> {
     return get<User>('/auth/me');
   }

@@ -727,6 +727,18 @@ async function main() {
   const lM2 = linkMs[1] || {};
   const lM3 = linkMs[2] || {};
 
+  /* ⚠ B4/T01 起，建项会按模板 `skeleton='per-milestone'` 给每个里程碑自动生成 1 个骨架节点
+     （est 0 / progress 0）。本域断言的是**口径 Y 的加权算法**，自动骨架会把 taskStats 基数
+     撑大并稀释 progress，掩盖被测算法本身。故此处先清掉自动骨架，还原「纯净里程碑」夹具，
+     保持原断言语义不变。自动骨架的生成正确性由 scripts/smoke_b4.mjs ① 单独覆盖。 */
+  const autoSkeletons = (await listWbs(pLinkId)).filter(function (n) {
+    return n.milestoneId === lM2.id || n.milestoneId === lM3.id;
+  });
+  for (let i = 0; i < autoSkeletons.length; i += 1) {
+    const del = await call('DELETE', '/api/wbs/' + autoSkeletons[i].id);
+    assertEq(del.json && del.json.code, 0, '[L0] 清理 M' + (i + 2) + ' 自动骨架节点（B4/T01 夹具还原）');
+  }
+
   /* 1) 3 个挂 M2 的叶子全部完成 → total 3 / done 3 / progress 100 */
   for (let i = 1; i <= 3; i += 1) {
     const n = okData(
