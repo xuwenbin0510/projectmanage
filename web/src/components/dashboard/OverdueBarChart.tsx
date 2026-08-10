@@ -25,7 +25,12 @@ export interface OverdueBarChartProps {
   rows: OverdueByProject[];
   /** 加载中 */
   loading?: boolean;
-  /** 最多展示的项目数（超出截断，避免柱子被压扁到不可读） */
+  /**
+   * 最多展示的项目数（超出截断，避免柱子被压扁到不可读）。
+   *
+   * B12：默认由 5 → **8**。工作台（B11）只看「我的」项目，5 条够用；
+   * 全局总览横跨全公司，5 条会把风险项目挡在外面（SK-B12-8）。
+   */
   maxRows?: number;
 }
 
@@ -44,7 +49,7 @@ function shortName(name: string, max = 8): string {
 export function OverdueBarChart({
   rows,
   loading = false,
-  maxRows = 5,
+  maxRows = 8,
 }: OverdueBarChartProps): JSX.Element {
   const palette = useChartPalette();
 

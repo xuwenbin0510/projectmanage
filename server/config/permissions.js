@@ -46,6 +46,8 @@ const PERMISSIONS = {
   // 变更
   'change:create': { global: ['admin', 'pmo'], project: ['pm', 'tl'] },
   'change:submit': { global: ['admin', 'pmo'], project: ['pm'] },
+  // 全局仪表盘（B12）：仅管理三角色可看「公司全量」范围
+  'dashboard:global': { global: ['admin', 'pmo', 'management'], project: [] },
   // 管理后台
   'admin:user:role': { global: ['admin'], project: [] },
   'admin:audit:view': { global: ['admin', 'pmo'], project: [] },

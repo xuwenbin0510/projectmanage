@@ -9,8 +9,9 @@
  *   5. milestones 批次 3：里程碑写 + 质量门
  *   6. admin      静态段
  *   7. workbench  静态段
- *   8. stubs      降级桩：只兜住上面**没实现**的路径（批次 3 后只剩 B4 项）
- *   9. legacy     旧路由（@deprecated · D-9）：只兜住新契约**没占用**的方法
+ *   8. dashboard  静态段（B12 全局总览）
+ *   9. stubs      降级桩：只兜住上面**没实现**的路径（批次 3 后只剩 B4 项）
+ *  10. legacy     旧路由（@deprecated · D-9）：只兜住新契约**没占用**的方法
  *
  * 全站禁用 `PUT`：新契约的改动一律 `PATCH`。
  * （`legacy.routes.js` 里的 `PUT` 是待淘汰的历史包袱，随批次 4 删除。）
@@ -30,6 +31,7 @@ const wbsRoutes = require('./wbs.routes');
 const milestonesRoutes = require('./milestones.routes');
 const adminRoutes = require('./admin.routes');
 const workbenchRoutes = require('./workbench.routes');
+const dashboardRoutes = require('./dashboard.routes');
 const reportsRoutes = require('./reports.routes');
 const reviewsRoutes = require('./reviews.routes');
 const stubsRoutes = require('./stubs.routes');
@@ -48,6 +50,10 @@ router.use(milestonesRoutes);
 
 router.use(adminRoutes);
 router.use(workbenchRoutes);
+
+/* ── 新契约（B12：全局总览） ────────────────────────── */
+/* ⚠ 必须先于 stubsRoutes，否则 /dashboard/* 会被 501 桩抢先命中 */
+router.use(dashboardRoutes);
 
 /* ── 新契约（批次 4：结构化周报 / 工作日志） ─────────── */
 /* ⚠ 必须先于 stubsRoutes，否则周报请求会被 501 桩抢先命中 */

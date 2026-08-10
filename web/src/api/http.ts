@@ -22,6 +22,7 @@ import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
+import type { DashboardOverview, DashboardOverviewQuery } from '@/types/dashboard';
 import type {
   ApiClient,
   ProjectQuery,
@@ -337,6 +338,13 @@ export class HttpApiClient implements ApiClient {
   /* 工作台 */
   getWorkbench(): Promise<WorkbenchData> {
     return get<WorkbenchData>('/workbench');
+  }
+
+  /* 全局总览 B12 */
+  getDashboardOverview(query: DashboardOverviewQuery): Promise<DashboardOverview> {
+    /* `qs` 会跳过 undefined / null / ''，所以未选中的筛选项不会污染 URL；
+       `onlyMine: false` 会被序列化成 'false'，服务端只认 'true' / '1'，语义一致。 */
+    return get<DashboardOverview>(`/dashboard/overview${qs(query as Record<string, unknown>)}`);
   }
 
   /* 管理后台 */

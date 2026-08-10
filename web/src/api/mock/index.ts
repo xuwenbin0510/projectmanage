@@ -27,6 +27,15 @@ import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument } from '@/types/audit';
 import type { WorkbenchData, ReportReminder, Session } from '@/types/workbench';
 import type {
+  DashboardOverview,
+  DashboardOverviewQuery,
+  DashboardScope,
+  OwnerLoadProjectRow,
+  OwnerLoadRow,
+  ReportMissingRow,
+  StatusDonutSegment,
+} from '@/types/dashboard';
+import type {
   ApiClient,
   ProjectQuery,
   CreateProjectPayload,
@@ -69,6 +78,7 @@ import {
 } from './rules';
 import {
   PROJECT_TRANSITIONS,
+  PROJECT_STATUSES,
   REVIEW_TEMPLATES,
   DEFAULT_WIP_LIMIT,
   WEEK_ACTUAL_DAYS_MAX,
@@ -76,6 +86,7 @@ import {
   AUDIT_ACTION_LABEL,
   GATE_PASSED_STATUSES,
 } from '@/config/enums';
+import { aggregateHealth, aggregateOverdue } from '@/utils/dashboardAgg';
 import { canDo } from '@/config/permissions';
 import { addDays, today, nowIso, diffDays, weekCode, weekRange, fitMilestoneDates } from '@/utils/date';
 import { genId, deepClone } from '@/utils/format';
@@ -96,6 +107,27 @@ import {
 
 const MOCK_TOKEN_PREFIX = 'mock-token-';
 const ROLE_FALLBACK_ORDER: GlobalRole[] = ['pmo', 'management', 'tl', 'qa', 'cm', 'po', 'pm'];
+
+/**
+ * B12 决策 ⑥：全局总览统计基线 —— 在管三态。
+ * ⚠ 与 `server/services/dashboard.service.js#MANAGED_STATUSES` 逐字一致。
+ */
+const DASHBOARD_MANAGED_STATUSES: ProjectStatus[] = ['已批准', '进行中', '挂起'];
+
+/** B12 明细表默认页大小（与服务端 `DEFAULT_PAGE_SIZE` 一致） */
+const DASHBOARD_PAGE_SIZE = 20;
+
+/** B12 明细表页大小上限（与服务端 `MAX_PAGE_SIZE` 一致） */
+const DASHBOARD_MAX_PAGE_SIZE = 200;
+
+/** B12 未分配负责人展示名（与 `server/lib/portfolioAgg.js#UNASSIGNED_LABEL` 一致） */
+const DASHBOARD_UNASSIGNED_LABEL = '未分配';
+
+/** B12 项目名缺失占位（与 `server/lib/portfolioAgg.js#UNNAMED_PROJECT` 一致） */
+const DASHBOARD_UNNAMED_PROJECT = '未命名项目';
+
+/** B12 明细表健康度排序权重：红 → 黄 → 绿（问题优先） */
+const DASHBOARD_HEALTH_RANK: Record<string, number> = { red: 0, yellow: 1, green: 2 };
 
 function nf(): never {
   throw new ApiError(ErrorCode.E_NOT_FOUND);
@@ -2387,6 +2419,226 @@ export class MockApiClient implements ApiClient {
       myTasks,
       myApprovals,
       reportReminders,
+    });
+  }
+
+  /* ── 全局总览 B12 ─────────────────────────────── */
+
+  /**
+   * 全局总览（对应 `GET /api/dashboard/overview`）。
+   *
+   * 与服务端 `dashboard.service.getDashboardOverview` **字段逐个对齐**：
+   *  - 决策 ①：`dashboard:global` 决定能否看公司全量；无权限恒降级为 `mine`（不抛 403）
+   *  - 决策 ②：`timeRange` 接受但忽略
+   *  - 决策 ③：负责人负荷 = 在办任务数 + 逾期数
+   *  - 决策 ⑥：统计基线恒为在管三态，非法 `status` 入参直接丢弃
+   *
+   * ⚠ 已知口径差异（Mock 内部自洽优先）：`toListItem` 的 `progress` 在 Mock 里是
+   *   **WBS 加权**（`rollupProjectProgress`），服务端是**里程碑达成率**。这是 B11 前既有的
+   *   Mock/真后端差异，本期不在 B12 内擅自纠偏，以免 Mock 的总览与项目列表页自相矛盾。
+   */
+  async getDashboardOverview(query: DashboardOverviewQuery): Promise<DashboardOverview> {
+    await delay(200);
+    const db = getDb();
+    const me = currentUser(db);
+
+    /* 1. 范围解析（决策 ① / ⑤） */
+    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
+
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(
+      DASHBOARD_MAX_PAGE_SIZE,
+      Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE),
+    );
+    const sort = query.sort ?? 'health';
+
+    /* 2. 项目范围（决策 ⑥ 三态基线 + scope + 过滤条件） */
+    const statusFilter =
+      query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
+
+    const myProjectIds = new Set(
+      db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
+    );
+    const myPmProjectIds = new Set(
+      db.members
+        .filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm')
+        .map((m) => m.projectId),
+    );
+
+    let items = db.projects
+      .filter((p) =>
+        statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status),
+      )
+      .filter((p) => {
+        if (scope === 'all') return true;
+        return query.onlyMine ? myPmProjectIds.has(p.id) : myProjectIds.has(p.id);
+      })
+      .map((p) => toListItem(db, p));
+
+    if (query.type) items = items.filter((r) => r.type === query.type);
+    if (query.health) items = items.filter((r) => r.health === query.health);
+    if (query.keyword) {
+      const k = query.keyword.trim().toLowerCase();
+      if (k) {
+        items = items.filter(
+          (r) =>
+            r.name.toLowerCase().includes(k) ||
+            r.code.toLowerCase().includes(k) ||
+            r.customer.toLowerCase().includes(k),
+        );
+      }
+    }
+
+    /* 3. 范围内「在办叶子任务」：真叶子判定要在项目全量节点上做 */
+    const scopeIds = new Set(items.map((p) => p.id));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+    const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
+    const tasks = leafNodesOf(db.wbsNodes.filter((n) => scopeIds.has(n.projectId)))
+      .filter((n) => n.status !== '完成')
+      .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' }));
+
+    /* 4. 图表聚合（复用 B11 纯函数，口径零漂移） */
+    const health = aggregateHealth(items);
+    const overdue = aggregateOverdue(tasks, items);
+    const overdueTasks = tasks.filter((t) => !!t.dueDate && diffDays(today(), t.dueDate) < 0).length;
+
+    const statusCounter = new Map<string, number>();
+    items.forEach((p) => statusCounter.set(p.status, (statusCounter.get(p.status) ?? 0) + 1));
+    const segments: StatusDonutSegment[] = PROJECT_STATUSES.filter(
+      (s) => (statusCounter.get(s) ?? 0) > 0,
+    ).map((s) => ({ status: s, value: statusCounter.get(s) as number }));
+    const statusDonut = {
+      segments,
+      total: segments.reduce((n, s) => n + s.value, 0),
+    };
+
+    /* 负责人负荷（决策 ③）：排序 逾期 ↓ → 在办 ↓ → 姓名 ↑，未分配恒最后。
+       `projects` 跨项目明细供 P1-6 抽屉直接渲染（与服务端 aggregateOwnerLoad 同构） */
+    interface OwnerLoadAcc {
+      owner: string;
+      ownerName: string;
+      activeTasks: number;
+      overdueTasks: number;
+      projects: Map<string, OwnerLoadProjectRow>;
+    }
+    const loadMap = new Map<string, OwnerLoadAcc>();
+    tasks.forEach((n) => {
+      const owner = n.owner || '';
+      let row = loadMap.get(owner);
+      if (!row) {
+        row = {
+          owner,
+          ownerName: owner
+            ? n.ownerName || userNameById.get(owner) || owner
+            : DASHBOARD_UNASSIGNED_LABEL,
+          activeTasks: 0,
+          overdueTasks: 0,
+          projects: new Map<string, OwnerLoadProjectRow>(),
+        };
+        loadMap.set(owner, row);
+      }
+      const late = !!n.dueDate && diffDays(today(), n.dueDate) < 0;
+      row.activeTasks += 1;
+      if (late) row.overdueTasks += 1;
+      if (n.projectId) {
+        let pr = row.projects.get(n.projectId);
+        if (!pr) {
+          pr = {
+            projectId: n.projectId,
+            projectName: projectNameById.get(n.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+            activeTasks: 0,
+            overdueTasks: 0,
+          };
+          row.projects.set(n.projectId, pr);
+        }
+        pr.activeTasks += 1;
+        if (late) pr.overdueTasks += 1;
+      }
+    });
+    const ownerLoad: OwnerLoadRow[] = Array.from(loadMap.values())
+      .map((r) => {
+        const projects = Array.from(r.projects.values()).sort((a, b) => {
+          if (a.overdueTasks !== b.overdueTasks) return b.overdueTasks - a.overdueTasks;
+          if (a.activeTasks !== b.activeTasks) return b.activeTasks - a.activeTasks;
+          return a.projectName.localeCompare(b.projectName, 'zh-CN');
+        });
+        return {
+          owner: r.owner,
+          ownerName: r.ownerName,
+          activeTasks: r.activeTasks,
+          overdueTasks: r.overdueTasks,
+          projectCount: projects.length,
+          projects,
+        };
+      })
+      .sort((a, b) => {
+        if (!a.owner !== !b.owner) return a.owner ? -1 : 1; // 未分配恒最后
+        if (a.overdueTasks !== b.overdueTasks) return b.overdueTasks - a.overdueTasks;
+        if (a.activeTasks !== b.activeTasks) return b.activeTasks - a.activeTasks;
+        return a.ownerName.localeCompare(b.ownerName, 'zh-CN');
+      });
+
+    /* 5. 周报填报（口径与工作台提醒一致：仅「进行中」项目应填） */
+    const curWeek = weekCode(today());
+    const activeItems = items.filter((p) => p.status === '进行中');
+    const reportMissing: ReportMissingRow[] = activeItems
+      .filter((p) => !db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交'))
+      .map((p) => ({ projectId: p.id, projectName: p.name, pmName: p.pmName }));
+    const reportDue = activeItems.length;
+    const reportFilled = reportDue - reportMissing.length;
+
+    /* 6. 明细表排序 + 分页（决策 ④） */
+    const overdueByProject = new Map(overdue.map((r) => [r.projectId, r.overdue]));
+    const sorted = items.slice().sort((a, b) => {
+      if (sort === 'progress') {
+        if (a.progress !== b.progress) return a.progress - b.progress;
+      } else if (sort === 'overdue') {
+        const oa = overdueByProject.get(a.id) ?? 0;
+        const ob = overdueByProject.get(b.id) ?? 0;
+        if (oa !== ob) return ob - oa;
+      } else if (sort === 'nextMilestone') {
+        const da = a.nextMilestoneDate ?? '';
+        const dbv = b.nextMilestoneDate ?? '';
+        if (!da !== !dbv) return da ? -1 : 1;
+        if (da !== dbv) return da < dbv ? -1 : 1;
+      } else {
+        const ra = DASHBOARD_HEALTH_RANK[a.health] ?? 3;
+        const rb = DASHBOARD_HEALTH_RANK[b.health] ?? 3;
+        if (ra !== rb) return ra - rb;
+        if (a.progress !== b.progress) return a.progress - b.progress;
+      }
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+
+    const averageProgress = items.length
+      ? Math.round(items.reduce((n, p) => n + (Number(p.progress) || 0), 0) / items.length)
+      : 0;
+
+    return deepClone({
+      scope,
+      generatedAt: nowIso(),
+      stats: {
+        managedProjects: items.length,
+        redProjects: health.red,
+        overdueTasks,
+        /* 无应填项目时视为 100%（0 缺口），避免空数据把卡片染成告警色 */
+        reportFillRate: reportDue ? Math.round((reportFilled / reportDue) * 100) : 100,
+        reportFilled,
+        reportDue,
+        averageProgress,
+      },
+      statusDonut,
+      health,
+      overdue,
+      ownerLoad,
+      reportMissing,
+      projects: {
+        items: sorted.slice((page - 1) * pageSize, page * pageSize),
+        total: items.length,
+        page,
+        pageSize,
+      },
     });
   }
 

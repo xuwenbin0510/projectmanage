@@ -41,7 +41,13 @@ export const MAIN_MENU: MenuItem[] = [
   { key: 'workbench', label: '工作台', path: ROUTES.workbench, icon: 'workbench', mobile: true },
   { key: 'projects', label: '项目', path: ROUTES.projects, icon: 'projects', mobile: true },
   { key: 'approvals', label: '审批中心', path: ROUTES.approvals, icon: 'approvals', mobile: true },
-  { key: 'metrics', label: '度量看板', path: ROUTES.metrics, icon: 'metrics', phase: 'P1' },
+  {
+    key: 'metrics',
+    label: '全局总览',
+    path: ROUTES.metrics,
+    icon: 'metrics',
+    roles: ['admin', 'pmo', 'management'],
+  },
   {
     key: 'admin',
     label: '管理后台',

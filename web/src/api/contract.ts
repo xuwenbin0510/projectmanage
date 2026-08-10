@@ -22,6 +22,7 @@ import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
+import type { DashboardOverview, DashboardOverviewQuery } from '@/types/dashboard';
 
 /* ── 请求参数类型 ─────────────────────────────────── */
 
@@ -297,6 +298,16 @@ export interface ApiClient {
 
   /* 工作台 P0-13 */
   getWorkbench(): Promise<WorkbenchData>;
+
+  /* 全局总览 B12（多项目组合视图） */
+  /**
+   * 全局总览一次性聚合（`GET /api/dashboard/overview`）。
+   *
+   * ⚠ `scope` 只是**期望值**：无 `dashboard:global` 权限的角色即使传 `all`，
+   *   服务端也会强制降级为 `mine`（不抛 403）。真实生效范围以返回值的
+   *   `DashboardOverview.scope` 为准，前端据此回显开关状态。
+   */
+  getDashboardOverview(query: DashboardOverviewQuery): Promise<DashboardOverview>;
 
   /* 管理后台 */
   listUsers(): Promise<User[]>;
