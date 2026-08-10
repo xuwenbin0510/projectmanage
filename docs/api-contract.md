@@ -440,7 +440,8 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
     "myTasks": [
       { "id":"We5f", "projectId":"P1a2b", "projectCode":"P-0012", "wbsCode":"1.2.3",
         "name":"电源模块联调", "status":"进行中", "progress":40,
-        "dueDate":"2026-03-18", "overdue": true, "estimateDays": 3 }
+        "dueDate":"2026-03-18", "overdue": true, "estimateDays": 3,
+        "projectName":"XX型号地面测试设备" }
     ],
     "myApprovals": [
       { "reviewId":"RVa1", "projectId":"P1a2b", "projectCode":"P-0012",
@@ -464,6 +465,10 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 | `myTasks.overdue` | `dueDate < 今天 && status !== '完成'` |
 | `myApprovals.waitingDays` | 该步骤变为 `current` 至今的天数，前端按 >3 天标红 |
 | `reportReminders.status` | `未填写` / `草稿未提交`；已提交的项目不出现在列表里 |
+
+> **B11（仪表盘）**：`myTasks[]` 纯追加 `projectName`（任务所属项目名）。
+> 过滤口径（叶子判定 / `owner===me` / `status!=='完成'` / 排除归档项目）与排序**一字未改**，
+> 老客户端无感。`projectName` 直接由服务端 `JOIN projects` 给出，避免前端 `myProjects` 漏掉非在办项目。
 
 `myTasks` 排序：`overdue desc, dueDate asc`；`myApprovals` 排序：`waitingDays desc`。
 
@@ -1499,7 +1504,17 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
 
 ## 9. 看板（P0-07）
 
-> 看板 = 同一批叶子节点按 `status` 分组的双视图之一。四列固定：`待办`/`进行中`/`待评审`/`完成`。WIP 上限可配。
+> 看板 = 同一批叶子节点按 `status` 分组的双视图之一。
+> **B11**：看板列由「四列」扩为**五列**，顺序固定：`待办` → `进行中` → `阻塞` → `待评审` → `完成`
+> （「阻塞」是「进行中」的异常分支，紧邻「进行中」；「完成」恒为最右终点）。
+> WIP 上限可配（仅「进行中」预置上限）。
+
+> **`BoardConfig.columns` 默认值（B11 · 决策 D-B11-3）**
+> - 定义源：`server/config/enums.js#BOARD_COLUMNS`（与前端 `web/src/types/wbs.ts#BOARD_COLUMNS` 逐字一致镜像）。
+> - 默认：`['待办','进行中','阻塞','待评审','完成']`。
+> - **读时自愈**：`board.service.js#ensureBoardConfig` 在读取配置时，若 DB 快照的 `columns`
+>   与 `BOARD_COLUMNS` 不一致，就地 `UPDATE ... SET columns = ?`（**只改 columns 一列，`wip_limits` 分毫不动**，不写审计）。
+>   无 migration，未来增删列只需改 `enums.js` + 前端镜像即可全库自愈。运行时单一数据源是 `board.config.columns`。
 
 ### 9.1 `GET /api/board` 🆕 看板四列 + WIP 配置
 
@@ -1513,6 +1528,7 @@ DB 里 `owner`、`author`、`createdBy`、`decidedBy`、`actorOpenId` 等存的�
     "columns": [
       { "status":"待办",  "wipLimit":null, "items":[ /* 扁平任务节点 */ ], "count":3, "wipExceeded":false },
       { "status":"进行中","wipLimit":5,    "items":[ /* 扁平任务节点 */ ], "count":5, "wipExceeded":false },
+      { "status":"阻塞",  "wipLimit":null, "items":[ /* 扁平任务节点 */ ], "count":1, "wipExceeded":false },
       { "status":"待评审","wipLimit":null, "items":[ /* 扁平任务节点 */ ], "count":2, "wipExceeded":false },
       { "status":"完成",  "wipLimit":null, "items":[ /* 扁平任务节点 */ ], "count":12,"wipExceeded":false }
     ],

@@ -17,8 +17,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
 import { FormDialog, ProgressBar } from '@/components/common';
-import type { Report, ReportTaskRef, ReportTaskRow } from '@/types/report';
-import type { WbsNode, WbsTreeNode } from '@/types/wbs';
+import type { Report, ReportTaskRef } from '@/types/report';
+import type { WbsTreeNode } from '@/types/wbs';
 import type { ReportPayload } from '@/api/contract';
 import { useProjectStore } from '@/stores/projectStore';
 import { useWbsStore } from '@/stores/wbsStore';

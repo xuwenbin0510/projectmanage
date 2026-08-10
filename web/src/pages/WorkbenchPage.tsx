@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -26,17 +26,24 @@ import {
   StatusChip,
 } from '@/components/common';
 import { ReviewStepper } from '@/components/review/ReviewStepper';
+import { HealthDistBar, OverdueBarChart, ProgressDonut } from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
 import { ROUTES } from '@/config/routes';
 import { PROJECT_TYPE_SHORT, TASK_STATUSES } from '@/config/enums';
 import type { TaskStatus } from '@/types/wbs';
+import { buildDashboard } from '@/utils/dashboardAgg';
 import { fmtDate, isOverdue, today, diffDays } from '@/utils/date';
 import { alphaOf as alpha, tokens, colorOf } from '@/theme/tokens';
 
 /**
- * 我的工作台：待办审批 / 我的任务 / 我的项目 / 周报提醒
- * @prd P0-13
+ * 我的工作台：仪表盘三图 + 待办审批 / 我的任务 / 我的项目 / 周报提醒
+ *
+ * B11 增量：在 3 张 `StatCard` 与既有 4 区块之间插入「图表区」，
+ * 数据由 `buildDashboard(data)` **纯前端聚合**（§1.3，不新增后端接口）。
+ * 既有 4 区块与全部交互零改动。
+ *
+ * @prd P0-13 / B11
  */
 export function WorkbenchPage(): JSX.Element {
   const navigate = useNavigate();
@@ -45,6 +52,9 @@ export function WorkbenchPage(): JSX.Element {
 
   const fetcher = useCallback(() => api.getWorkbench(), []);
   const { data, loading, error, run } = useAsync(fetcher, []);
+
+  /* B11：仪表盘聚合。必须在任何早退之前调用，保证 Hooks 顺序稳定 */
+  const dashboard = useMemo(() => buildDashboard(data), [data]);
 
   /** 直接在工作台改任务状态（移动端四件事之一，走 moveTask 以保留 WIP 拦截） */
   const handleStatus = async (nodeId: string, status: TaskStatus, order: number): Promise<void> => {
@@ -111,6 +121,25 @@ export function WorkbenchPage(): JSX.Element {
           tone={stats.missingReports > 0 ? 'warning' : 'success'}
           hint="周五 18:00 前提交"
           icon={<EditNoteOutlinedIcon fontSize="small" />}
+        />
+      </Box>
+
+      {/* ══ B11 · 仪表盘图表区（三图等高，栅格 xs:1fr / md:repeat(3,1fr)） ══ */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2,
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+          alignItems: 'stretch',
+          mb: 2.5,
+        }}
+      >
+        <ProgressDonut summary={dashboard.progress} loading={loading} />
+        <OverdueBarChart rows={dashboard.overdue} loading={loading} />
+        <HealthDistBar
+          dist={dashboard.health}
+          loading={loading}
+          onDrill={() => navigate(ROUTES.projects)}
         />
       </Box>
 

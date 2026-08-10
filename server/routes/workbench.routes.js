@@ -11,6 +11,10 @@
  *  - `missingReports === reportReminders 未填数`
  *  - `reportReminders` 每「我参与且进行中」项目一行（week / weekStart / weekEnd / filled）
  *
+ * B11（仪表盘）：`myTasks[]` **纯追加** `projectName` 字段（所属项目名，见
+ * `workbench.service.js#listMyTasks`），供工作台「逾期柱状图」按项目分组展示。
+ * 本路由**代码零改动**（透传 service 返回），结构与既有字段一字未变，老客户端无感。
+ *
  * 注意返回结构必须字段齐全，缺字段会让前端 `data.stats.xxx` 取到 undefined 后渲染 NaN。
  */
 

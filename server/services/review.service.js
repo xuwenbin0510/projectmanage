@@ -552,6 +552,8 @@ function decide(db, id, action, payload, me) {
     writeAudit(db, me, 'review', id, 'reject', row.project_id, '驳回评审「' + row.title + '」：' + comment, [
       diffEntry('status', '评审状态', '审批中', '已驳回'),
     ]);
+    /* BUG-2 修复：驳回联动（镜像 onReviewApproved）——立项评审驳回 → 项目 审批中→已驳回 */
+    onReviewRejected(db, updated, me);
     return updated;
   }
 
@@ -702,6 +704,35 @@ function onReviewApproved(db, review, actor) {
   }
 }
 
+/**
+ * 评审驳回后的联动（BUG-2 · 镜像 `onReviewApproved` 的 project 分支）：
+ *  - refType='project' → 项目 `审批中→已驳回` + 审计 status_change
+ *
+ * 契约：立项评审被驳回后项目必须离开「审批中」态，否则项目卡在审批中且
+ * 会误触发 BUG-1 的回退重提路径异常（原始投诉）。仅当 `p.status==='审批中'`
+ * 时翻转，保证幂等（重复驳回 / 已终态项目不重复写）。
+ *
+ * ⚠ 本函数在评审事务**外**调用：写项目 + 审计全部旁路（沿用 onReviewApproved 铁律）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} review Review（API 形态，status 应为「已驳回」）
+ * @param {object} actor users 行
+ * @returns {void}
+ */
+function onReviewRejected(db, review, actor) {
+  if (review.refType === 'project') {
+    const p = db
+      .prepare('SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL')
+      .get(String(review.refId || ''));
+    if (p && p.status === '审批中') {
+      db.prepare("UPDATE projects SET status = '已驳回', updated_at = ? WHERE id = ?").run(dates.nowIso(), p.id);
+      writeAudit(db, actor, 'project', p.id, 'status_change', p.id, '立项审批驳回，项目状态变更为「已驳回」', [
+        diffEntry('status', '项目状态', '审批中', '已驳回'),
+      ]);
+    }
+  }
+}
+
 module.exports = {
   listReviews,
   listMyApprovals,
@@ -712,6 +743,7 @@ module.exports = {
   withdrawReview,
   canDecide,
   onReviewApproved,
+  onReviewRejected,
   // 供 T04 工作台复用（同一 canDecide 口径）
   decide,
 };

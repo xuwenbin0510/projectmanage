@@ -533,6 +533,15 @@ function buildBoard(db: MockDb, projectId: string): BoardView {
     };
     db.boardConfigs.push(config);
   }
+  /* B11 决策 D-B11-1 · 列快照读时自愈（与后端 board.service.js#ensureBoardConfig 同口径）：
+   * columns 只是「创建时刻的枚举快照」且无 API 可改；localStorage 里的老快照会导致
+   * 「老项目 4 列 / 新项目 5 列」。此处幂等修复，**只改 columns，wipLimits 分毫不动**。 */
+  if (
+    config.columns.length !== BOARD_COLUMNS.length ||
+    config.columns.some((c, i) => c !== BOARD_COLUMNS[i])
+  ) {
+    config.columns = [...BOARD_COLUMNS];
+  }
   /* Q-3：看板卡片 = 真叶子（无子节点），不再以 nodeType==='task' 判定 */
   const tasks = leafNodesOf(db.wbsNodes.filter((n) => n.projectId === projectId));
   const columns: BoardColumn[] = config.columns.map((status) => ({
@@ -2341,9 +2350,12 @@ export class MockApiClient implements ApiClient {
       .map((p) => toListItem(db, p));
 
     /* Q-3：我的任务 = 我负责的真叶子（无子节点），不再以 nodeType==='task' 判定 */
+    /* B11：与真后端 listMyTasks 对齐，纯追加 projectName（逾期柱状图按项目分组用） */
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
     const myTasks = leafNodesOf(db.wbsNodes)
       .filter((n) => n.owner === me.openId && n.status !== '完成')
-      .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1));
+      .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1))
+      .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' }));
 
     const myApprovals = db.reviews.filter((r) => canDecide(r, me.openId) !== null);
 

@@ -84,8 +84,17 @@ const MILESTONE_OVERRIDES = ['未开始', '进行中', '已逾期'];
 
 const TASK_STATUSES = ['待办', '进行中', '待评审', '完成', '阻塞'];
 
-/** 看板列（不含「阻塞」，与前端 web/src/types/wbs.ts BOARD_COLUMNS 一致） */
-const BOARD_COLUMNS = ['待办', '进行中', '待评审', '完成'];
+/**
+ * 看板列（B11：补「阻塞」列，共 5 列，与前端 web/src/types/wbs.ts BOARD_COLUMNS 逐字一致）
+ *
+ * 顺序口径（决策 D-B11-3）：`待办 → 进行中 → 阻塞 → 待评审 → 完成`
+ *   —— 「阻塞」是「进行中的异常分支」，紧邻「进行中」；「完成」恒为最右终点。
+ *
+ * ⚠ 本常量是**看板列的定义源**，但运行时单一数据源是 `board_configs.columns`
+ *   （懒创建时的枚举快照）。`board.service.js#ensureBoardConfig` 会做「读时自愈」，
+ *   发现 DB 快照与本数组不一致即就地改写，故未来增删列只需改这里 + 前端镜像。
+ */
+const BOARD_COLUMNS = ['待办', '进行中', '阻塞', '待评审', '完成'];
 
 const WBS_NODE_TYPES = ['task', 'subtask'];
 

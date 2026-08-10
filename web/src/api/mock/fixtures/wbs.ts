@@ -1,4 +1,5 @@
 import type { WbsNode, BoardConfig, TaskStatus, WbsNodeType } from '@/types/wbs';
+import { BOARD_COLUMNS } from '@/types/wbs';
 import type { User } from '@/types/project';
 import { addDays, today, nowIso } from '@/utils/date';
 import { OPEN_IDS, nameOf } from './users';
@@ -65,7 +66,8 @@ const P0012: NodeSpec[] = [
   ['1.4.1', '采集协议解析', 'task', OPEN_IDS.wudi, 4, 60, '进行中', 5],
   ['1.4.2', '数据入库服务', 'task', OPEN_IDS.zhengshuang, 3, 30, '进行中', 7],
   ['1.3.1', '采集模块开发', 'task', OPEN_IDS.wudi, 5, 0, '待办', 12],
-  ['1.3.2', '告警引擎开发', 'task', OPEN_IDS.zhengshuang, 4, 0, '待办', 16],
+  /* B11：阻塞列样本（progress 0，syncWbsProgressStatus 会原样保留「阻塞」人工态） */
+  ['1.3.2', '告警引擎开发', 'task', OPEN_IDS.zhengshuang, 4, 0, '阻塞', 16],
   ['1.3.3', '前端可视化开发', 'task', '', 0, 0, '待办', 20],
   ['1.3.4', '联调脚本编写', 'task', OPEN_IDS.wudi, 2, 20, '进行中', 9],
   ['1.3.5', '性能压测准备', 'task', OPEN_IDS.xuwenbin, 3, 10, '进行中', -3],
@@ -82,7 +84,8 @@ const P0015: NodeSpec[] = [
   ['1.1.3', '调度看板前端', 'task', OPEN_IDS.liming, 1.5, 100, '完成', -1],
   ['1.1.4', '回归测试', 'task', OPEN_IDS.chenjing, 1, 0, '待办', 5],
   ['1.2', '技术债', 'package', '', 0, 0, '待办', 14],
-  ['1.2.1', '调度引擎重构', 'task', OPEN_IDS.wangqiang, 3, 0, '待办', 8],
+  /* B11：阻塞列样本 */
+  ['1.2.1', '调度引擎重构', 'task', OPEN_IDS.wangqiang, 3, 0, '阻塞', 8],
 ];
 
 const P0018: NodeSpec[] = [
@@ -175,9 +178,10 @@ export function createWbs(users: User[]): WbsBundle {
       });
     });
 
+    /* B11：列定义单一来源 = BOARD_COLUMNS（含「阻塞」共 5 列），禁止再硬编码数组 */
     boardConfigs.push({
       projectId,
-      columns: ['待办', '进行中', '待评审', '完成'],
+      columns: [...BOARD_COLUMNS],
       wipLimits: { 进行中: DEFAULT_WIP_LIMIT },
       updatedAt: ts,
     });

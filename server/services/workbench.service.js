@@ -26,9 +26,14 @@ const reviewService = require('./review.service');
  * 只统计我参与项目里的节点，且排除已结项 / 已终止项目（与 `listMyProjectItems` 口径一致），
  * 避免归档项目的历史任务一直挂在工作台上。
  *
+ * B11（**纯字段追加**，老客户端无感）：每行挂 `projectName`。
+ *   逾期柱状图要按项目分组显示名称，而 `myTasks` 可能含「草稿 / 审批中 / 挂起」项目的任务，
+ *   `myProjects` 只列在办 → 前端 join 会漏，服务端直接给名字最稳。
+ *   ⚠ 过滤口径（叶子判定 / owner===me / status!=='完成' / 排除归档）与排序**一字未改**。
+ *
  * @param {import('better-sqlite3').Database} db
  * @param {object} me 当前用户 users 行
- * @returns {Array<object>} WbsNode[]
+ * @returns {Array<object>} WbsNode[]（含 B11 追加的 `projectName`）
  */
 function listMyTasks(db, me) {
   const openId = String((me && (me.open_id || me.openId)) || '');
@@ -36,7 +41,7 @@ function listMyTasks(db, me) {
 
   const rows = db
     .prepare(
-      `SELECT n.*
+      `SELECT n.*, p.name AS __project_name
          FROM wbs_nodes n
          JOIN projects p ON p.id = n.project_id
         WHERE p.deleted_at IS NULL
@@ -44,6 +49,12 @@ function listMyTasks(db, me) {
           AND n.project_id IN (SELECT project_id FROM project_members WHERE user_open_id = ?)`,
     )
     .all(openId);
+
+  /* B11：projectId → 项目名（来自同一次 JOIN，零额外查询） */
+  const projectNameById = {};
+  rows.forEach(function (r) {
+    projectNameById[mappers.toStr(r.project_id)] = mappers.toStr(r.__project_name);
+  });
 
   /* leafNodesOf 要在**项目全量节点**上判定，故先按项目分组再取叶子 */
   const byProject = {};
@@ -55,7 +66,11 @@ function listMyTasks(db, me) {
   const mine = [];
   Object.keys(byProject).forEach(function (pid) {
     wbs.leafNodesOf(byProject[pid]).forEach(function (n) {
-      if (n.owner === openId && n.status !== '完成') mine.push(n);
+      if (n.owner === openId && n.status !== '完成') {
+        /* B11 纯追加：不改任何既有字段，仅补 projectName */
+        n.projectName = projectNameById[n.projectId] || '';
+        mine.push(n);
+      }
     });
   });
 

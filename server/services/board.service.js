@@ -25,9 +25,35 @@ const milestoneService = require('./milestone.service');
  * ═══════════════════════════════════════════════════ */
 
 /**
+ * `board_configs.columns` 是否与当前 `enums.BOARD_COLUMNS` 逐项一致。
+ *
+ * @param {*} columns DB 里反序列化出来的列数组（可能是任意脏值）
+ * @returns {boolean} true = 一致，无需自愈
+ */
+function columnsInSync(columns) {
+  const want = enums.BOARD_COLUMNS;
+  if (!Array.isArray(columns) || columns.length !== want.length) return false;
+  for (let i = 0; i < want.length; i += 1) {
+    if (String(columns[i]) !== want[i]) return false;
+  }
+  return true;
+}
+
+/**
  * 读看板配置（API 形态）；不存在则**懒创建**一条默认配置后返回。
  *
  * 默认：`columns = BOARD_COLUMNS`、`wipLimits = {'进行中': DEFAULT_WIP_LIMIT}`。
+ *
+ * ── B11 决策 D-B11-1 · 列快照「读时自愈」 ─────────────────────
+ * `columns` 落库时是「创建时刻的 `BOARD_COLUMNS` 快照」，且**没有任何 API 能改它**
+ * （`updateBoardConfig` 只写 `wip_limits`）。只改 `enums.js` 常量会导致
+ * 「已有项目 4 列、新建项目 5 列」。故在此做幂等自愈：
+ *   - 读到的 `columns` 与 `enums.BOARD_COLUMNS` 不一致 → 就地 `UPDATE ... SET columns = ?`；
+ *   - **只 SET columns 一列，`wip_limits` 分毫不动**（用户配置不可丢）；
+ *   - 一致则**零写入**（第二次调用不产生 UPDATE）；
+ *   - **不写审计**：这是数据修复而非用户行为；
+ *   - 无 migration —— 未来任何列增删自动生效，开发/生产库版本参差也能自愈。
+ * ──────────────────────────────────────────────────────────
  *
  * @param {import('better-sqlite3').Database} db
  * @param {string} projectId
@@ -45,7 +71,18 @@ function ensureBoardConfig(db, projectId) {
     ).run(pid, JSON.stringify(enums.BOARD_COLUMNS.slice()), JSON.stringify(wipLimits), ts);
     row = db.prepare('SELECT * FROM board_configs WHERE project_id = ?').get(pid);
   }
-  return mappers.toApiBoardConfig(row);
+
+  const config = mappers.toApiBoardConfig(row);
+
+  /* B11 · 列快照自愈（幂等；只改 columns，不碰 wip_limits，不写审计） */
+  if (!columnsInSync(config.columns)) {
+    db.prepare('UPDATE board_configs SET columns = ? WHERE project_id = ?')
+      .run(JSON.stringify(enums.BOARD_COLUMNS.slice()), pid);
+    row = db.prepare('SELECT * FROM board_configs WHERE project_id = ?').get(pid);
+    return mappers.toApiBoardConfig(row);
+  }
+
+  return config;
 }
 
 /* ═══════════════════════════════════════════════════

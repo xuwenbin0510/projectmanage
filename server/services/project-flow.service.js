@@ -25,6 +25,12 @@ const { AppError, ErrorCode } = require('../lib/errors');
 const { writeAudit, diffEntry } = require('../lib/audit');
 const enums = require('../config/enums');
 const rbac = require('../middleware/rbac');
+/**
+ * ⚠ 与文件头 D5「project-flow 与 review.service 互不依赖」的**唯一例外**：
+ * `草稿→审批中` 必须真正发起立项评审，否则审批中心 / 工作台（都读 reviews 表）永远为空。
+ * 依赖方向单向：project-flow → review.service（review.service 不反向 require 本文件，无环）。
+ */
+const reviewService = require('./review.service');
 
 /**
  * 结项前置检查（唯一口径，transition→已结项 与 GET /close-check 共用）。
@@ -157,6 +163,34 @@ function transitionProject(db, req, id, to, comment) {
     comment || '项目状态由「' + before + '」变更为「' + target + '」',
     [diffEntry('status', '项目状态', before, target)],
   );
+
+  /*
+   * `→审批中` 自动发起立项评审（前端零改动：概览页「流转」即启动审批流）。
+   * 先置状态再建评审，语义更顺；`onReviewApproved` 靠 `p.status==='审批中'` 翻转，不受影响。
+   * 幂等（BUG-1 修复）：仅当已存在**进行中**（status='审批中'）的立项评审时才跳过建链。
+   * 已终态（已通过 / 已驳回）的旧评审**不算数**——支持 `审批中→已驳回→草稿→审批中`
+   * 的回退重提路径重新建链，避免项目卡在审批中而审批中心为空（原始投诉复发）。
+   */
+  if (target === '审批中') {
+    const hasReview = db
+      .prepare(
+        "SELECT COUNT(*) AS c FROM reviews WHERE project_id = ? AND review_type = 'project' AND status = '审批中'"
+      )
+      .get(id);
+    if (!hasReview || Number(hasReview.c) === 0) {
+      reviewService.createReview(
+        db,
+        {
+          projectId: id,
+          refType: 'project',
+          refId: id,
+          reviewType: 'project',
+          title: '立项审批 - ' + mappers.toStr(p.name),
+        },
+        req.user,
+      );
+    }
+  }
 
   const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   return mappers.toApiProject(row);
