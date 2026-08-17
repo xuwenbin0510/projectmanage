@@ -182,6 +182,8 @@ export interface OverdueTaskRow {
   name: string;
   /** 负责人姓名（WbsNode.ownerName）；空 → 「未分配」 */
   ownerName: string;
+  /** 负责人 openId（WbsNode.owner）；用于「仅看我负责」筛选，空 → 未分配 */
+  ownerId: string;
   /** 计划完成日 YYYY-MM-DD */
   dueDate: string;
   /** 任务状态（看板五态之一） */

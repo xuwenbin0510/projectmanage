@@ -13,6 +13,7 @@ import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
 import { useNavigate } from 'react-router-dom';
+import { useAuthStore } from '@/stores/authStore';
 
 import {
   EmptyState,
@@ -47,6 +48,7 @@ import { alphaOf as alpha, tokens, colorOf } from '@/theme/tokens';
  */
 export function WorkbenchPage(): JSX.Element {
   const navigate = useNavigate();
+  const me = useAuthStore((s) => s.user);
   const toast = useToast();
   const [busyTask, setBusyTask] = useState<string>('');
 
@@ -375,6 +377,7 @@ export function WorkbenchPage(): JSX.Element {
         open={ovDrawer.open}
         projectId={ovDrawer.projectId}
         projectName={ovDrawer.projectName}
+        currentUserId={me?.openId}
         onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
       />
     </Box>

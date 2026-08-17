@@ -60,6 +60,7 @@ import type { DonutSegment } from '@/components/dashboard';
 import { useDashboardOverview, useDebounced } from '@/hooks';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
+import { useAuthStore } from '@/stores/authStore';
 import { PROJECT_TYPE_SHORT, PROJECT_TYPES, HEALTH_LABEL } from '@/config/enums';
 import { fmtDate } from '@/utils/date';
 import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
@@ -160,6 +161,7 @@ const projectColumns: Array<Column<ProjectListItem>> = [
  */
 export function MetricsPage(): JSX.Element {
   const navigate = useNavigate();
+  const me = useAuthStore((s) => s.user);
   const {
     data,
     loading,
@@ -429,6 +431,7 @@ export function MetricsPage(): JSX.Element {
         open={ovDrawer.open}
         projectId={ovDrawer.projectId}
         projectName={ovDrawer.projectName}
+        currentUserId={me?.openId}
         onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
       />
     </Box>
