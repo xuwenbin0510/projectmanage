@@ -1,4 +1,7 @@
 export { StatusChip } from './StatusChip';
+export { PriorityChip } from './PriorityChip';
+export type { PriorityChipProps } from './PriorityChip';
+export { TodoBell } from './TodoBell';
 export { HealthDot } from './HealthDot';
 export { PageHeader } from './PageHeader';
 export type { Crumb } from './PageHeader';

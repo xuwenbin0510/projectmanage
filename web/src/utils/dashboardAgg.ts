@@ -23,12 +23,14 @@ import type {
   DashboardSummary,
   HealthDistribution,
   OverdueByProject,
+  PriorityDistribution,
   TaskProgressSummary,
 } from '@/types/dashboard';
 import type { ProjectListItem } from '@/types/project';
-import type { WbsNode } from '@/types/wbs';
+import type { Priority, WbsNode } from '@/types/wbs';
 import type { WorkbenchData } from '@/types/workbench';
 import { diffDays, today } from '@/utils/date';
+import { PRIORITIES, normalizePriority, priorityRankOf } from '@/config/enums';
 
 /** 临期阈值（天）：与 `WorkbenchPage` 既有 `soon` 判定一致 */
 export const DUE_SOON_DAYS = 3;
@@ -193,7 +195,72 @@ export function aggregateHealth(projects: ProjectListItem[]): HealthDistribution
 }
 
 /**
- * 仪表盘总聚合入口：一次调用产出三张图所需的全部数据。
+ * 优先级分布聚合（B14-块1 · 环图数据源）。
+ *
+ * 口径：
+ * - 逐个任务按 `priority` 落到 P0–P3 四档；**脏值 / 缺失一律兜底 `P2`**
+ *   （复用 `config/enums#normalizePriority`，与后端 `toApiWbsNode` 的 `toStr(row.priority,'P2')` 同口径）。
+ * - `total` = 四档之和 = 入参有效元素个数，故 `P0+P1+P2+P3 === total` 恒成立。
+ * - 空数组 → 全零（**不返回 NaN**），组件据 `total === 0` 渲染空态。
+ *
+ * ⚠️ 不做「过滤已完成」：本图是「我手上任务的优先级构成」，
+ * 而 `GET /api/workbench#myTasks` 服务端已滤掉 `完成`，二次过滤属重复口径。
+ * 若调用方传入项目全量 WBS 需要排除已完成，请在调用前自行过滤。
+ *
+ * @param nodes 任务列表（`WorkbenchData.myTasks` 或 `api.listWbs` 的结果）
+ */
+export function aggregatePriorityDistribution(nodes: WbsNode[]): PriorityDistribution {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const counts: Record<Priority, number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+
+  list.forEach((n) => {
+    counts[normalizePriority(n?.priority)] += 1;
+  });
+
+  return {
+    P0: counts.P0,
+    P1: counts.P1,
+    P2: counts.P2,
+    P3: counts.P3,
+    total: PRIORITIES.reduce((sum, p) => sum + counts[p], 0),
+  };
+}
+
+/**
+ * 按优先级升序比较（**P0 置顶**），同级再按截止日升序（早的在前，空值垫底）。
+ *
+ * B14-块1 的排序**单一实现**：逾期清单、抽屉明细、待办中心任务类分组全部复用本函数，
+ * 禁止在组件里手写 `a.priority < b.priority`（字符串比较会把 P0 排到最后是错的口径反例，
+ * 且无法处理脏值）。
+ */
+export function comparePriority(
+  a: { priority?: unknown; dueDate?: string | null },
+  b: { priority?: unknown; dueDate?: string | null },
+): number {
+  const rank = priorityRankOf(a?.priority) - priorityRankOf(b?.priority);
+  if (rank !== 0) return rank;
+  /* 同优先级：截止日早的靠前；无截止日恒垫底 */
+  const da = a?.dueDate || '';
+  const db = b?.dueDate || '';
+  if (!da && !db) return 0;
+  if (!da) return 1;
+  if (!db) return -1;
+  return da.localeCompare(db);
+}
+
+/**
+ * 按优先级排序（不改原数组，返回新数组）。
+ *
+ * @param nodes 任务列表
+ */
+export function sortByPriority<T extends { priority?: unknown; dueDate?: string | null }>(
+  nodes: T[],
+): T[] {
+  return (Array.isArray(nodes) ? [...nodes] : []).sort(comparePriority);
+}
+
+/**
+ * 仪表盘总聚合入口：一次调用产出四张图所需的全部数据。
  *
  * 在 `WorkbenchPage` 里用 `useMemo(() => buildDashboard(data), [data])` 包裹，
  * 保证筛选 / 重渲染时零重复计算。
@@ -208,6 +275,8 @@ export function buildDashboard(data: WorkbenchData | null | undefined): Dashboar
     progress: aggregateTaskProgress(tasks),
     overdue: aggregateOverdue(tasks, projects),
     health: aggregateHealth(projects),
+    /* B14-块1：优先级分布环图 */
+    priority: aggregatePriorityDistribution(tasks),
   };
 }
 

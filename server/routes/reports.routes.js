@@ -7,8 +7,20 @@
  *  - `POST   /projects/:projectId/reports`        暂存 / 提交（body `submit: true|false`）
  *  - `PATCH  /projects/:projectId/reports/:id`    编辑（作者本人或 admin）
  *
+ * B14 块2（轻量闭环）新增：
+ *  - `POST   /projects/:projectId/reports/:id/confirm`  确认（`已提交` → `已确认`）
+ *  - `POST   /projects/:projectId/reports/:id/reject`   打回（`已提交` → `草稿`，body.reason 必填）
+ *  - `GET    /reports/pending-confirmation`             待我确认的周报（服务端解析确认人）
+ *
  * RBAC 守卫次序（共享约定 §4）：`requireAuth` → `assertCan('report.write')` → 业务校验。
  * `report:write` 的 `project: []` 为空 ⇒ 实际只校验全局角色，与 Mock 一致。
+ *
+ * ⚠ 确认/打回**不走** `assertCan('report.write')`：授权真源是
+ *   `reportSvc.resolveConfirmers`（project_members pm → tl ∪ admin 兜底，作者恒排除）。
+ *   若再叠加全局角色白名单，会把「是项目 pm 但全局角色为 management」的合法确认人误拒。
+ *
+ * ⚠ `GET /reports/pending-confirmation` 是**静态段**路径（`/reports/...`），
+ *   与 `/projects/:projectId/reports/:week` 不在同一前缀下，无 `:id` 冲突风险。
  *
  * ⚠ 本路由必须挂载在 `stubs.routes.js` **之前**，否则会被 501 桩抢先命中。
  */
@@ -23,6 +35,24 @@ const reportSvc = require('../services/report.service');
 const router = express.Router();
 
 /* ── 读 ─────────────────────────────────────────────── */
+
+/**
+ * B14 块2：待我确认的周报（跨项目）。
+ *
+ * 服务端逐条 `resolveConfirmers` 过滤，只返回当前用户有权确认的 `已提交` 周报；
+ * 「我能否确认」以本接口结果为唯一判据（前端不重复实现确认人解析，架构 §8）。
+ *
+ * ⚠ 必须声明在 `/projects/:projectId/reports/:week` 之前无冲突（不同前缀），
+ *   但仍前置声明以保证「静态段优先」的阅读直觉。
+ */
+router.get(
+  '/reports/pending-confirmation',
+  requireAuth,
+  asyncHandler(async function listPendingConfirmation(req, res) {
+    const me = req.user || {};
+    res.json(ok(reportSvc.listPendingConfirmation(db, me.open_id)));
+  }),
+);
 
 /** 周报列表：登录即可读（读路径不做项目角色守卫，与工作台口径一致） */
 router.get(
@@ -87,6 +117,43 @@ router.patch(
     const payload = Object.assign({}, req.body || {}, { projectId: projectId });
     const report = reportSvc.updateReport(db, req.params.id, payload, req.user);
     res.json(ok(report, '已更新'));
+  }),
+);
+
+/* ── B14 块2：轻量闭环（确认 / 打回） ───────────────── */
+
+/**
+ * 确认周报：`已提交` → `已确认`，写 `confirmed_by` / `confirmed_at`。
+ * 授权由 service 层 `resolveConfirmers` 判定（作者天然被排除）。
+ */
+router.post(
+  '/projects/:projectId/reports/:id/confirm',
+  requireAuth,
+  asyncHandler(async function confirmReport(req, res) {
+    const projectId = req.params.projectId;
+    rbac.assertWritable(db, projectId);
+
+    const report = reportSvc.confirmReport(db, req.params.id, req.user);
+    res.json(ok(report, '已确认'));
+  }),
+);
+
+/**
+ * 打回周报：`已提交` → `草稿`，写 `reject_reason`（body.reason 必填，空 → 400）。
+ * 授权同 confirm，由 service 层 `resolveConfirmers` 判定。
+ */
+router.post(
+  '/projects/:projectId/reports/:id/reject',
+  requireAuth,
+  asyncHandler(async function rejectReport(req, res) {
+    const projectId = req.params.projectId;
+    rbac.assertWritable(db, projectId);
+
+    const body = req.body || {};
+    /* 兼容前端两种字段名：reason（契约）/ rejectReason（防御） */
+    const reason = body.reason !== undefined ? body.reason : body.rejectReason;
+    const report = reportSvc.rejectReport(db, req.params.id, reason, req.user);
+    res.json(ok(report, '已打回'));
   }),
 );
 

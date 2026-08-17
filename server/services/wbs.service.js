@@ -25,6 +25,32 @@ const milestoneService = require('./milestone.service');
 /** 未传截止日期时的默认工期（天） */
 const DEFAULT_DUE_OFFSET_DAYS = 7;
 
+/** B14 块1：任务优先级四档（越靠前越紧急） */
+const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+
+/** B14 块1：优先级缺省值（既有任务与未传字段一律 P2 = 中） */
+const DEFAULT_PRIORITY = 'P2';
+
+/**
+ * B14 块1：归一化优先级入参。
+ *
+ * 允许大小写混写（`p0` → `P0`）；非四档之一直接 400，不静默兜底
+ * —— 静默兜底会让「前端传错」变成「数据悄悄不对」，排查成本更高。
+ *
+ * @param {*} raw 请求体里的 priority
+ * @returns {'P0'|'P1'|'P2'|'P3'}
+ * @throws {AppError} E_VALIDATION
+ */
+function normalizePriority(raw) {
+  const v = String(raw === null || raw === undefined ? '' : raw).trim().toUpperCase();
+  if (PRIORITIES.indexOf(v) < 0) {
+    throw new AppError(ErrorCode.E_VALIDATION, '优先级只能是 P0 / P1 / P2 / P3', {
+      fields: { priority: '取值非法' },
+    });
+  }
+  return v;
+}
+
 /* ═══════════════════════════════════════════════════
  * 一、基础读取
  * ═══════════════════════════════════════════════════ */
@@ -321,12 +347,16 @@ function createWbsNode(db, req, projectId, payload) {
     const id = ids.genId('W');
     const ts = dates.nowIso();
     const progress = Math.max(0, Math.min(100, Number(p.progress) || 0));
+    /* B14 块1：优先级 —— 未传按 P2，传了必须是四档之一 */
+    const priority = p.priority === undefined || p.priority === null || p.priority === ''
+      ? DEFAULT_PRIORITY
+      : normalizePriority(p.priority);
     db.prepare(
       'INSERT INTO wbs_nodes (' +
         'id, project_id, parent_id, wbs_code, level, node_type, name, description, owner, ' +
-        'estimate_days, actual_days, start_date, due_date, status, progress, board_order, ' +
+        'estimate_days, actual_days, start_date, due_date, status, progress, priority, board_order, ' +
         'is_critical, milestone_id, created_by, created_at, updated_at' +
-        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id,
       String(projectId),
@@ -342,6 +372,7 @@ function createWbsNode(db, req, projectId, payload) {
       effectiveDue,
       String(p.status === undefined || p.status === null || p.status === '' ? '待办' : p.status),
       progress,
+      priority,
       nodes.length,
       p.isCritical ? 1 : 0,
       milestoneId ? String(milestoneId) : null,
@@ -529,6 +560,21 @@ function updateWbsNode(db, req, id, payload) {
         before: node.isCritical ? '是' : '否',
         after: p.isCritical ? '是' : '否',
       });
+    }
+
+    /* ── B14 块1：优先级（任意节点均可改；非四档之一 → 400） ── */
+    if (p.priority !== undefined) {
+      const nextPriority = normalizePriority(p.priority);
+      if (nextPriority !== node.priority) {
+        sets.push('priority = ?');
+        args.push(nextPriority);
+        diff.push({
+          field: 'priority',
+          label: '优先级',
+          before: node.priority,
+          after: nextPriority,
+        });
+      }
     }
 
     /* ── SK-13 叶子完整性：仅对真叶子要求负责人 + 估算 ── */

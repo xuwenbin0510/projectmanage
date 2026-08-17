@@ -15,7 +15,7 @@ import type {
   MilestoneOverride,
   CloseBlocker,
 } from '@/types/project';
-import type { WbsNode, WbsNodeType, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
+import type { WbsNode, WbsNodeType, TaskStatus, Priority, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
 import type { EffortReport } from '@/types/effort';
 import type { Review, ReviewType, ReviewRefType } from '@/types/review';
@@ -140,6 +140,11 @@ export interface WbsNodePayload {
   dueDate?: string;
   status?: TaskStatus;
   progress?: number;
+  /**
+   * 任务优先级（B14-块1）。不传 = 服务端按 `P2` 落库；
+   * 传非法值（不在 P0–P3 内）→ 后端 `E_VALIDATION`。
+   */
+  priority?: Priority;
   /** 关联里程碑（任务 / 子任务均可）；跨项目引用一律 E_VALIDATION */
   milestoneId?: string | null;
 }
@@ -272,6 +277,14 @@ export interface ApiClient {
   submitReport(payload: ReportPayload): Promise<Report>;
   /** 编辑提交必须原样回传原始 report.tasks（selected/progressAfter 不变），引擎按 payload.tasks 整体重建，否则关联被清空（R3-7） */
   updateReport(id: string, payload: ReportPayload): Promise<Report>;
+
+  /* 周报轻量闭环 B14-块2（草稿 → 已提交 → 已确认；确认人由服务端 resolveConfirmers 判定） */
+  /** 确认周报：仅 status='已提交' 且当前用户在服务端确认人集合内才成功，成功后 status='已确认' */
+  confirmReport(projectId: string, id: string): Promise<Report>;
+  /** 打回周报：reason 必填，成功后 status 回退为 '草稿' 并写入 rejectReason */
+  rejectReport(projectId: string, id: string, reason: string): Promise<Report>;
+  /** 待我确认的周报（服务端按 resolveConfirmers 过滤，跨项目聚合，供统一待办中心消费） */
+  listPendingConfirmation(): Promise<Report[]>;
 
   /* 工时统计报表 B9（只读聚合，与 WBS/看板同级可见性） */
   getEffortReport(projectId: string): Promise<EffortReport>;

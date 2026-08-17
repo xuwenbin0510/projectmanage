@@ -85,6 +85,9 @@ import {
   EFFORT_DAYS_CUM_MAX,
   AUDIT_ACTION_LABEL,
   GATE_PASSED_STATUSES,
+  DEFAULT_PRIORITY,
+  normalizePriority,
+  REJECT_REASON_MAX,
 } from '@/config/enums';
 import { aggregateHealth, aggregateOverdue } from '@/utils/dashboardAgg';
 import { canDo } from '@/config/permissions';
@@ -851,6 +854,8 @@ export class MockApiClient implements ApiClient {
             dueDate: ms.currentDate,
             status: '待办',
             progress: 0,
+            // B14-块1：骨架节点走缺省优先级
+            priority: DEFAULT_PRIORITY,
             boardOrder: idx,
             isCritical: false,
             milestoneId: ms.id,
@@ -1378,6 +1383,8 @@ export class MockApiClient implements ApiClient {
       dueDate: effectiveDue,
       status: payload.status ?? '待办',
       progress: payload.progress ?? 0,
+      // B14-块1：与后端 wbs.service#createWbsNode 同构 —— 缺省 P2，非法值收敛
+      priority: normalizePriority(payload.priority ?? DEFAULT_PRIORITY),
       boardOrder: db.wbsNodes.filter((n) => n.projectId === projectId).length,
       isCritical: false,
       milestoneId,
@@ -1446,6 +1453,14 @@ export class MockApiClient implements ApiClient {
         after: String(payload.estimateDays),
       });
       node.estimateDays = payload.estimateDays;
+    }
+    /* B14-块1：优先级变更（与后端 wbs.service#updateWbsNode 同构，含审计 diff） */
+    if (payload.priority !== undefined) {
+      const nextPriority = normalizePriority(payload.priority);
+      if (nextPriority !== node.priority) {
+        diff.push({ field: 'priority', label: '优先级', before: node.priority, after: nextPriority });
+        node.priority = nextPriority;
+      }
     }
     if (payload.startDate !== undefined) node.startDate = payload.startDate;
     if (payload.dueDate !== undefined) {
@@ -1725,6 +1740,10 @@ export class MockApiClient implements ApiClient {
       risks: [],
       snapshot: null,
       submittedAt: null,
+      // B14-块2：新建/提交时确认三字段恒空（确认态只由 confirmReport/rejectReport 写入）
+      confirmedBy: null,
+      confirmedAt: null,
+      rejectReason: null,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -1884,6 +1903,121 @@ export class MockApiClient implements ApiClient {
 
     saveDb();
     return deepClone(report);
+  }
+
+  /* ── 周报轻量闭环 B14-块2（与后端 report.service 同构） ─────────── */
+
+  /**
+   * 确认人解析（架构 §1.3 的 Mock 同构实现）。
+   *
+   * 权威源 = `project_members(project_role='pm')`（mock 里即 `db.members` 的 `projectRole==='pm'`）；
+   * 作者本人恒被剔除 → 天然保证「作者不能确认自己」；
+   * 作者即 PM（或项目无 PM）→ 升级为 `tl` ∪ `global_role='admin'`。
+   *
+   * ⚠️ 唯一权威实现在后端 `report.service#resolveConfirmers`；本函数仅供 Mock 演示态使用。
+   */
+  private resolveConfirmers(db: MockDb, projectId: string, authorOpenId: string): Set<string> {
+    const pm = db.members
+      .filter((m) => m.projectId === projectId && m.projectRole === 'pm')
+      .map((m) => m.userOpenId);
+
+    let result: string[];
+    if (pm.length === 0 || pm.includes(authorOpenId)) {
+      const tl = db.members
+        .filter((m) => m.projectId === projectId && m.projectRole === 'tl')
+        .map((m) => m.userOpenId);
+      const admins = db.users.filter((u) => u.globalRole === 'admin').map((u) => u.openId);
+      result = [...tl, ...admins];
+    } else {
+      result = pm;
+    }
+
+    const set = new Set(result.filter((x) => Boolean(x)));
+    set.delete(authorOpenId);
+    return set;
+  }
+
+  /** 取「已提交」周报并校验当前用户是否为确认人；失败按后端同码抛错 */
+  private assertConfirmable(db: MockDb, id: string, meOpenId: string): Report {
+    const report = db.reports.find((r) => r.id === id) ?? nf();
+    if (report.status !== '已提交') {
+      throw new ApiError(ErrorCode.E_VALIDATION, `仅「已提交」的周报可确认或打回，当前状态：${report.status}`, {
+        id,
+        status: report.status,
+      });
+    }
+    const confirmers = this.resolveConfirmers(db, report.projectId, report.author);
+    if (!confirmers.has(meOpenId)) {
+      throw new ApiError(ErrorCode.E_FORBIDDEN, '你不是该周报的确认人（作者本人不可确认自己的周报）', {
+        id,
+      });
+    }
+    return report;
+  }
+
+  /** B14-块2：确认周报 → `已确认` + 写 `confirmedBy/confirmedAt`，清空打回原因 */
+  async confirmReport(projectId: string, id: string): Promise<Report> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = currentUser(db);
+    const report = this.assertConfirmable(db, id, me.openId);
+    const ts = nowIso();
+
+    report.status = '已确认';
+    report.confirmedBy = me.openId;
+    report.confirmedAt = ts;
+    report.rejectReason = null;
+    report.updatedAt = ts;
+
+    audit(db, me, 'report', report.id, 'approve', report.projectId, `确认周报「${report.week}」`);
+    saveDb();
+    return deepClone(report);
+  }
+
+  /** B14-块2：打回周报 → 回退 `草稿` + 写 `rejectReason`（必填），清空确认字段 */
+  async rejectReport(projectId: string, id: string, reason: string): Promise<Report> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = currentUser(db);
+
+    const trimmed = String(reason ?? '').trim();
+    if (!trimmed) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '打回原因不能为空', { fields: { reason: '必填' } });
+    }
+    if (trimmed.length > REJECT_REASON_MAX) {
+      throw new ApiError(ErrorCode.E_VALIDATION, `打回原因不能超过 ${REJECT_REASON_MAX} 字`, {
+        fields: { reason: '过长' },
+      });
+    }
+
+    const report = this.assertConfirmable(db, id, me.openId);
+    const ts = nowIso();
+
+    report.status = '草稿';
+    report.rejectReason = trimmed;
+    report.confirmedBy = null;
+    report.confirmedAt = null;
+    report.updatedAt = ts;
+
+    audit(db, me, 'report', report.id, 'reject', report.projectId, `打回周报「${report.week}」：${trimmed}`);
+    saveDb();
+    return deepClone(report);
+  }
+
+  /** B14-块2：待我确认的周报（跨项目聚合，服务端过滤口径同构） */
+  async listPendingConfirmation(): Promise<Report[]> {
+    await delay(120);
+    const db = getDb();
+    const me = currentUser(db);
+
+    const rows = db.reports
+      .filter((r) => r.status === '已提交')
+      .filter((r) => this.resolveConfirmers(db, r.projectId, r.author).has(me.openId))
+      .sort((a, b) => String(b.submittedAt ?? '').localeCompare(String(a.submittedAt ?? '')));
+
+    return deepClone(rows);
   }
 
   /* ── 工时统计报表 B9（只读聚合 · 与后端 report.service#getEffortReport 同构） ── */

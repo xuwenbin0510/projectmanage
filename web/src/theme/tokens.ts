@@ -234,6 +234,8 @@ const TONE_MAP: Record<string, SemanticTone> = {
   已批准: 'success',
   已实施: 'success',
   已提交: 'success',
+  /** B14-块2：周报状态机终态 */
+  已确认: 'success',
   green: 'success',
   approved: 'success',
   // warning
@@ -254,6 +256,14 @@ const TONE_MAP: Record<string, SemanticTone> = {
   阻塞: 'danger',
   rejected: 'danger',
   red: 'danger',
+  /**
+   * B14-块1 任务优先级 → 语义色（P0 红 / P1 橙 / P2 蓝 / P3 灰）。
+   * 放在 TONE_MAP 里，`colorOf('P0')` 即可取色，`PriorityChip` 复用 `StatusChip` 零重复。
+   */
+  P0: 'danger',
+  P1: 'warning',
+  P2: 'brand',
+  P3: 'neutral',
   // neutral
   未开始: 'neutral',
   草稿: 'neutral',

@@ -31,7 +31,7 @@ import {
   UserAvatar,
 } from '@/components/common';
 import { ReportFormModal } from '@/components/report/ReportFormModal';
-import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules } from '@/types/wbs';
+import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules, Priority } from '@/types/wbs';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { useFlowStore } from '@/stores/flowStore';
@@ -43,6 +43,8 @@ import {
   GRANULARITY_LIMIT,
   TASK_STATUSES,
   WBS_NODE_TYPE_LABEL,
+  PRIORITY_OPTIONS,
+  DEFAULT_PRIORITY,
 } from '@/config/enums';
 import { tokens, toneColor, progressToneOf } from '@/theme/tokens';
 import { flattenTree, rollupProgress } from '@/utils/wbs';
@@ -62,6 +64,8 @@ interface NodeForm {
   milestoneId: string;
   /** 截止日期 YYYY-MM-DD（用户反馈③ · 硬拦截） */
   dueDate: string;
+  /** 任务优先级（B14-块1）：默认 P2 */
+  priority: Priority;
 }
 
 const EMPTY_FORM: NodeForm = {
@@ -73,6 +77,7 @@ const EMPTY_FORM: NodeForm = {
   status: '待办',
   milestoneId: '',
   dueDate: '',
+  priority: DEFAULT_PRIORITY,
 };
 
 /**
@@ -206,6 +211,8 @@ export function WbsPage(): JSX.Element {
       // 用户反馈②：子任务默认继承上级绑定的里程碑与截止日期
       milestoneId: parent?.milestoneId ?? '',
       dueDate: parent?.dueDate ?? '',
+      // B14-块1：新节点默认 P2（服务端与 EMPTY_FORM 兜底一致）
+      priority: DEFAULT_PRIORITY,
     });
     // 用户反馈④a：继承自上二级碑则锁定，避免误改
     setLockMilestone(Boolean(parent?.milestoneId));
@@ -225,6 +232,7 @@ export function WbsPage(): JSX.Element {
       status: node.status,
       milestoneId: node.milestoneId ?? '',
       dueDate: node.dueDate ?? '',
+      priority: node.priority,
     });
     setLockMilestone(false);
     // R5-P0-2（AC-2.8）：编辑是合法的「移动节点」路径，上级保持可改
@@ -281,6 +289,8 @@ export function WbsPage(): JSX.Element {
       // 任务 / 子任务均可挂里程碑
       milestoneId: form.milestoneId || null,
       dueDate: form.dueDate || undefined,
+      // B14-块1：优先级随表单上报（缺省已在 EMPTY_FORM / openCreate 兜底为 P2）
+      priority: form.priority,
     };
     try {
       if (editingId) {
@@ -613,6 +623,20 @@ export function WbsPage(): JSX.Element {
               : '0（提交工作日志后累计）'}
           </Typography>
         </Stack>
+        <TextField
+          select
+          label="优先级"
+          value={form.priority}
+          onChange={(e) => setForm({ ...form, priority: e.target.value as Priority })}
+          fullWidth
+          helperText="P0 最高（阻塞交付立即处理）→ P3 最低（有空再做）；默认 P2"
+        >
+          {PRIORITY_OPTIONS.map((o) => (
+            <MenuItem key={o.value} value={o.value}>
+              {o.label}
+            </MenuItem>
+          ))}
+        </TextField>
         <TextField
           select
           label="状态"

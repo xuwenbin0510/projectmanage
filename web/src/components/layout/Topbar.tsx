@@ -17,7 +17,7 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
 import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined';
 import { useNavigate } from 'react-router-dom';
-import { UserAvatar } from '@/components/common';
+import { UserAvatar, TodoBell } from '@/components/common';
 import { useAuthStore } from '@/stores/authStore';
 import { useUiStore } from '@/stores/uiStore';
 import { useToast } from '@/hooks/useToast';
@@ -82,6 +82,7 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
       </Stack>
 
       <Stack direction="row" alignItems="center" spacing={1.5}>
+        <TodoBell />
         {USE_MOCK && (
           <Tooltip title="当前为 Mock 演示数据，所有写操作仅存于本地会话" arrow>
             <Chip size="small" label="DEMO" color="warning" variant="outlined" sx={{ height: 22, fontSize: 11 }} />

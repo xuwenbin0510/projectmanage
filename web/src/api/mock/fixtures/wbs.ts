@@ -1,4 +1,4 @@
-import type { WbsNode, BoardConfig, TaskStatus, WbsNodeType } from '@/types/wbs';
+import type { WbsNode, BoardConfig, TaskStatus, WbsNodeType, Priority } from '@/types/wbs';
 import { BOARD_COLUMNS } from '@/types/wbs';
 import type { User } from '@/types/project';
 import { addDays, today, nowIso } from '@/utils/date';
@@ -35,6 +35,22 @@ type NodeSpec = [
 function mapSeedNodeType(t: SeedNodeType, hasChild: boolean): WbsNodeType {
   if (t === 'task') return hasChild ? 'task' : 'subtask';
   return 'task'; // stage / package → task
+}
+
+/**
+ * 种子优先级（B14-块1，**确定性**规则，保证每次 reset 结果一致）：
+ * - 已逾期（`dueOffset < 0`）且未完成 → `P0`（演示环图红色 + 逾期清单置顶）
+ * - 关键路径分支（`1.2` / `1.4` 前缀，与 `isCritical` 同口径）→ `P1`
+ * - 阻塞态 → `P1`（需要尽快解阻）
+ * - 其余 → 缺省 `P2`；已完成且非关键 → `P3`（降噪，让环图四色齐全）
+ */
+function seedPriority(code: string, status: TaskStatus, dueOffset: number): Priority {
+  const critical = code.startsWith('1.2') || code.startsWith('1.4');
+  if (dueOffset < 0 && status !== '完成') return 'P0';
+  if (status === '阻塞') return 'P1';
+  if (critical) return 'P1';
+  if (status === '完成') return 'P3';
+  return 'P2';
 }
 
 /**
@@ -169,6 +185,8 @@ export function createWbs(users: User[]): WbsBundle {
         dueDate: addDays(today(), dueOffset),
         status,
         progress,
+        // B14-块1：种子优先级 —— 关键路径给 P1，逾期未完成给 P0，其余走缺省 P2
+        priority: seedPriority(code, status, dueOffset),
         boardOrder: i,
         isCritical: code.startsWith('1.2') || code.startsWith('1.4'),
         milestoneId: milestoneCode ? `${projectId}-${milestoneCode}` : null,

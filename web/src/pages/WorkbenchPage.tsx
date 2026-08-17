@@ -21,19 +21,26 @@ import {
   HealthDot,
   LoadingState,
   PageHeader,
+  PriorityChip,
   ProgressBar,
   SectionCard,
   StatCard,
   StatusChip,
 } from '@/components/common';
 import { ReviewStepper } from '@/components/review/ReviewStepper';
-import { HealthDistBar, OverdueBarChart, ProgressDonut, OverdueTaskDrawer } from '@/components/dashboard';
+import {
+  HealthDistBar,
+  OverdueBarChart,
+  PriorityDonut,
+  ProgressDonut,
+  OverdueTaskDrawer,
+} from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
 import { ROUTES } from '@/config/routes';
 import { PROJECT_TYPE_SHORT, TASK_STATUSES } from '@/config/enums';
 import type { TaskStatus } from '@/types/wbs';
-import { buildDashboard } from '@/utils/dashboardAgg';
+import { buildDashboard, sortByPriority } from '@/utils/dashboardAgg';
 import { fmtDate, isOverdue, today, diffDays } from '@/utils/date';
 import { alphaOf as alpha, tokens, colorOf } from '@/theme/tokens';
 
@@ -64,6 +71,13 @@ export function WorkbenchPage(): JSX.Element {
 
   /* B11：仪表盘聚合。必须在任何早退之前调用，保证 Hooks 顺序稳定 */
   const dashboard = useMemo(() => buildDashboard(data), [data]);
+
+  /**
+   * B14-块1：「我的任务」按**优先级升序（P0 置顶）**、同级按截止日升序。
+   * 排序口径唯一实现 `dashboardAgg#comparePriority`（`sortByPriority` 不改原数组），
+   * 必须在早退之前调用以保证 Hooks 顺序稳定。
+   */
+  const sortedTasks = useMemo(() => sortByPriority(data?.myTasks ?? []), [data]);
 
   /** B13：打开逾期/临期任务下探抽屉（projectName 从本地 dashboard.overdue 解析） */
   const openOverdue = (projectId: string): void => {
@@ -139,17 +153,23 @@ export function WorkbenchPage(): JSX.Element {
         />
       </Box>
 
-      {/* ══ B11 · 仪表盘图表区（三图等高，栅格 xs:1fr / md:repeat(3,1fr)） ══ */}
+      {/* ══ B11 · 仪表盘图表区（B14 追加优先级环 → 四图，栅格 xs:1 / md:2 / xl:4） ══ */}
       <Box
         sx={{
           display: 'grid',
           gap: 2,
-          gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+          gridTemplateColumns: {
+            xs: '1fr',
+            md: 'repeat(2, 1fr)',
+            xl: 'repeat(4, 1fr)',
+          },
           alignItems: 'stretch',
           mb: 2.5,
         }}
       >
         <ProgressDonut summary={dashboard.progress} loading={loading} />
+        {/* B14-块1：优先级分布环，点段跳 WBS（后续可带筛选参数） */}
+        <PriorityDonut dist={dashboard.priority} loading={loading} />
         <OverdueBarChart rows={dashboard.overdue} loading={loading} onDrill={openOverdue} />
         <HealthDistBar
           dist={dashboard.health}
@@ -266,13 +286,13 @@ export function WorkbenchPage(): JSX.Element {
           )}
         </SectionCard>
 
-        {/* ── 我的任务 ── */}
-        <SectionCard title="我的任务" subtitle={`${myTasks.length} 个未完成`}>
+        {/* ── 我的任务（B14-块1：P0 置顶排序 + 行内优先级色标） ── */}
+        <SectionCard title="我的任务" subtitle={`${myTasks.length} 个未完成 · 按优先级排序`}>
           {myTasks.length === 0 ? (
             <EmptyState title="没有分配给我的未完成任务" dense />
           ) : (
             <Stack spacing={1}>
-              {myTasks.slice(0, 8).map((t) => {
+              {sortedTasks.slice(0, 8).map((t) => {
                 const overdue = isOverdue(t.dueDate);
                 const soon = !overdue && diffDays(today(), t.dueDate) <= 3;
                 return (
@@ -292,9 +312,13 @@ export function WorkbenchPage(): JSX.Element {
                     }}
                   >
                     <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Typography sx={{ fontSize: 13.5 }} noWrap>
-                        {t.wbsCode} {t.name}
-                      </Typography>
+                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                        {/* B14-块1：优先级色标（P0 红 / P1 橙 / P2 蓝 / P3 灰） */}
+                        <PriorityChip priority={t.priority} />
+                        <Typography sx={{ fontSize: 13.5 }} noWrap>
+                          {t.wbsCode} {t.name}
+                        </Typography>
+                      </Stack>
                       <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                         <Typography
                           variant="caption"

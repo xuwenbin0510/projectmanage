@@ -437,6 +437,8 @@ function toApiWbsNode(row, nameOf) {
     dueDate: toStr(row.due_date),
     status: toStr(row.status, '待办'),
     progress: toNum(row.progress, 0),
+    // B14 块1：任务优先级（P0/P1/P2/P3）；历史行经 v7 回填，读出恒有值，兜底 P2
+    priority: toStr(row.priority, 'P2'),
     boardOrder: toNum(row.board_order, 0),
     isCritical: toBool(row.is_critical),
     milestoneId: toNull(row.milestone_id),

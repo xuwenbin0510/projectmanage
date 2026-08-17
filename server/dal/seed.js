@@ -128,6 +128,68 @@ function seedTemplates(db, ts) {
 }
 
 /**
+ * 清理历史脏数据（幂等，可重复执行）。
+ *
+ * 背景（B14 QA 数据质量警示）：演示库出现过一条「幻影管理员」
+ * `open_id='dev_徐文斌'`（与 `projects.pm` 脏值同源，非真实账号，
+ * 全局角色被置为 admin）。它会经由 `resolveConfirmers` 的
+ * `users WHERE global_role='admin'` 升级路径被纳入确认人集合，导致
+ * 「作者即 admin」的周报确认人退化为 `["dev_徐文斌"]`，真实 admin 反而看不到
+ * 待确认项。本函数一次性收敛：
+ *
+ *  1. 删除幻影用户 `dev_徐文斌` 及其全部成员关系（幂等）；
+ *  2. 收敛脏 `projects.pm`：非合法 open_id 的脏值改写为种子主管理员
+ *     `ou_xuwenbin01`（与「确认人权威源 = project_members」纪律一致）；
+ *  3. 为「pm 合法但缺 pm 成员」的项目补一条 pm 成员，修复第 1 步删除后留下的空缺
+ *     （仅补缺、不重复插入，避免覆盖已被 UI 改派的 pm 成员）。
+ *
+ * 注：本清理只处理已知幻影值，不泛化删除未知用户，避免误删真实数据。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} ts ISO 时间戳
+ * @returns {number} 本次清理变动条数（用于日志，0 表示无脏数据）
+ */
+function cleanupDirtyData(db, ts) {
+  const PHANTOM = 'dev_徐文斌';
+  const DEFAULT_ADMIN = 'ou_xuwenbin01';
+
+  let changed = 0;
+
+  /* 1. 删除幻影管理员及其成员关系 */
+  changed += db.prepare('DELETE FROM project_members WHERE user_open_id = ?').run(PHANTOM).changes;
+  changed += db.prepare('DELETE FROM users WHERE open_id = ?').run(PHANTOM).changes;
+
+  /* 2. 收敛脏 projects.pm（非合法 open_id → 主管理员） */
+  changed += db
+    .prepare(
+      "UPDATE projects SET pm = ? WHERE pm IS NOT NULL AND pm <> '' AND pm NOT IN (SELECT open_id FROM users)"
+    )
+    .run(DEFAULT_ADMIN).changes;
+
+  /* 3. 为「pm 合法但缺 pm 成员」的项目补缺（仅 INSERT OR IGNORE，不覆盖既有成员） */
+  const gap = db
+    .prepare(
+      `SELECT p.id AS pid, p.pm AS pm FROM projects p
+       WHERE p.pm IS NOT NULL AND p.pm <> ''
+         AND p.pm IN (SELECT open_id FROM users)
+         AND NOT EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.project_role = 'pm')`
+    )
+    .all();
+  if (gap.length) {
+    const insMember = db.prepare(`
+      INSERT OR IGNORE INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at)
+      VALUES (?, ?, ?, 'pm', ?, ?)
+    `);
+    gap.forEach(function (p) {
+      insMember.run(p.pid + '-MB1', p.pid, p.pm, p.pm, ts);
+    });
+    changed += gap.length;
+  }
+
+  return changed;
+}
+
+/**
  * 执行全部种子写入（在单事务内，失败整体回滚）。
  * @param {import('better-sqlite3').Database} db
  * @returns {{users: number, admins: number, templates: {added: number, upgraded: number}}}
@@ -142,6 +204,11 @@ function run(db) {
       admins: promoteConfiguredAdmins(db, ts),
       templates: seedTemplates(db, ts),
     };
+    /* 种子落定后再做脏数据收敛（依赖 users 已就绪） */
+    const cleaned = cleanupDirtyData(db, ts);
+    if (cleaned) {
+      console.log('[seed] cleanup removed/converged %d dirty rows', cleaned);
+    }
   });
   tx();
 

@@ -35,6 +35,19 @@ export interface WbsRules {
 export type TaskStatus = '待办' | '进行中' | '待评审' | '完成' | '阻塞';
 
 /**
+ * 任务优先级（B14-块1）
+ *
+ * - `P0` 最高（阻塞交付，必须立即处理）→ `P3` 最低（有空再做）
+ * - 缺省值 **`P2`**（迁移 `wbs_nodes.priority TEXT NOT NULL DEFAULT 'P2'`，存量行统一回填）
+ *
+ * ⚠️ SK-B14-1 单一真源：
+ * - 类型定义在本文件；下拉选项 / 色标 / 排序权重在 `config/enums.ts`
+ *   （`PRIORITY_OPTIONS` / `PRIORITY_RANK`），**禁止**在组件里散写 `['P0','P1',...]`。
+ * - 排序一律用 `PRIORITY_RANK[p]` 升序（P0 置顶），禁止字符串直接比较。
+ */
+export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
+
+/**
  * 看板列（B11：补「阻塞」列，共 5 列）
  *
  * ⚠️ SK-B11-2 镜像对：与后端 `server/config/enums.js#BOARD_COLUMNS` **逐字一致**，
@@ -107,6 +120,11 @@ export interface WbsNode {
   dueDate: string;
   status: TaskStatus;
   progress: number;
+  /**
+   * 任务优先级（B14-块1）。服务端 `toApiWbsNode` 恒有值（缺失兜底 `P2`），故为必填。
+   * 写入侧：`createWbsNode` / `updateWbsNode` 的 payload 可选，缺省 `P2`。
+   */
+  priority: Priority;
   boardOrder: number;
   isCritical: boolean;
   /** 关联里程碑；该节点子树内的叶子会计入该里程碑的完成度 */

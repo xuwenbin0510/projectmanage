@@ -45,13 +45,14 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import SearchIcon from '@mui/icons-material/Search';
 
-import { DataTable, ErrorState, StatusChip, ProgressBar } from '@/components/common';
+import { DataTable, ErrorState, StatusChip, PriorityChip, ProgressBar } from '@/components/common';
 import type { Column } from '@/components/common';
 import { api } from '@/api/client';
 import { ROUTES } from '@/config/routes';
+import { PRIORITY_OPTIONS, normalizePriority, priorityRankOf } from '@/config/enums';
 import type { OverdueDrawerTab, OverdueTaskRow } from '@/types/dashboard';
 import type { WbsNode } from '@/types/wbs';
-import { splitOverdueByStatus } from '@/utils/dashboardAgg';
+import { comparePriority, splitOverdueByStatus } from '@/utils/dashboardAgg';
 import { fmtDate } from '@/utils/date';
 
 /** 每页任务数（P2-2 分页阈值） */
@@ -103,6 +104,8 @@ export function OverdueTaskDrawer({
   const [page, setPage] = useState(1);
   const [onlyMine, setOnlyMine] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
+  /** B14-块1：优先级二次筛选（'' = 全部） */
+  const [priorityFilter, setPriorityFilter] = useState('');
   const [keyword, setKeyword] = useState('');
 
   /**
@@ -115,6 +118,7 @@ export function OverdueTaskDrawer({
     setPage(1);
     setOnlyMine(false);
     setStatusFilter('');
+    setPriorityFilter('');
     setKeyword('');
     try {
       const [wbs, milestones] = await Promise.all([
@@ -148,33 +152,43 @@ export function OverdueTaskDrawer({
     return { overdue: overdue.length, dueSoon: dueSoon.length };
   }, [nodes]);
 
-  /* 当前 Tab 对应的视图模型行（WbsNode → OverdueTaskRow，含里程碑名解析） */
+  /**
+   * 当前 Tab 对应的视图模型行（WbsNode → OverdueTaskRow，含里程碑名解析）。
+   *
+   * B14-块1：**按优先级升序（P0 置顶）**，同级按截止日升序 —— 排序口径唯一实现
+   * `dashboardAgg#comparePriority`，禁止在此处手写字符串比较。
+   */
   const baseRows = useMemo<OverdueTaskRow[]>(() => {
     const { overdue, dueSoon } = splitOverdueByStatus(nodes);
     const source = tab === 'overdue' ? overdue : dueSoon;
-    return source.map((n) => ({
-      id: n.id,
-      wbsCode: n.wbsCode,
-      name: n.name,
-      ownerId: n.owner || '',
-      ownerName: n.ownerName || UNASSIGNED,
-      dueDate: n.dueDate,
-      status: n.status,
-      progress: n.progress,
-      milestoneName: n.milestoneId ? msMap.get(n.milestoneId) ?? NO_MILESTONE : NO_MILESTONE,
-    }));
+    return source
+      .map<OverdueTaskRow>((n) => ({
+        id: n.id,
+        wbsCode: n.wbsCode,
+        name: n.name,
+        ownerId: n.owner || '',
+        ownerName: n.ownerName || UNASSIGNED,
+        dueDate: n.dueDate,
+        status: n.status,
+        progress: n.progress,
+        milestoneName: n.milestoneId ? msMap.get(n.milestoneId) ?? NO_MILESTONE : NO_MILESTONE,
+        priority: normalizePriority(n.priority),
+        priorityRank: priorityRankOf(n.priority),
+      }))
+      .sort(comparePriority);
   }, [nodes, msMap, tab]);
 
-  /* 二次筛选（P2-3 / P2-4）：仅看我负责 → 状态筛选 → 关键字搜索 */
+  /* 二次筛选（P2-3 / P2-4 / B14 优先级）：仅看我负责 → 状态 → 优先级 → 关键字 */
   const filteredRows = useMemo<OverdueTaskRow[]>(() => {
     const kw = keyword.trim().toLowerCase();
     return baseRows.filter((r) => {
       if (onlyMine && currentUserId && r.ownerId !== currentUserId) return false;
       if (statusFilter && r.status !== statusFilter) return false;
+      if (priorityFilter && r.priority !== priorityFilter) return false;
       if (kw && !`${r.name} ${r.ownerName}`.toLowerCase().includes(kw)) return false;
       return true;
     });
-  }, [baseRows, onlyMine, currentUserId, statusFilter, keyword]);
+  }, [baseRows, onlyMine, currentUserId, statusFilter, priorityFilter, keyword]);
 
   /* P2-2 分页：仅对当前筛选结果切片 */
   const pagedRows = useMemo<OverdueTaskRow[]>(() => {
@@ -188,13 +202,20 @@ export function OverdueTaskDrawer({
     [baseRows],
   );
 
-  const isFiltering = onlyMine || !!statusFilter || !!keyword.trim();
+  const isFiltering = onlyMine || !!statusFilter || !!priorityFilter || !!keyword.trim();
 
   /* 列定义（六字段）；日期着色随 Tab 切换（逾期红 / 临期黄） */
   const columns = useMemo<Array<Column<OverdueTaskRow>>>(() => {
     const dateColor = tab === 'overdue' ? 'error.main' : 'warning.main';
     const progressTone = tab === 'overdue' ? 'danger' : 'brand';
     return [
+      {
+        /* B14-块1：优先级色标置于首列，配合 P0 置顶排序，一眼看出最急的任务 */
+        key: 'priority',
+        label: '优先级',
+        width: 62,
+        render: (r) => <PriorityChip priority={r.priority} />,
+      },
       {
         key: 'name',
         label: '任务',
@@ -331,6 +352,27 @@ export function OverdueTaskDrawer({
               {statusOptions.map((s) => (
                 <MenuItem key={s} value={s}>
                   {s}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          {/* B14-块1：优先级筛选（选项来自 PRIORITY_OPTIONS 单一真源） */}
+          <FormControl size="small" sx={{ minWidth: 108 }}>
+            <InputLabel id="ov-priority-label">优先级</InputLabel>
+            <Select
+              labelId="ov-priority-label"
+              label="优先级"
+              value={priorityFilter}
+              displayEmpty
+              onChange={(e) => {
+                setPriorityFilter(e.target.value);
+                setPage(1);
+              }}
+            >
+              <MenuItem value="">全部</MenuItem>
+              {PRIORITY_OPTIONS.map((o) => (
+                <MenuItem key={o.value} value={o.value}>
+                  {o.label}
                 </MenuItem>
               ))}
             </Select>

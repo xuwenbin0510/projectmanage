@@ -271,6 +271,19 @@ export class HttpApiClient implements ApiClient {
     return patch<Report>(`/projects/${payload.projectId}/reports/${id}`, payload);
   }
 
+  /* 周报轻量闭环 B14-块2 */
+  confirmReport(projectId: string, id: string): Promise<Report> {
+    return post<Report>(`/projects/${projectId}/reports/${id}/confirm`, {});
+  }
+
+  rejectReport(projectId: string, id: string, reason: string): Promise<Report> {
+    return post<Report>(`/projects/${projectId}/reports/${id}/reject`, { reason });
+  }
+
+  listPendingConfirmation(): Promise<Report[]> {
+    return get<Report[]>('/reports/pending-confirmation');
+  }
+
   /* 工时统计报表 B9 */
   getEffortReport(projectId: string): Promise<EffortReport> {
     return get<EffortReport>(`/projects/${projectId}/effort-report`);

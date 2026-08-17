@@ -173,6 +173,16 @@ function rowToApiReport(row, taskRows, riskRows) {
     submittedAt: row.submitted_at === null || row.submitted_at === undefined
       ? null
       : String(row.submitted_at),
+    // B14 块2：轻量闭环三列（NULL → null；语义见 migrationV7）
+    confirmedBy: row.confirmed_by === null || row.confirmed_by === undefined
+      ? null
+      : String(row.confirmed_by),
+    confirmedAt: row.confirmed_at === null || row.confirmed_at === undefined
+      ? null
+      : String(row.confirmed_at),
+    rejectReason: row.reject_reason === null || row.reject_reason === undefined
+      ? null
+      : String(row.reject_reason),
     createdAt: toStr(row.created_at),
     updatedAt: toStr(row.updated_at),
   };
@@ -915,6 +925,225 @@ function updateReport(db, id, payload, me) {
   return assembleById(db, reportId);
 }
 
+/* ═══════════════════════════════════════════════════
+ * B14 块2 · 周报轻量闭环（草稿 → 已提交 → 已确认）
+ *
+ * 确认人解析权威实现（架构 §1.3）：
+ *   - 权威角色源 = `project_members(project_role='pm')`，**绝不读脏列 `projects.pm`**；
+ *   - 作者 ∈ pm 集合 或 项目无 pm → 升级到 `project_members(project_role='tl')` ∪
+ *     `users(global_role='admin')`（作者本人始终被排除，天然禁止自确认）；
+ *   - 多 pm 取并集（任一可确认）。
+ * 状态机仅由 `confirmReport` / `rejectReport` 驱动，前端不得直改 status。
+ * ═══════════════════════════════════════════════════ */
+
+/**
+ * 解析某条周报的「可确认人」集合（架构 §1.3 权威算法）。
+ *
+ * ⚠ 数据源纪律：只读结构化的 `project_members` 与 `users`，
+ *   **不读** `projects.pm`（历史脏值，形如 `dev_徐文斌`，不可信）。
+ * ⚠ 作者本人一律从结果里剔除（作者不能确认/打回自己的周报）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} projectId 项目 id
+ * @param {string} authorOpenId 周报作者 openId
+ * @returns {Set<string>} 可确认人 openId 集合（已排除作者本人）
+ */
+function resolveConfirmers(db, projectId, authorOpenId) {
+  const pid = toStr(projectId).trim();
+  const author = toStr(authorOpenId).trim();
+  const result = new Set();
+  if (!pid) return result;
+
+  /* 1. 权威 pm 集合（结构化角色源） */
+  const pmRows = db
+    .prepare(
+      "SELECT user_open_id FROM project_members WHERE project_id = ? AND project_role = 'pm'"
+    )
+    .all(pid);
+  const pmSet = new Set(pmRows.map(function (r) { return toStr(r.user_open_id); }).filter(Boolean));
+
+  /* 2. 作者即 pm（或项目无 pm）→ 升级到 tl ∪ admin 兜底；否则确认人 = pm 集合 */
+  const authorIsPm = author && pmSet.has(author);
+  if (authorIsPm || pmSet.size === 0) {
+    const tlRows = db
+      .prepare(
+        "SELECT user_open_id FROM project_members WHERE project_id = ? AND project_role = 'tl'"
+      )
+      .all(pid);
+    tlRows.forEach(function (r) {
+      const v = toStr(r.user_open_id);
+      if (v) result.add(v);
+    });
+    const adminRows = db
+      .prepare("SELECT open_id FROM users WHERE global_role = 'admin'")
+      .all();
+    adminRows.forEach(function (r) {
+      const v = toStr(r.open_id);
+      if (v) result.add(v);
+    });
+  } else {
+    pmSet.forEach(function (v) { result.add(v); });
+  }
+
+  /* 3. 作者本人恒排除（禁止自确认） */
+  if (author) result.delete(author);
+  return result;
+}
+
+/**
+ * 确认周报：`已提交` → `已确认`，写 `confirmed_by` / `confirmed_at`。
+ *
+ * 前置校验（顺序恒定，fail-fast）：
+ *  1. 周报存在（否则 404）；
+ *  2. 当前状态必须是 `已提交`（否则 409 状态冲突，用 `E_VALIDATION` 带说明）；
+ *  3. `me.open_id ∈ resolveConfirmers(...)`（否则 403，作者天然被排除）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} id 周报 id
+ * @param {object} me 当前用户 users 行（`req.user`）
+ * @returns {object} Report（确认后）
+ * @throws {AppError} E_NOT_FOUND / E_VALIDATION / E_FORBIDDEN
+ */
+function confirmReport(db, id, me) {
+  const reportId = toStr(id).trim();
+  const actor = me || {};
+  const meOpenId = toStr(actor.open_id);
+
+  const tx = db.transaction(function () {
+    const row = db.prepare('SELECT * FROM work_reports WHERE id = ?').get(reportId);
+    if (!row) {
+      throw new AppError(ErrorCode.E_NOT_FOUND, '周报不存在或已被删除', { id: reportId });
+    }
+    if (toStr(row.status) !== '已提交') {
+      throw new AppError(
+        ErrorCode.E_VALIDATION,
+        '仅「已提交」的周报可确认，当前状态为「' + toStr(row.status, '草稿') + '」',
+        { id: reportId, status: toStr(row.status) }
+      );
+    }
+
+    const confirmers = resolveConfirmers(db, toStr(row.project_id), toStr(row.author_open_id));
+    if (!meOpenId || !confirmers.has(meOpenId)) {
+      throw new AppError(ErrorCode.E_FORBIDDEN, '您不是该周报的确认人', { id: reportId });
+    }
+
+    const ts = dates.nowIso();
+    db.prepare(
+      'UPDATE work_reports SET status = ?, confirmed_by = ?, confirmed_at = ?, reject_reason = NULL, updated_at = ? WHERE id = ?'
+    ).run('已确认', meOpenId, ts, ts, reportId);
+
+    writeAudit(
+      db, actor, 'report', reportId, 'update', toStr(row.project_id),
+      '确认 ' + toStr(row.week) + ' 周报',
+      [{ field: 'status', label: '周报状态', before: '已提交', after: '已确认' }]
+    );
+  });
+  tx();
+
+  return assembleById(db, reportId);
+}
+
+/**
+ * 打回周报：`已提交` → `草稿`，写 `reject_reason`（必填），清空 confirmed_* 。
+ *
+ * 前置校验（顺序恒定，fail-fast）：
+ *  1. `reason` 非空（否则 400 `E_VALIDATION`，架构 §5 结论 #2 必填）；
+ *  2. 周报存在（否则 404）；
+ *  3. 当前状态必须是 `已提交`（否则 409）；
+ *  4. `me.open_id ∈ resolveConfirmers(...)`（否则 403）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} id 周报 id
+ * @param {string} reason 打回原因（必填，去空白后非空）
+ * @param {object} me 当前用户 users 行
+ * @returns {object} Report（打回后，回到草稿）
+ * @throws {AppError} E_VALIDATION / E_NOT_FOUND / E_FORBIDDEN
+ */
+function rejectReport(db, id, reason, me) {
+  const reportId = toStr(id).trim();
+  const rejectReason = toStr(reason).trim();
+  const actor = me || {};
+  const meOpenId = toStr(actor.open_id);
+
+  /* 先做无副作用的入参校验，避免打开事务 */
+  if (!rejectReason) {
+    throw new AppError(ErrorCode.E_VALIDATION, '打回必须填写原因', {
+      fields: [{ field: 'reason', message: '打回原因必填' }],
+    });
+  }
+
+  const tx = db.transaction(function () {
+    const row = db.prepare('SELECT * FROM work_reports WHERE id = ?').get(reportId);
+    if (!row) {
+      throw new AppError(ErrorCode.E_NOT_FOUND, '周报不存在或已被删除', { id: reportId });
+    }
+    if (toStr(row.status) !== '已提交') {
+      throw new AppError(
+        ErrorCode.E_VALIDATION,
+        '仅「已提交」的周报可打回，当前状态为「' + toStr(row.status, '草稿') + '」',
+        { id: reportId, status: toStr(row.status) }
+      );
+    }
+
+    const confirmers = resolveConfirmers(db, toStr(row.project_id), toStr(row.author_open_id));
+    if (!meOpenId || !confirmers.has(meOpenId)) {
+      throw new AppError(ErrorCode.E_FORBIDDEN, '您不是该周报的确认人', { id: reportId });
+    }
+
+    const ts = dates.nowIso();
+    /* 打回回到「草稿」，作者可修改后重新提交；清 confirmed_*，保留 reject_reason 供作者查看 */
+    db.prepare(
+      'UPDATE work_reports SET status = ?, reject_reason = ?, confirmed_by = NULL, confirmed_at = NULL, updated_at = ? WHERE id = ?'
+    ).run('草稿', rejectReason, ts, reportId);
+
+    writeAudit(
+      db, actor, 'report', reportId, 'update', toStr(row.project_id),
+      '打回 ' + toStr(row.week) + ' 周报：' + rejectReason,
+      [{ field: 'status', label: '周报状态', before: '已提交', after: '草稿' }]
+    );
+  });
+  tx();
+
+  return assembleById(db, reportId);
+}
+
+/**
+ * 列出「待当前用户确认」的周报（B14 块2 唯一新增服务端查询，架构 §5 结论 #8）。
+ *
+ * 服务端逐条 `resolveConfirmers` 过滤：仅返回 `status='已提交'` 且
+ * `userOpenId ∈ resolveConfirmers(projectId, author)` 的周报（含完整子行）。
+ * 由服务端过滤保证「确认人解析」单一真源，前端不重复实现。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} userOpenId 当前用户 openId
+ * @returns {object[]} Report[]（按 submitted_at 倒序）
+ */
+function listPendingConfirmation(db, userOpenId) {
+  const meOpenId = toStr(userOpenId).trim();
+  if (!meOpenId) return [];
+
+  const rows = db
+    .prepare(
+      "SELECT * FROM work_reports WHERE status = '已提交' ORDER BY submitted_at DESC, created_at DESC"
+    )
+    .all();
+  if (!rows.length) return [];
+
+  /* 逐条按确认人集合过滤（作者本人已在 resolveConfirmers 内排除） */
+  const pending = rows.filter(function (r) {
+    const confirmers = resolveConfirmers(db, toStr(r.project_id), toStr(r.author_open_id));
+    return confirmers.has(meOpenId);
+  });
+  if (!pending.length) return [];
+
+  const idList = pending.map(function (r) { return String(r.id); });
+  const children = loadChildren(db, idList);
+  return pending.map(function (r) {
+    const key = String(r.id);
+    return rowToApiReport(r, children.tasks[key], children.risks[key]);
+  });
+}
+
 module.exports = {
   // 读
   listReports,
@@ -924,6 +1153,11 @@ module.exports = {
   // 写
   createReport,
   updateReport,
+  // B14 块2 · 周报轻量闭环
+  resolveConfirmers,
+  confirmReport,
+  rejectReport,
+  listPendingConfirmation,
   // 纯函数（供路由 / 测试复用）
   validateReportPayload,
 };

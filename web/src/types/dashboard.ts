@@ -8,7 +8,7 @@
  */
 import type { Paged } from '@/types/api';
 import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
-import type { TaskStatus } from '@/types/wbs';
+import type { Priority, TaskStatus } from '@/types/wbs';
 
 /** 进度环：我的任务三段分布 + 总完成度 */
 export interface TaskProgressSummary {
@@ -44,12 +44,29 @@ export interface HealthDistribution {
   total: number;
 }
 
+/**
+ * 优先级分布（B14-块1 · 环图数据源）
+ *
+ * 由 `aggregatePriorityDistribution(nodes)` 从任务列表派生，**不对应任何后端接口**。
+ * `total` 恒等于四档之和，`total === 0` 时组件渲染空态（不画环）。
+ */
+export interface PriorityDistribution {
+  P0: number;
+  P1: number;
+  P2: number;
+  P3: number;
+  /** 四档之和，便于组件判空与算占比 */
+  total: number;
+}
+
 /** 仪表盘聚合总结果 */
 export interface DashboardSummary {
   progress: TaskProgressSummary;
   /** 按「逾期数 ↓ → 临期数 ↓ → 项目名」排序，且**只含有逾期或临期的项目** */
   overdue: OverdueByProject[];
   health: HealthDistribution;
+  /** B14-块1：我的任务按 P0–P3 计数（环图） */
+  priority: PriorityDistribution;
 }
 
 /* ==========================================================================
@@ -192,4 +209,8 @@ export interface OverdueTaskRow {
   progress: number;
   /** 所属里程碑名（milestoneId 解析；无 → 「未关联」） */
   milestoneName: string;
+  /** 任务优先级（B14-块1）；脏值兜底 `P2` */
+  priority: Priority;
+  /** 排序权重 `PRIORITY_RANK[priority]`，升序即 P0 置顶（B14-块1） */
+  priorityRank: number;
 }

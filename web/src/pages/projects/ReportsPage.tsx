@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
+  CircularProgress,
   Stack,
   TableSortLabel,
+  TextField,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -28,7 +31,8 @@ import { useProjectStore } from '@/stores/projectStore';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
-import { REPORT_SECTION_TITLE } from '@/config/enums';
+import { api } from '@/api/client';
+import { REPORT_SECTION_TITLE, REJECT_REASON_MAX } from '@/config/enums';
 import { fmtDateTime } from '@/utils/date';
 import { memberNameOf } from '@/utils/member';
 import { tokens } from '@/theme/tokens';
@@ -60,6 +64,83 @@ export function ReportsPage(): JSX.Element {
   const [prefillLockNodeId, setPrefillLockNodeId] = useState<string | null>(null);
   /** R3-5 接收端：避免同一路由 state（prefillNodeId）重复触发新建弹窗 */
   const prefilledRef = useRef<boolean>(false);
+
+  /* ── B14-块2：周报轻量闭环（确认 / 打回）────────────────────────── */
+  /**
+   * 待「我」确认的周报 id 集合：来自 `listPendingConfirmation()`（服务端按
+   * `resolveConfirmers` 权威判定过滤，**绝不**前端自行推断确认人）。
+   * 该接口跨项目聚合，故本页用 `id` 集合与当前项目列表取交集即可。
+   */
+  const [confirmableIds, setConfirmableIds] = useState<Set<string>>(new Set());
+  const [confirmableLoading, setConfirmableLoading] = useState<boolean>(false);
+  /** 打回原因弹窗目标（null = 关闭） */
+  const [rejectTarget, setRejectTarget] = useState<Report | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('');
+  /** 正在执行确认 / 打回动作的周报 id（禁重复点击） */
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const reloadConfirmable = useCallback((): void => {
+    setConfirmableLoading(true);
+    void api
+      .listPendingConfirmation()
+      .then((list) => setConfirmableIds(new Set(list.map((p) => p.id))))
+      .catch(() => setConfirmableIds(new Set()))
+      .finally(() => setConfirmableLoading(false));
+  }, []);
+
+  useEffect(() => {
+    void reloadConfirmable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadConfirmable]);
+
+  /** 当前周报是否可被「我」确认（已提交 + 在服务端确认人集合内 + 项目未归档） */
+  const isConfirmable = (r: Report): boolean =>
+    !archived && r.status === '已提交' && confirmableIds.has(r.id);
+
+  const handleConfirm = async (r: Report): Promise<void> => {
+    setBusyId(r.id);
+    try {
+      await api.confirmReport(id, r.id);
+      toast.success('已确认该周报');
+      await Promise.all([fetchReports(id), Promise.resolve(reloadConfirmable())]);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openReject = (r: Report): void => {
+    setRejectReason('');
+    setRejectTarget(r);
+  };
+  const closeReject = (): void => {
+    setRejectReason('');
+    setRejectTarget(null);
+  };
+  const handleReject = async (): Promise<void> => {
+    if (!rejectTarget) return;
+    const reason = rejectReason.trim();
+    if (!reason) {
+      toast.warning('请填写打回原因');
+      return;
+    }
+    if (reason.length > REJECT_REASON_MAX) {
+      toast.warning(`打回原因不超过 ${REJECT_REASON_MAX} 字`);
+      return;
+    }
+    setBusyId(rejectTarget.id);
+    try {
+      await api.rejectReport(id, rejectTarget.id, reason);
+      toast.success('已打回该周报');
+      closeReject();
+      await Promise.all([fetchReports(id), Promise.resolve(reloadConfirmable())]);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   useEffect(() => {
     void fetchReports(id).catch((e: unknown) => toast.error(e));
@@ -174,6 +255,26 @@ export function ReportsPage(): JSX.Element {
           <Button size="small" color="primary" onClick={() => openEditReport(r)}>
             编辑
           </Button>
+          {isConfirmable(r) && (
+            <>
+              <Button
+                size="small"
+                color="success"
+                disabled={busyId === r.id}
+                onClick={() => void handleConfirm(r)}
+              >
+                {busyId === r.id ? <CircularProgress size={14} /> : '确认'}
+              </Button>
+              <Button
+                size="small"
+                color="error"
+                disabled={busyId === r.id}
+                onClick={() => openReject(r)}
+              >
+                打回
+              </Button>
+            </>
+          )}
         </Stack>
       ),
     },
@@ -265,6 +366,23 @@ export function ReportsPage(): JSX.Element {
                 填报：{fmtDateTime(detail.createdAt)}
               </Typography>
             </Stack>
+            {/* B14-块2：闭环状态展示（已确认 / 已打回原因） */}
+            {detail.status === '已确认' && (
+              <Alert severity="success" variant="outlined" sx={{ fontSize: 13 }}>
+                已由 {detail.confirmedBy ? memberNameOf(members, detail.confirmedBy) : '—'} 确认
+                {detail.confirmedAt ? `（${fmtDateTime(detail.confirmedAt)}）` : ''}
+              </Alert>
+            )}
+            {detail.status === '草稿' && detail.rejectReason && (
+              <Alert severity="warning" variant="outlined" sx={{ fontSize: 13 }}>
+                <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                  打回原因：
+                </Typography>
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mt: 0.25 }}>
+                  {detail.rejectReason}
+                </Typography>
+              </Alert>
+            )}
             <Box>
               <SectionTitle title={REPORT_SECTION_TITLE.done} />
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
@@ -337,6 +455,43 @@ export function ReportsPage(): JSX.Element {
                 {detail.resourceNote || '—'}
               </Typography>
             </Box>
+          </Stack>
+        )}
+      </FormDialog>
+
+      {/* B14-块2：打回原因必填弹窗 */}
+      <FormDialog
+        open={Boolean(rejectTarget)}
+        title="打回周报"
+        submitText="确认打回"
+        disabled={!rejectReason.trim() || rejectReason.trim().length > REJECT_REASON_MAX || busyId === rejectTarget?.id}
+        maxWidth="sm"
+        onClose={closeReject}
+        onSubmit={() => void handleReject()}
+      >
+        {rejectTarget && (
+          <Stack spacing={1.5}>
+            <Alert severity="info" variant="outlined" sx={{ fontSize: 13 }}>
+              打回后该周报状态回退为「草稿」，作者需重新提交。请填写明确的打回原因（必填）。
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              周次：{rejectTarget.week}　填报人：{rejectTarget.authorName}
+            </Typography>
+            <TextField
+              label={`打回原因（必填，≤${REJECT_REASON_MAX}字）`}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              fullWidth
+              multiline
+              minRows={3}
+              autoFocus
+              error={rejectReason.trim().length > REJECT_REASON_MAX}
+              helperText={
+                rejectReason.trim().length > REJECT_REASON_MAX
+                  ? `已超过 ${REJECT_REASON_MAX} 字上限`
+                  : `${rejectReason.trim().length}/${REJECT_REASON_MAX}`
+              }
+            />
           </Stack>
         )}
       </FormDialog>

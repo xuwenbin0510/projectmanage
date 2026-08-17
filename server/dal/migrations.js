@@ -285,14 +285,18 @@ function migrationV1(db, now) {
   `);
 
   // 从遗留 projects.pm 回填一条 pm 成员，保证老数据在新契约下也能显示负责人
+  // ⚠️ 数据纪律（架构 §1.3 / SK-B14-2）：只回填「合法 open_id」的 pm；
+  //    脏值（如历史 "dev_徐文斌"，非真实账号）一律跳过，禁止生成指向幽灵账号的成员行。
   const pmRows = db
     .prepare("SELECT id, pm, created_by, created_at FROM projects WHERE pm IS NOT NULL AND pm <> ''")
     .all();
+  const validUserStmt = db.prepare('SELECT 1 FROM users WHERE open_id = ?');
   const insMember = db.prepare(`
     INSERT OR IGNORE INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at)
     VALUES (?, ?, ?, 'pm', ?, ?)
   `);
   pmRows.forEach(function (p) {
+    if (!p.pm || !validUserStmt.get(p.pm)) return; // 脏 pm 值不回填（避免幽灵 pm 成员）
     insMember.run(p.id + '-MB1', p.id, p.pm, p.created_by || null, p.created_at || now);
   });
 
@@ -866,6 +870,61 @@ function migrationV6(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v6 建评审表 reviews / review_steps / review_approvals + changes（B10）');
 }
 
+/* ── 迁移 v7：任务优先级 + 周报轻量闭环（B14） ─────── */
+
+/**
+ * v7 = B14 两块存储支撑，纯 `ADD COLUMN`，不重建表、不动既有数据语义。
+ *
+ * 拆解：
+ *  1. `wbs_nodes.priority`     TEXT NOT NULL DEFAULT 'P2'（P0/P1/P2/P3，块1）
+ *     + 历史行显式回填 P2（DEFAULT 只保证新行，回填保证「读出来一定有值」）
+ *     + `idx_wbs_nodes_priority` 便于「按优先级排序/分布统计」走索引
+ *  2. `work_reports.confirmed_by` / `confirmed_at` / `reject_reason`（块2）
+ *     三列均可为 NULL —— NULL 表示「尚未确认 / 尚未驳回」，
+ *     与「已确认」状态由 `status` 单一驱动，列只承载谁/何时/为何。
+ *
+ * ⚠ 安全性：全部 `hasColumn` 前置守卫，重复启动幂等；
+ *   NOT NULL 列必须带 DEFAULT，否则既有行 ALTER 会失败。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不写业务时间，仅保持签名一致）
+ * @returns {void}
+ */
+function migrationV7(db, now) { // eslint-disable-line no-unused-vars
+  /* ---------- 1. wbs_nodes.priority（块1 任务优先级） ---------- */
+  if (tableExists(db, 'wbs_nodes')) {
+    if (!hasColumn(db, 'wbs_nodes', 'priority')) {
+      db.exec("ALTER TABLE wbs_nodes ADD COLUMN priority TEXT NOT NULL DEFAULT 'P2'");
+    }
+    // 历史行回填：DEFAULT 只覆盖新插入行，旧行若为 NULL / 空串一并归一到 P2
+    db.exec("UPDATE wbs_nodes SET priority = 'P2' WHERE priority IS NULL OR TRIM(priority) = ''");
+    // 非法值兜底（防御历史脏数据，只允许四档）
+    db.exec(
+      "UPDATE wbs_nodes SET priority = 'P2' WHERE priority NOT IN ('P0', 'P1', 'P2', 'P3')"
+    );
+    db.exec('CREATE INDEX IF NOT EXISTS idx_wbs_nodes_priority ON wbs_nodes(priority)');
+  }
+
+  /* ---------- 2. work_reports 确认三列（块2 周报轻量闭环） ---------- */
+  if (tableExists(db, 'work_reports')) {
+    if (!hasColumn(db, 'work_reports', 'confirmed_by')) {
+      db.exec('ALTER TABLE work_reports ADD COLUMN confirmed_by TEXT');
+    }
+    if (!hasColumn(db, 'work_reports', 'confirmed_at')) {
+      db.exec('ALTER TABLE work_reports ADD COLUMN confirmed_at TEXT');
+    }
+    if (!hasColumn(db, 'work_reports', 'reject_reason')) {
+      db.exec('ALTER TABLE work_reports ADD COLUMN reject_reason TEXT');
+    }
+    // 「待我确认」查询按 (project_id, status) 过滤，补一条组合索引
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_work_reports_status ON work_reports(project_id, status)'
+    );
+  }
+
+  console.log('[migrations] v7 任务优先级 priority + 周报确认三列 confirmed_by/at + reject_reason（B14）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -879,6 +938,7 @@ const MIGRATIONS = [
   { version: 4, name: 'connect-v4-wbs-effort-hours', up: migrationV4 },
   { version: 5, name: 'connect-v5-report-week-actual-days', up: migrationV5 },
   { version: 6, name: 'connect-v6-reviews-transition', up: migrationV6 },
+  { version: 7, name: 'connect-v7-priority-report-confirm', up: migrationV7 },
 ];
 
 /**

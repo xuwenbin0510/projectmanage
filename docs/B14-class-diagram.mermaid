@@ -1,0 +1,96 @@
+classDiagram
+    %% ===== 枚举 =====
+    class Priority {
+        <<enumeration>>
+        P0
+        P1
+        P2
+        P3
+    }
+    class ReportStatus {
+        <<enumeration>>
+        草稿
+        已提交
+        已确认
+    }
+    class TodoType {
+        <<enumeration>>
+        APPROVAL 待我审批
+        REPORT_CONFIRM 待确认周报
+        REPORT_FILL 待填周报
+        OVERDUE 逾期任务
+        ASSIGNED 指派给我
+        BLOCKED 阻塞任务
+    }
+
+    %% ===== 领域模型 =====
+    class WbsNode {
+        +string id
+        +string projectId
+        +string name
+        +TaskStatus status
+        +string owner
+        +string dueDate
+        +Priority priority
+    }
+    class Report {
+        +string id
+        +string projectId
+        +string author
+        +string authorName
+        +ReportStatus status
+        +string confirmedBy
+        +string confirmedAt
+        +string rejectReason
+    }
+    class ProjectMember {
+        +string projectId
+        +string userOpenId
+        +string projectRole
+    }
+    class User {
+        +string openId
+        +string name
+        +string globalRole
+    }
+
+    %% ===== 服务 / 组件 =====
+    class ReportService {
+        +resolveConfirmers(projectId, authorOpenId) Set~string~
+        +confirmReport(reportId, me)
+        +rejectReport(reportId, reason, me)
+        +listPendingConfirmation(currentOpenId) Report[]
+    }
+    class WbsService {
+        +createNode(payload)
+        +updateNode(id, payload)
+    }
+    class UseTodos {
+        +fetchTodos() TodoItem[]
+    }
+    class TodoBell {
+        +render()
+        +open()
+    }
+    class TodoItem {
+        +TodoType type
+        +string title
+        +string projectId
+        +string projectName
+        +number priorityRank
+        +string dueDate
+        +string targetRoute
+        +object payload
+    }
+
+    %% ===== 关系 =====
+    WbsNode "1" --> "1" Priority : priority
+    Report "1" --> "1" ReportStatus : status
+    ReportService ..> Report : 读/写
+    ReportService ..> ProjectMember : resolveConfirmers 查询
+    ReportService ..> User : 升级 admin 兜底
+    WbsService ..> WbsNode : 映射 priority
+    TodoBell ..> UseTodos : 使用
+    UseTodos ..> ReportService : listPendingConfirmation
+    TodoItem "1" --> "1" TodoType : type
+    UseTodos ..> TodoItem : 聚合产出

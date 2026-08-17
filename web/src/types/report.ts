@@ -1,6 +1,17 @@
-/** 结构化周报（P0-08） */
+/** 结构化周报（P0-08 / B14-块2 轻量闭环） */
 
-export type ReportStatus = '草稿' | '已提交';
+/**
+ * 周报状态机（B14-块2）：`草稿 → 已提交 → 已确认`
+ *
+ * - `草稿`   作者可继续编辑；打回后也回到该态（并带 `rejectReason`）
+ * - `已提交` 等待上级确认；此态下确认人可「确认」或「打回」
+ * - `已确认` 终态；写入 `confirmedBy` / `confirmedAt`
+ *
+ * ⚠️ SK-B14-2：状态流转**只能**由后端 `report.service#confirmReport / rejectReport` 驱动，
+ * 前端禁止直接 PATCH `status`；「我能否确认」以 `GET /api/reports/pending-confirmation`
+ * 的返回为准（服务端已按 `resolveConfirmers` 过滤），前端不重复实现确认人解析。
+ */
+export type ReportStatus = '草稿' | '已提交' | '已确认';
 
 export interface ReportTaskRow {
   reportId: string;
@@ -50,6 +61,12 @@ export interface Report {
   /** 提交时冻结的进度快照 */
   snapshot: Record<string, number> | null;
   submittedAt: string | null;
+  /** 确认人 openId（B14-块2）；未确认为 `null`。打回时会被清空 */
+  confirmedBy: string | null;
+  /** 确认时间 ISO（B14-块2）；未确认为 `null`。打回时会被清空 */
+  confirmedAt: string | null;
+  /** 打回原因（B14-块2，打回时必填）；未被打回为 `null`。再次确认时会被清空 */
+  rejectReason: string | null;
   createdAt: string;
   updatedAt: string;
 }
