@@ -8,6 +8,7 @@
  */
 import type { Paged } from '@/types/api';
 import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
+import type { TaskStatus } from '@/types/wbs';
 
 /** 进度环：我的任务三段分布 + 总完成度 */
 export interface TaskProgressSummary {
@@ -161,4 +162,32 @@ export interface DashboardOverview {
   reportMissing: ReportMissingRow[];
   /** 项目明细表（服务端分页），行点击可钻取至 B11 单项目仪表盘 */
   projects: Paged<ProjectListItem>;
+}
+
+/* ==========================================================================
+ * B13 · 逾期 / 临期任务下探抽屉
+ * 点击「逾期/临期报表」里某项目 → 右侧抽屉展示该项目的逾期 / 临期任务明细。
+ * ========================================================================== */
+
+/** 抽屉 Tab 字面量：默认 'overdue'（先救最急的） */
+export type OverdueDrawerTab = 'overdue' | 'dueSoon';
+
+/** 抽屉表格行视图模型：由 `WbsNode` + 里程碑名解析映射得到（B13） */
+export interface OverdueTaskRow {
+  /** 节点 id（WbsNode.id），作为表格行 key */
+  id: string;
+  /** WBS 编码，如 "1.2.3" */
+  wbsCode: string;
+  /** 任务名 */
+  name: string;
+  /** 负责人姓名（WbsNode.ownerName）；空 → 「未分配」 */
+  ownerName: string;
+  /** 计划完成日 YYYY-MM-DD */
+  dueDate: string;
+  /** 任务状态（看板五态之一） */
+  status: TaskStatus;
+  /** 进度 0~100 */
+  progress: number;
+  /** 所属里程碑名（milestoneId 解析；无 → 「未关联」） */
+  milestoneName: string;
 }

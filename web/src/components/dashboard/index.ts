@@ -20,3 +20,5 @@ export { OwnerLoadBarChart } from './OwnerLoadBarChart';
 export type { OwnerLoadBarChartProps } from './OwnerLoadBarChart';
 export { OwnerLoadDrawer } from './OwnerLoadDrawer';
 export type { OwnerLoadDrawerProps } from './OwnerLoadDrawer';
+export { OverdueTaskDrawer } from './OverdueTaskDrawer';
+export type { OverdueTaskDrawerProps } from './OverdueTaskDrawer';

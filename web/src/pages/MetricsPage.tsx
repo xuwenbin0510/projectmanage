@@ -54,6 +54,7 @@ import {
   OverdueBarChart,
   OwnerLoadBarChart,
   OwnerLoadDrawer,
+  OverdueTaskDrawer,
 } from '@/components/dashboard';
 import type { DonutSegment } from '@/components/dashboard';
 import { useDashboardOverview, useDebounced } from '@/hooks';
@@ -185,6 +186,18 @@ export function MetricsPage(): JSX.Element {
   const openOwner = (row: OwnerLoadRow): void => {
     setDrawerRow(row);
     setDrawerOpen(true);
+  };
+
+  /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含） */
+  const [ovDrawer, setOvDrawer] = useState<{
+    open: boolean;
+    projectId: string;
+    projectName: string;
+  }>({ open: false, projectId: '', projectName: '' });
+
+  const openOverdue = (projectId: string): void => {
+    const name = data?.overdue?.find((o) => o.projectId === projectId)?.projectName ?? '';
+    setOvDrawer({ open: true, projectId, projectName: name });
   };
 
   const stats = data?.stats;
@@ -384,7 +397,7 @@ export function MetricsPage(): JSX.Element {
           loading={loading}
           onDrill={(h) => setQuery({ health: query.health === h ? '' : h })}
         />
-        <OverdueBarChart rows={data?.overdue ?? []} loading={loading} />
+        <OverdueBarChart rows={data?.overdue ?? []} loading={loading} onDrill={openOverdue} />
         <OwnerLoadBarChart rows={data?.ownerLoad ?? []} loading={loading} onDrill={openOwner} />
       </Box>
 
@@ -412,6 +425,12 @@ export function MetricsPage(): JSX.Element {
       </SectionCard>
 
       <OwnerLoadDrawer open={drawerOpen} row={drawerRow} onClose={() => setDrawerOpen(false)} />
+      <OverdueTaskDrawer
+        open={ovDrawer.open}
+        projectId={ovDrawer.projectId}
+        projectName={ovDrawer.projectName}
+        onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
+      />
     </Box>
   );
 }

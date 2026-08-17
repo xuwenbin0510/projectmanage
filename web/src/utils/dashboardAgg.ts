@@ -210,3 +210,37 @@ export function buildDashboard(data: WorkbenchData | null | undefined): Dashboar
     health: aggregateHealth(projects),
   };
 }
+
+/**
+ * 按日期口径把 WBS 节点拆成「逾期 / 临期」两组（B13 · 下探抽屉过滤的**单一真相**）。
+ *
+ * 口径与 `aggregateOverdue` / 后端 `countOverdue` 逐字一致：
+ * - 逾期 = `diffDays(today(), dueDate) < 0`
+ * - 临期 = `0 <= diffDays(today(), dueDate) <= DUE_SOON_DAYS(3)`
+ * - 过滤掉 `status === '完成'`（只计在办）
+ *
+ * ⚠️ 返回的是**原始 WbsNode**（不是视图模型）：里程碑名解析（`milestoneId → name`）
+ * 依赖 `GET /api/.../milestones`，需调用方（抽屉）在拿到 milestones 后再做映射，
+ * 本函数保持纯日期判定、零外部依赖，便于被脚本直接断言。
+ *
+ * @param nodes 项目全量 WBS 扁平节点（`api.listWbs` 的返回值）
+ */
+export function splitOverdueByStatus(nodes: WbsNode[]): {
+  overdue: WbsNode[];
+  dueSoon: WbsNode[];
+} {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const overdue: WbsNode[] = [];
+  const dueSoon: WbsNode[] = [];
+
+  list.forEach((t) => {
+    /* 已完成的不计入风险（与 B12 / 后端逐字一致） */
+    if (t.status === '完成') return;
+    const isOver = overdueOf(t.dueDate);
+    const isSoon = !isOver && dueSoonOf(t.dueDate);
+    if (isOver) overdue.push(t);
+    else if (isSoon) dueSoon.push(t);
+  });
+
+  return { overdue, dueSoon };
+}

@@ -26,7 +26,7 @@ import {
   StatusChip,
 } from '@/components/common';
 import { ReviewStepper } from '@/components/review/ReviewStepper';
-import { HealthDistBar, OverdueBarChart, ProgressDonut } from '@/components/dashboard';
+import { HealthDistBar, OverdueBarChart, ProgressDonut, OverdueTaskDrawer } from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
 import { ROUTES } from '@/config/routes';
@@ -50,11 +50,24 @@ export function WorkbenchPage(): JSX.Element {
   const toast = useToast();
   const [busyTask, setBusyTask] = useState<string>('');
 
+  /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含） */
+  const [ovDrawer, setOvDrawer] = useState<{
+    open: boolean;
+    projectId: string;
+    projectName: string;
+  }>({ open: false, projectId: '', projectName: '' });
+
   const fetcher = useCallback(() => api.getWorkbench(), []);
   const { data, loading, error, run } = useAsync(fetcher, []);
 
   /* B11：仪表盘聚合。必须在任何早退之前调用，保证 Hooks 顺序稳定 */
   const dashboard = useMemo(() => buildDashboard(data), [data]);
+
+  /** B13：打开逾期/临期任务下探抽屉（projectName 从本地 dashboard.overdue 解析） */
+  const openOverdue = (projectId: string): void => {
+    const name = dashboard.overdue.find((o) => o.projectId === projectId)?.projectName ?? '';
+    setOvDrawer({ open: true, projectId, projectName: name });
+  };
 
   /** 直接在工作台改任务状态（移动端四件事之一，走 moveTask 以保留 WIP 拦截） */
   const handleStatus = async (nodeId: string, status: TaskStatus, order: number): Promise<void> => {
@@ -135,7 +148,7 @@ export function WorkbenchPage(): JSX.Element {
         }}
       >
         <ProgressDonut summary={dashboard.progress} loading={loading} />
-        <OverdueBarChart rows={dashboard.overdue} loading={loading} />
+        <OverdueBarChart rows={dashboard.overdue} loading={loading} onDrill={openOverdue} />
         <HealthDistBar
           dist={dashboard.health}
           loading={loading}
@@ -357,6 +370,13 @@ export function WorkbenchPage(): JSX.Element {
           )}
         </SectionCard>
       </Box>
+
+      <OverdueTaskDrawer
+        open={ovDrawer.open}
+        projectId={ovDrawer.projectId}
+        projectName={ovDrawer.projectName}
+        onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
+      />
     </Box>
   );
 }

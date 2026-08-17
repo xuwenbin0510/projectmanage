@@ -32,6 +32,11 @@ export interface OverdueBarChartProps {
    * 全局总览横跨全公司，5 条会把风险项目挡在外面（SK-B12-8）。
    */
   maxRows?: number;
+  /**
+   * 钻取回调：点击某项目柱时触发，参数为该项目的 `projectId`。
+   * B13 下探到任务明细抽屉（参考 `HealthDistBar` 的 `onDrill` 模式）。
+   */
+  onDrill?: (projectId: string) => void;
 }
 
 /** 项目名过长时截断，保证 y 轴标签不撑爆绘图区 */
@@ -50,6 +55,7 @@ export function OverdueBarChart({
   rows,
   loading = false,
   maxRows = 8,
+  onDrill,
 }: OverdueBarChartProps): JSX.Element {
   const palette = useChartPalette();
 
@@ -64,6 +70,8 @@ export function OverdueBarChart({
     fullName: r.projectName,
     overdue: r.overdue,
     dueSoon: r.dueSoon,
+    /* B13：补 projectId，供 onItemClick 钻取拿到正确的项目 */
+    projectId: r.projectId,
   }));
 
   return (
@@ -123,6 +131,12 @@ export function OverdueBarChart({
             },
           ]}
           borderRadius={3}
+          /* B13 钻取：点击任意项目的柱 → dataset[dataIndex].projectId → onDrill */
+          onItemClick={(_, itemData) => {
+            if (!onDrill) return;
+            const row = dataset[itemData.dataIndex];
+            if (row && row.projectId) onDrill(row.projectId);
+          }}
         />
       </Box>
     </ChartCard>

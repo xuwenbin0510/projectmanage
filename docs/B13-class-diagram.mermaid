@@ -1,0 +1,44 @@
+classDiagram
+    class OverdueTaskDrawerProps {
+        +boolean open
+        +string projectId
+        +string projectName$
+        +OverdueDrawerTab initialTab$
+        +() void onClose
+    }
+    class OverdueTaskDrawer {
+        -OverdueDrawerTab tab
+        -WbsNode[] nodes
+        -Map~string,string~ msMap
+        -boolean loading
+        -string error
+        +useEffect(fetch on open)
+        -fetchData(pid) Promise~void~
+        -getRows(tab) OverdueTaskRow[]
+    }
+    class OverdueTaskRow {
+        +string id
+        +string wbsCode
+        +string name
+        +string ownerName
+        +string dueDate
+        +TaskStatus status
+        +number progress
+        +string milestoneName
+    }
+    class OverdueBarChartProps {
+        +OverdueByProject[] rows
+        +boolean loading$
+        +number maxRows$
+        +onDrill(projectId) void
+    }
+    class SplitResult {
+        +WbsNode[] overdue
+        +WbsNode[] dueSoon
+    }
+    OverdueTaskDrawerProps <.. OverdueTaskDrawer : props
+    OverdueTaskDrawer o-- OverdueTaskRow : renders in DataTable
+    OverdueTaskDrawer ..> SplitResult : via dashboardAgg.splitOverdueByStatus
+    OverdueBarChartProps <.. OverdueBarChart : props
+    note for OverdueTaskDrawer "复用 OwnerLoadDrawer 的 Drawer 骨架 / 宽420px / 关闭交互"
+    note for SplitResult "口径唯一真相 = utils/date#today,diffDays,DUE_SOON_DAYS"
