@@ -23,14 +23,16 @@ import type {
   DashboardSummary,
   HealthDistribution,
   OverdueByProject,
+  OverdueDurationDistribution,
   PriorityDistribution,
   TaskProgressSummary,
+  TaskStatusDistribution,
 } from '@/types/dashboard';
 import type { ProjectListItem } from '@/types/project';
-import type { Priority, WbsNode } from '@/types/wbs';
+import type { Priority, TaskStatus, WbsNode } from '@/types/wbs';
 import type { WorkbenchData } from '@/types/workbench';
-import { diffDays, today } from '@/utils/date';
-import { PRIORITIES, normalizePriority, priorityRankOf } from '@/config/enums';
+import { diffDays, isOverdue, today } from '@/utils/date';
+import { PRIORITIES, TASK_STATUSES, normalizePriority, priorityRankOf } from '@/config/enums';
 
 /** 临期阈值（天）：与 `WorkbenchPage` 既有 `soon` 判定一致 */
 export const DUE_SOON_DAYS = 3;
@@ -278,6 +280,43 @@ export function buildDashboard(data: WorkbenchData | null | undefined): Dashboar
     /* B14-块1：优先级分布环图 */
     priority: aggregatePriorityDistribution(tasks),
   };
+}
+
+/**
+ * 任务状态分布聚合（B17 · 与后端 portfolioAgg.aggregateStatusDist 逐字一致）。
+ * 入参 = 全量叶子任务（含已完成）；档序按 TASK_STATUSES；脏状态不计入。
+ */
+export function aggregateStatusDist(nodes: WbsNode[]): TaskStatusDistribution {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const counts: Record<TaskStatus, number> = { 待办: 0, 进行中: 0, 待评审: 0, 完成: 0, 阻塞: 0 };
+  list.forEach((n) => {
+    const s = n?.status;
+    if (!s || !(s in counts)) return; // 脏状态不计入
+    counts[s] += 1;
+  });
+  return { ...counts, total: TASK_STATUSES.reduce((sum, s) => sum + counts[s], 0) };
+}
+
+/**
+ * 逾期时长分段聚合（B17 · 与后端 portfolioAgg.aggregateOverdueDuration 逐字一致）。
+ * 入参 = 在办叶子任务；逾期判定复用 utils/date#isOverdue（dayjs isBefore today，空 dueDate 恒 false）；
+ * days = diffDays(dueDate, todayStr)；分段 1–7 / 8–30 / ≥31。
+ */
+export function aggregateOverdueDuration(
+  nodes: WbsNode[],
+  todayStr: string = today(),
+): OverdueDurationDistribution {
+  const list = Array.isArray(nodes) ? nodes : [];
+  const dist = { days1to7: 0, days8to30: 0, daysOver30: 0, total: 0 };
+  list.forEach((n) => {
+    if (!n?.dueDate || !isOverdue(n.dueDate)) return;
+    const days = diffDays(n.dueDate, todayStr);
+    if (days <= 7) dist.days1to7 += 1;
+    else if (days <= 30) dist.days8to30 += 1;
+    else dist.daysOver30 += 1;
+    dist.total += 1;
+  });
+  return dist;
 }
 
 /**

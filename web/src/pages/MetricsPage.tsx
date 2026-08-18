@@ -2,8 +2,9 @@
  * 全局总览（B12 · T05）
  *
  * 复用 `/metrics` 路由：顶部 4 张指标卡 + 筛选栏（分类 / 状态 / 健康度 /
- * 关键字 / 范围开关）+ 图表区（状态环 DonutChart / 健康 HealthDistBar /
- * 逾期 OverdueBarChart / 负责人负荷 OwnerLoadBarChart）+ 项目明细表（DataTable），
+ * 关键字 / 范围开关）+ 图表区（7 张：状态环 DonutChart / 健康环 HealthDonut /
+ * 逾期 OverdueBarChart / 负责人负荷 OwnerLoadBarChart / 优先级 CategoryBarChart /
+ * 状态 CategoryBarChart / 逾期时长 CategoryBarChart）+ 项目明细表（DataTable），
  * 行点击钻取到 B11 单项目仪表盘，健康/状态色段下钻到同页筛选，负责人行
  * 下钻到 OwnerLoadDrawer（P1-6）。
  *
@@ -49,20 +50,29 @@ import {
 } from '@/components/common';
 import type { Column } from '@/components/common';
 import {
+  CategoryBarChart,
   DonutChart,
-  HealthDistBar,
+  HealthDonut,
   OverdueBarChart,
   OwnerLoadBarChart,
   OwnerLoadDrawer,
   OverdueTaskDrawer,
 } from '@/components/dashboard';
-import type { DonutSegment } from '@/components/dashboard';
+import type { CategoryBarRow, DonutSegment } from '@/components/dashboard';
 import { useDashboardOverview, useDebounced } from '@/hooks';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
-import { PROJECT_TYPE_SHORT, PROJECT_TYPES, HEALTH_LABEL } from '@/config/enums';
+import {
+  HEALTH_LABEL,
+  PRIORITIES,
+  PRIORITY_OPTIONS,
+  PROJECT_TYPE_SHORT,
+  PROJECT_TYPES,
+  TASK_STATUSES,
+} from '@/config/enums';
 import { fmtDate } from '@/utils/date';
+import { hexAlpha, useChartPalette } from '@/theme/chartPalette';
 import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
 import type { OwnerLoadRow, StatusDonutSegment } from '@/types/dashboard';
 import type { SemanticTone } from '@/theme/tokens';
@@ -211,6 +221,48 @@ export function MetricsPage(): JSX.Element {
     label: s.status,
     value: s.value,
   }));
+
+  /* B17：新增 3 张分布图的 rows（局部取色，真 hex + hexAlpha 预乘半透明） */
+  const palette = useChartPalette();
+
+  /* 优先级 4 档：P0 红 / P1 黄 / P2 品牌蓝 / P3 灰（同 B14 工作台优先级环） */
+  const priorityRows: CategoryBarRow[] = PRIORITIES.map((p) => ({
+    key: p,
+    label: PRIORITY_OPTIONS.find((o) => o.value === p)?.label ?? p, // 'P0 最高' 等
+    value: data?.priorityDist[p] ?? 0,
+    color:
+      p === 'P0'
+        ? palette.health.red
+        : p === 'P1'
+          ? palette.health.yellow
+          : p === 'P2'
+            ? palette.brandMain
+            : palette.track,
+  }));
+
+  /* 状态 5 档：待办灰 / 进行中品牌蓝 / 待评审黄 / 阻塞红 / 完成绿（主理人拍板 #4） */
+  const statusRows: CategoryBarRow[] = TASK_STATUSES.map((s) => ({
+    key: s,
+    label: s,
+    value: data?.statusDist[s] ?? 0,
+    color:
+      s === '待办'
+        ? palette.track
+        : s === '进行中'
+          ? palette.brand[1]
+          : s === '待评审'
+            ? palette.health.yellow
+            : s === '阻塞'
+              ? palette.health.red
+              : palette.health.green, // 完成
+  }));
+
+  /* 逾期时长 3 段：红系递进（浅 → 中 → 深） */
+  const durationRows: CategoryBarRow[] = [
+    { key: 'days1to7', label: '逾期 1–7 天', value: data?.overdueDuration.days1to7 ?? 0, color: hexAlpha(palette.health.red, 0.5) },
+    { key: 'days8to30', label: '逾期 8–30 天', value: data?.overdueDuration.days8to30 ?? 0, color: hexAlpha(palette.health.red, 0.75) },
+    { key: 'daysOver30', label: '逾期 >30 天', value: data?.overdueDuration.daysOver30 ?? 0, color: palette.health.red },
+  ];
 
   const scopeLabel = canSeeAll
     ? scope === 'all'
@@ -370,15 +422,16 @@ export function MetricsPage(): JSX.Element {
         />
       </Box>
 
-      {/* ══ 图表区（4 张等高图表，md+ 两列 2×2） ══ */}
+      {/* ══ 图表区（7 张等高图表，md+ 两列、xl+ 三列） ══ */}
       <Box
         sx={{
           display: 'grid',
           gap: 2.5,
-          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
           mb: 2.5,
         }}
       >
+        {/* ① 项目状态分布（不动） */}
         <DonutChart
           title="项目状态分布"
           subtitle="口径：在管三态（已批准 / 进行中 / 挂起）"
@@ -394,13 +447,42 @@ export function MetricsPage(): JSX.Element {
             setQuery({ status: query.status === st ? '' : st });
           }}
         />
-        <HealthDistBar
+        {/* ② 项目健康度分布（HealthDistBar → HealthDonut，props 等价） */}
+        <HealthDonut
           dist={data?.health ?? { green: 0, yellow: 0, red: 0, total: 0 }}
           loading={loading}
           onDrill={(h) => setQuery({ health: query.health === h ? '' : h })}
         />
+        {/* ③ 逾期 / 临期任务（不动） */}
         <OverdueBarChart rows={data?.overdue ?? []} loading={loading} onDrill={openOverdue} />
+        {/* ④ 负责人负荷（不动） */}
         <OwnerLoadBarChart rows={data?.ownerLoad ?? []} loading={loading} onDrill={openOwner} />
+        {/* ⑤ 任务优先级分布（新增，无下钻） */}
+        <CategoryBarChart
+          title="任务优先级分布"
+          subtitle={`共 ${data?.priorityDist.total ?? 0} 个未完成任务`}
+          rows={priorityRows}
+          loading={loading}
+          emptyTitle="暂无进行中的任务"
+          emptyDescription="没有需要按优先级排期的任务"
+        />
+        {/* ⑥ 任务状态分布（新增，无下钻） */}
+        <CategoryBarChart
+          title="任务状态分布"
+          subtitle={`共 ${data?.statusDist.total ?? 0} 个任务（含已完成）`}
+          rows={statusRows}
+          loading={loading}
+          emptyTitle="当前范围暂无任务"
+        />
+        {/* ⑦ 逾期时长分段（新增，无下钻） */}
+        <CategoryBarChart
+          title="逾期时长分段"
+          subtitle={`共 ${data?.overdueDuration.total ?? 0} 个逾期任务`}
+          rows={durationRows}
+          loading={loading}
+          emptyTitle="太好了，没有逾期任务 🎉"
+          emptyDescription="所有任务都在计划节奏内"
+        />
       </Box>
 
       {/* ══ 项目明细表（整行下钻到单项目仪表盘） ══ */}

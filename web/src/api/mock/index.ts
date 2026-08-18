@@ -89,7 +89,13 @@ import {
   normalizePriority,
   REJECT_REASON_MAX,
 } from '@/config/enums';
-import { aggregateHealth, aggregateOverdue } from '@/utils/dashboardAgg';
+import {
+  aggregateHealth,
+  aggregateOverdue,
+  aggregatePriorityDistribution,
+  aggregateStatusDist,
+  aggregateOverdueDuration,
+} from '@/utils/dashboardAgg';
 import { canDo } from '@/config/permissions';
 import { addDays, today, nowIso, diffDays, weekCode, weekRange, fitMilestoneDates } from '@/utils/date';
 import { genId, deepClone } from '@/utils/format';
@@ -2624,18 +2630,21 @@ export class MockApiClient implements ApiClient {
       }
     }
 
-    /* 3. 范围内「在办叶子任务」：真叶子判定要在项目全量节点上做 */
+    /* 3. 范围内「叶子任务」：真叶子判定要在项目全量节点上做（B17 保留全量叶子，含已完成） */
     const scopeIds = new Set(items.map((p) => p.id));
     const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
     const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
-    const tasks = leafNodesOf(db.wbsNodes.filter((n) => scopeIds.has(n.projectId)))
-      .filter((n) => n.status !== '完成')
-      .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' }));
+    const allLeafTasks = leafNodesOf(db.wbsNodes.filter((n) => scopeIds.has(n.projectId)))
+      .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' })); // 全量叶子（含已完成）
+    const tasks = allLeafTasks.filter((n) => n.status !== '完成'); // 在办（既有口径逐字不变）
 
-    /* 4. 图表聚合（复用 B11 纯函数，口径零漂移） */
+    /* 4. 图表聚合（复用 B11/B14 纯函数 + B17 新纯函数，口径零漂移） */
     const health = aggregateHealth(items);
     const overdue = aggregateOverdue(tasks, items);
     const overdueTasks = tasks.filter((t) => !!t.dueDate && diffDays(today(), t.dueDate) < 0).length;
+    const priorityDist = aggregatePriorityDistribution(tasks); // 在办叶子（复用 B14 纯函数）
+    const statusDist = aggregateStatusDist(allLeafTasks); // 全量叶子（含已完成）
+    const overdueDuration = aggregateOverdueDuration(tasks); // 在办叶子中已逾期者分段
 
     const statusCounter = new Map<string, number>();
     items.forEach((p) => statusCounter.set(p.status, (statusCounter.get(p.status) ?? 0) + 1));
@@ -2764,6 +2773,9 @@ export class MockApiClient implements ApiClient {
       },
       statusDonut,
       health,
+      priorityDist,
+      statusDist,
+      overdueDuration,
       overdue,
       ownerLoad,
       reportMissing,

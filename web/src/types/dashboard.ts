@@ -163,6 +163,35 @@ export interface ReportMissingRow {
   pmName: string;
 }
 
+/**
+ * 任务状态分布（B17 · P0-3 · 横向条形）
+ * 档序恒按 TASK_STATUSES（待办 / 进行中 / 待评审 / 完成 / 阻塞）；
+ * 后端聚合输入为「全量叶子任务（含已完成）」，脏状态不计入，
+ * 故 total 可能略小于范围内叶子数（副标题「共 N 个任务（含已完成）」取 total）。
+ */
+export interface TaskStatusDistribution {
+  待办: number;
+  进行中: number;
+  待评审: number;
+  完成: number;
+  阻塞: number;
+  /** 五档之和 */
+  total: number;
+}
+
+/**
+ * 逾期时长分段（B17 · P0-4 · 横向条形）
+ * 仅在办叶子任务中 isOverdue 者，days = diffDays(dueDate, today)；
+ * 分段 1–7 / 8–30 / ≥31。total = 三段之和 = 顶部「逾期任务」卡数值。
+ */
+export interface OverdueDurationDistribution {
+  days1to7: number;
+  days8to30: number;
+  daysOver30: number;
+  /** 三段之和（可断言 = stats.overdueTasks） */
+  total: number;
+}
+
 /** 全局总览完整响应 */
 export interface DashboardOverview {
   /** 后端实际生效的范围（非特权角色即使传 all 也会被降为 mine） */
@@ -172,6 +201,12 @@ export interface DashboardOverview {
   stats: OverviewStats;
   statusDonut: StatusDonut;
   health: HealthDistribution;
+  /** B17：在办叶子任务按 P0–P3 计数（脏值兜底 P2；分母与 B14 工作台一致） */
+  priorityDist: PriorityDistribution;
+  /** B17：全量叶子任务（含已完成）按任务状态五档计数 */
+  statusDist: TaskStatusDistribution;
+  /** B17：在办叶子任务中已逾期者按 1–7 / 8–30 / >30 天分段 */
+  overdueDuration: OverdueDurationDistribution;
   /** 按「逾期 ↓ → 临期 ↓ → 项目名」排序，只含有逾期或临期的项目 */
   overdue: OverdueByProject[];
   /** 按「逾期 ↓ → 在办 ↓ → 姓名 ↑」排序，未分配恒最后 */

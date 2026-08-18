@@ -1,0 +1,29 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant M as MetricsPage
+    participant H as useDashboardOverview
+    participant API as http.getDashboardOverview
+    participant S as dashboard.service
+    participant A as portfolioAgg
+
+    U->>M: 打开 /metrics
+    M->>H: 挂载 useDashboardOverview()
+    H->>API: GET /api/dashboard/overview?scope=...&health=...
+    API->>S: getDashboardOverview(db, query, me)
+    S->>S: listScopedItems(db, q, me, scope)
+    S->>S: listScopeAllLeafTasks(db, projectIds)  // 全量叶子（含已完成）
+    S->>S: tasks = allLeafTasks.filter(status !== '完成')
+    S->>A: aggregateHealth(items)
+    S->>A: aggregateStatusDonut(items)
+    S->>A: aggregatePriorityDist(tasks)          // 新增
+    S->>A: aggregateStatusDist(allLeafTasks)     // 新增
+    S->>A: aggregateOverdueDuration(tasks, todayStr) // 新增
+    S->>A: aggregateOverdue / aggregateOwnerLoad / countOverdueTasks
+    S-->>API: { stats, statusDonut, health, priorityDist, statusDist, overdueDuration, overdue, ownerLoad, reportMissing, projects }
+    API-->>H: DashboardOverview
+    H-->>M: data / loading / error
+    M->>M: 渲染 7 图（② HealthDonut · ⑤⑥⑦ CategoryBarChart）
+    Note over M: ② 健康环下钻（B12 行为不变）
+    M->>M: onDrill(health) → setQuery({ health: toggle })
+    M->>H: query 变化 → 重新请求 → 7 图刷新

@@ -184,16 +184,17 @@ function listScopedItems(db, q, me, scope) {
 }
 
 /**
- * 范围内项目的「在办叶子任务」。
+ * 范围内项目的叶子任务（私有拉取，`listScopeLeafTasks` / `listScopeAllLeafTasks` 共用）。
  *
  * 真叶子判定必须在**项目全量节点**上做（`wbs.leafNodesOf` 依赖 parentId 全集），
  * 所以先按项目分组再判叶子，不能一把过滤。
  *
  * @param {import('better-sqlite3').Database} db
  * @param {Array<string>} projectIds
+ * @param {boolean} includeDone 为 `true` 时含已完成叶子（B17 状态分布口径）
  * @returns {Array<object>} WbsNode[]（含 ownerName）
  */
-function listScopeLeafTasks(db, projectIds) {
+function collectScopeLeafTasks(db, projectIds, includeDone) {
   const ids = (projectIds || []).map(String).filter(Boolean);
   if (!ids.length) return [];
 
@@ -214,10 +215,35 @@ function listScopeLeafTasks(db, projectIds) {
   const out = [];
   Object.keys(byProject).forEach(function (pid) {
     wbs.leafNodesOf(byProject[pid]).forEach(function (n) {
-      if (n.status !== '完成') out.push(n);
+      if (includeDone || n.status !== '完成') out.push(n);
     });
   });
   return out;
+}
+
+/**
+ * 范围内项目的「在办叶子任务」。
+ * 与 `listScopeAllLeafTasks` 共享私有拉取，唯一差异 = 过滤 `status === '完成'`。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds
+ * @returns {Array<object>} WbsNode[]（含 ownerName）
+ */
+function listScopeLeafTasks(db, projectIds) {
+  return collectScopeLeafTasks(db, projectIds, false);
+}
+
+/**
+ * 范围内项目的「全部叶子任务」（含已完成）。
+ * 与 `listScopeLeafTasks` 共享私有拉取，唯一差异 = 不过滤 `status === '完成'`
+ * （B17 状态分布口径，零额外 SQL）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds
+ * @returns {Array<object>} WbsNode[]（含 ownerName，含已完成叶子）
+ */
+function listScopeAllLeafTasks(db, projectIds) {
+  return collectScopeLeafTasks(db, projectIds, true);
 }
 
 /**
@@ -313,7 +339,10 @@ function getDashboardOverview(db, query, me) {
 
   const items = listScopedItems(db, q, me, scope);
   const projectIds = items.map(function (p) { return String(p.id); });
-  const tasks = listScopeLeafTasks(db, projectIds);
+  /* 全量叶子（含已完成）· 同一批 wbs_nodes SELECT，零额外 SQL（B17 状态分布口径） */
+  const allLeafTasks = listScopeAllLeafTasks(db, projectIds);
+  /* 在办叶子（既有口径逐字不变：所有既有聚合继续用 tasks） */
+  const tasks = allLeafTasks.filter(function (n) { return n.status !== '完成'; });
 
   /* 项目名 / PM 名查表：ownerLoad 的跨项目明细与 reportMissing 共用 */
   const nameById = {};
@@ -329,6 +358,11 @@ function getDashboardOverview(db, query, me) {
   const overdue = agg.aggregateOverdue(items, tasks, todayStr);
   const ownerLoad = agg.aggregateOwnerLoad(tasks, todayStr, nameById);
   const overdueTasks = agg.countOverdueTasks(tasks, todayStr);
+
+  /* B17 追加三张分布图（放在 overdueTasks 之后） */
+  const priorityDist = agg.aggregatePriorityDist(tasks);           // 在办叶子
+  const statusDist = agg.aggregateStatusDist(allLeafTasks);        // 全量叶子（含已完成）
+  const overdueDuration = agg.aggregateOverdueDuration(tasks, todayStr); // 在办叶子
 
   /* 周报：只有「进行中」项目才需要填（与工作台提醒同一口径） */
   const activeIds = items
@@ -365,6 +399,9 @@ function getDashboardOverview(db, query, me) {
     },
     statusDonut: statusDonut,
     health: health,
+    priorityDist: priorityDist,
+    statusDist: statusDist,
+    overdueDuration: overdueDuration,
     overdue: overdue,
     ownerLoad: ownerLoad,
     reportMissing: reportMissing,
@@ -380,6 +417,7 @@ module.exports = {
   resolveScope,
   listScopedItems,
   listScopeLeafTasks,
+  listScopeAllLeafTasks,
   countReportFill,
   sortItems,
   getDashboardOverview,

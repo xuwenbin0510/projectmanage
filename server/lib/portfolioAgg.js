@@ -263,6 +263,75 @@ function countOverdueTasks(tasks, todayStr) {
   return asArray(tasks).filter(function (n) { return isOverdue(n, t); }).length;
 }
 
+/** 优先级白名单（内联镜像 wbs.service.PRIORITIES，保持零框架依赖） */
+const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+/** 优先级兜底（内联镜像 wbs.service.DEFAULT_PRIORITY） */
+const DEFAULT_PRIORITY = 'P2';
+
+/**
+ * 任务优先级分布（B17 · P0-2）。
+ * 入参 = 在办叶子任务（由调用方筛好，含已完成则口径不符）。
+ * 返回 { P0, P1, P2, P3, total }；total = 四档之和 = 入参任务数。
+ * 脏值（null / '' / 'P9' / 小写 p0）一律记 P2；空数组 → 全零（不返回 NaN）。
+ * @param {Array<object>} tasks WbsNode[]
+ * @returns {{P0: number, P1: number, P2: number, P3: number, total: number}}
+ */
+function aggregatePriorityDist(tasks) {
+  const dist = { P0: 0, P1: 0, P2: 0, P3: 0, total: 0 };
+  asArray(tasks).forEach(function (n) {
+    const raw = String((n && n.priority) || '').trim().toUpperCase();
+    const p = PRIORITIES.indexOf(raw) >= 0 ? raw : DEFAULT_PRIORITY;
+    dist[p] += 1;
+    dist.total += 1;
+  });
+  return dist;
+}
+
+/**
+ * 任务状态分布（B17 · P0-3）。
+ * 入参 = **全量叶子任务（含已完成）**；档序恒按 `enums.TASK_STATUSES`
+ * （待办 / 进行中 / 待评审 / 完成 / 阻塞）。
+ * 返回 { 待办, 进行中, 待评审, 完成, 阻塞, total }。
+ * 脏状态（枚举外取值）**不计入任何一档**（策略同 aggregateHealth 的非法健康度），
+ * 因此 total 可能略小于入参叶子数——副标题口径为「共 N 个任务（含已完成）」= total。
+ * @param {Array<object>} allLeafTasks WbsNode[]（含已完成叶子）
+ * @returns {{待办: number, 进行中: number, 待评审: number, 完成: number, 阻塞: number, total: number}}
+ */
+function aggregateStatusDist(allLeafTasks) {
+  const dist = { 待办: 0, 进行中: 0, 待评审: 0, 完成: 0, 阻塞: 0, total: 0 };
+  asArray(allLeafTasks).forEach(function (n) {
+    const s = String((n && n.status) || '');
+    if (enums.TASK_STATUSES.indexOf(s) < 0) return; // 脏状态不计入
+    dist[s] += 1;
+    dist.total += 1;
+  });
+  return dist;
+}
+
+/**
+ * 逾期时长分段（B17 · P0-4）。
+ * 入参 = 在办叶子任务；仅 `isOverdue` 者（diffDays(today, dueDate) < 0，空 dueDate 恒 false）。
+ * 天数 days = diffDays(dueDate, today)（恒 ≥1 的正数）；分段 1–7 / 8–30 / ≥31。
+ * 返回 { days1to7, days8to30, daysOver30, total }；total = 三段之和 = countOverdueTasks（同入参同 today 下逐字相等，QA 可断言）。
+ * @param {Array<object>} tasks WbsNode[]（在办叶子任务）
+ * @param {string} [todayStr] 今天 `YYYY-MM-DD`；缺省取 dates.today()
+ * @returns {{days1to7: number, days8to30: number, daysOver30: number, total: number}}
+ */
+function aggregateOverdueDuration(tasks, todayStr) {
+  const t = todayStr || dates.today();
+  const dist = { days1to7: 0, days8to30: 0, daysOver30: 0, total: 0 };
+  asArray(tasks).forEach(function (n) {
+    if (!isOverdue(n, t)) return;
+    const due = String((n && n.dueDate) || '');
+    const days = dates.diffDays(due, t); // diffDays(a,b) = b - a；逾期时 dueDate < today → days ≥ 1
+    if (days <= 7) dist.days1to7 += 1;
+    else if (days <= 30) dist.days8to30 += 1;
+    else dist.daysOver30 += 1;
+    dist.total += 1;
+  });
+  return dist;
+}
+
 /**
  * 整体进度（0~100 整数）。
  *
@@ -294,6 +363,9 @@ module.exports = {
   aggregateHealth,
   aggregateOverdue,
   aggregateOwnerLoad,
+  aggregatePriorityDist,
+  aggregateStatusDist,
+  aggregateOverdueDuration,
   countOverdueTasks,
   averageProgress,
 };
