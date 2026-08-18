@@ -58,6 +58,7 @@ import {
   OwnerLoadBarChart,
   OwnerLoadDrawer,
   OverdueTaskDrawer,
+  WeeklyProgressPanel,
 } from '@/components/dashboard';
 import type { CategoryBarRow, DonutSegment } from '@/components/dashboard';
 import { useDashboardOverview, useDebounced } from '@/hooks';
@@ -388,6 +389,22 @@ export function MetricsPage(): JSX.Element {
               </MenuItem>
             ))}
           </TextField>
+          {/* D01.5：任务负责人筛选（选项 = 范围内项目真叶子任务负责人去重，服务端 ownerOptions） */}
+          <TextField
+            size="small"
+            select
+            label="任务负责人"
+            value={query.ownerOpenId ?? ''}
+            onChange={(e) => setQuery({ ownerOpenId: e.target.value || undefined })}
+            sx={{ minWidth: 124 }}
+          >
+            <MenuItem value="">全部</MenuItem>
+            {(data?.ownerOptions ?? []).map((o) => (
+              <MenuItem key={o.openId} value={o.openId}>
+                {o.name}
+              </MenuItem>
+            ))}
+          </TextField>
 
           {canSeeAll ? (
             <FormControlLabel
@@ -409,7 +426,7 @@ export function MetricsPage(): JSX.Element {
                   onChange={(e) => setQuery({ onlyMine: e.target.checked })}
                 />
               }
-              label={<Typography sx={{ fontSize: 13 }}>只看我负责的</Typography>}
+              label={<Typography sx={{ fontSize: 13 }}>只看我负责的（PM）</Typography>}
             />
           )}
         </Stack>
@@ -527,6 +544,9 @@ export function MetricsPage(): JSX.Element {
           }
         />
       </Box>
+
+      {/* ══ D01 · 上周工作进展面板（周报动态 / 任务进展 / 达成里程碑，周例会场景） ══ */}
+      <WeeklyProgressPanel data={data?.weeklyProgress} loading={loading} />
 
       {/* ══ 项目明细表（整行下钻到单项目仪表盘） ══ */}
       <SectionCard flush>

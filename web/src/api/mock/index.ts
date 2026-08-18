@@ -2635,6 +2635,20 @@ export class MockApiClient implements ApiClient {
       }
     }
 
+    /* D01.5：选项池基准 = 应用 type/status/health/keyword 但**不含 ownerOpenId** 的项目集
+       （负责人选项不随负责人筛选漂移，与服务端 listScopedRows(Object.assign({}, q, {ownerOpenId:''})) 对齐） */
+    const itemsBase = items;
+
+    /* D01.5：任务负责人筛选 —— 项目内含该负责人（openId）的真叶子任务即命中（与服务端 EXISTS 子查询同口径） */
+    if (query.ownerOpenId) {
+      const ownerProjectIds = new Set(
+        leafNodesOf(db.wbsNodes)
+          .filter((n) => n.owner === query.ownerOpenId)
+          .map((n) => n.projectId),
+      );
+      items = items.filter((p) => ownerProjectIds.has(p.id));
+    }
+
     /* 3. 范围内「叶子任务」：真叶子判定要在项目全量节点上做（B17 保留全量叶子，含已完成） */
     const scopeIds = new Set(items.map((p) => p.id));
     const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
@@ -2736,6 +2750,77 @@ export class MockApiClient implements ApiClient {
     const reportDue = activeItems.length;
     const reportFilled = reportDue - reportMissing.length;
 
+    /* 5.5 D01.5：任务负责人选项池（基准 = itemsBase，不含 ownerOpenId；真叶子 owner 去重，姓名升序） */
+    const ownerOptions: Array<{ openId: string; name: string }> = (() => {
+      const baseIds = new Set(itemsBase.map((p) => p.id));
+      const map = new Map<string, string>();
+      leafNodesOf(db.wbsNodes)
+        .filter((n) => baseIds.has(n.projectId) && !!n.owner)
+        .forEach((n) => {
+          if (!map.has(n.owner as string)) {
+            map.set(n.owner as string, userNameById.get(n.owner as string) ?? '(已移除)');
+          }
+        });
+      return Array.from(map.entries())
+        .map(([openId, name]) => ({ openId, name }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    })();
+
+    /* 5.6 D01：上周工作进展（口径与服务端 computeWeeklyProgress 对齐：周报=上周周码、
+       任务=真叶子且 updatedAt 落在上周区间、里程碑=doneAt 落在上周区间） */
+    const lastWeek = weekCode(addDays(today(), -7));
+    const lastStart = weekRange(lastWeek).start;
+    const lastEnd = weekRange(lastWeek).end;
+    const weeklyReports = db.reports
+      .filter((r) => scopeIds.has(r.projectId) && r.week === lastWeek)
+      .map((r) => ({
+        id: r.id,
+        projectId: r.projectId,
+        projectName: projectNameById.get(r.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        authorName: r.authorName,
+        status: r.status,
+        submittedAt: r.submittedAt ?? '',
+        updatedAt: r.updatedAt,
+        summary: r.doneNote,
+      }));
+    const weeklyTasks = leafNodesOf(db.wbsNodes)
+      .filter((n) => scopeIds.has(n.projectId))
+      .filter((n) => {
+        const d = n.updatedAt.slice(0, 10);
+        return d >= lastStart && d <= lastEnd;
+      })
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
+      .map((n) => ({
+        id: n.id,
+        projectId: n.projectId,
+        projectName: projectNameById.get(n.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        wbsCode: n.wbsCode,
+        name: n.name,
+        ownerName: n.ownerName || userNameById.get(n.owner ?? '') || '',
+        status: n.status,
+        progress: n.progress,
+        updatedAt: n.updatedAt,
+        done: n.status === '完成',
+      }));
+    const weeklyMilestones = db.milestones
+      .filter(
+        (m) => scopeIds.has(m.projectId) && !!m.doneAt && m.doneAt >= lastStart && m.doneAt <= lastEnd,
+      )
+      .map((m) => ({
+        id: m.id,
+        projectId: m.projectId,
+        projectName: projectNameById.get(m.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        name: m.name,
+        doneAt: m.doneAt as string,
+      }))
+      .sort((a, b) => (a.doneAt < b.doneAt ? 1 : a.doneAt > b.doneAt ? -1 : 0));
+    const weeklyProgress = {
+      week: lastWeek,
+      reports: weeklyReports,
+      tasks: weeklyTasks,
+      milestones: weeklyMilestones,
+    };
+
     /* 6. 明细表排序 + 分页（决策 ④） */
     const overdueByProject = new Map(overdue.map((r) => [r.projectId, r.overdue]));
     const sorted = items.slice().sort((a, b) => {
@@ -2784,6 +2869,8 @@ export class MockApiClient implements ApiClient {
       overdue,
       ownerLoad,
       reportMissing,
+      weeklyProgress,
+      ownerOptions,
       projects: {
         items: sorted.slice((page - 1) * pageSize, page * pageSize),
         total: items.length,
