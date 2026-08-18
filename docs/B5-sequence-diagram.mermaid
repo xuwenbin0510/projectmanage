@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    actor U as 用户（任务负责人）
+    participant W as WbsPage
+    participant M as ReportFormModal
+    participant F as flowStore
+    participant S as report.service
+    participant DB as SQLite
+
+    Note over U,DB: R1 WBS 入口写日志（全锁定 + 进度只读）
+    U->>W: 点击叶子节点「写日志」
+    W->>W: setReportLockNodeId(node.id) + setReportModalOpen(true)
+    W->>M: 渲染 <ReportFormModal lockNodeId={node.id}/>
+    M->>M: effectiveLockNodeId=node.id（叶子）→ lockMode=true
+    M->>M: 初始化 taskMap：当前节点 selected=true, progressAfter=n.progress（只读带入）
+    Note over M: 其他节点 checkbox 全 disabled；所有「完成进度(%)」输入框 disabled
+    U->>M: 填写完成/计划/风险 → 提交
+    M->>F: submitReport(payload)（tasks.selected 仅当前节点）
+    F->>S: POST /reports {submit:true}
+    S->>DB: 事务：写 work_reports + 子行 → 回写当前节点 progress → syncWbsProgressStatus
+    S-->>F: Report（ok 信封）
+    F-->>M: onSubmitted(saved)
+    M-->>W: onClose()
+    W->>W: fetchWbs + refreshMilestones（进度回写后刷新）
+
+    Note over U,DB: R3 列表填报时间列 + 排序
+    U->>ReportsPage: 进入工作日志页
+    ReportsPage->>F: fetchReports(projectId)
+    F->>S: GET /projects/:id/reports（默认 created_at DESC）
+    S-->>ReportsPage: Report[]（已倒序）
+    ReportsPage->>ReportsPage: 表头「填报时间」点击 → toggle sortState(asc/desc)
+    ReportsPage->>ReportsPage: 按 sortState 排序 rows（页面级，不改 DataTable）

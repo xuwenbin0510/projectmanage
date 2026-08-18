@@ -1,4 +1,5 @@
-import type { WbsNode, BoardConfig, TaskStatus, WbsNodeType } from '@/types/wbs';
+import type { WbsNode, BoardConfig, TaskStatus, WbsNodeType, Priority } from '@/types/wbs';
+import { BOARD_COLUMNS } from '@/types/wbs';
 import type { User } from '@/types/project';
 import { addDays, today, nowIso } from '@/utils/date';
 import { OPEN_IDS, nameOf } from './users';
@@ -37,6 +38,22 @@ function mapSeedNodeType(t: SeedNodeType, hasChild: boolean): WbsNodeType {
 }
 
 /**
+ * 种子优先级（B14-块1，**确定性**规则，保证每次 reset 结果一致）：
+ * - 已逾期（`dueOffset < 0`）且未完成 → `P0`（演示环图红色 + 逾期清单置顶）
+ * - 关键路径分支（`1.2` / `1.4` 前缀，与 `isCritical` 同口径）→ `P1`
+ * - 阻塞态 → `P1`（需要尽快解阻）
+ * - 其余 → 缺省 `P2`；已完成且非关键 → `P3`（降噪，让环图四色齐全）
+ */
+function seedPriority(code: string, status: TaskStatus, dueOffset: number): Priority {
+  const critical = code.startsWith('1.2') || code.startsWith('1.4');
+  if (dueOffset < 0 && status !== '完成') return 'P0';
+  if (status === '阻塞') return 'P1';
+  if (critical) return 'P1';
+  if (status === '完成') return 'P3';
+  return 'P2';
+}
+
+/**
  * 里程碑挂载（§2.6 补挂建议）：把二级容器 task 绑到对应里程碑。
  *
  * ⚠️ 口径 Y（SK-M4）：被绑定的容器节点**自身也计入**该里程碑的关联任务集合，
@@ -65,7 +82,8 @@ const P0012: NodeSpec[] = [
   ['1.4.1', '采集协议解析', 'task', OPEN_IDS.wudi, 4, 60, '进行中', 5],
   ['1.4.2', '数据入库服务', 'task', OPEN_IDS.zhengshuang, 3, 30, '进行中', 7],
   ['1.3.1', '采集模块开发', 'task', OPEN_IDS.wudi, 5, 0, '待办', 12],
-  ['1.3.2', '告警引擎开发', 'task', OPEN_IDS.zhengshuang, 4, 0, '待办', 16],
+  /* B11：阻塞列样本（progress 0，syncWbsProgressStatus 会原样保留「阻塞」人工态） */
+  ['1.3.2', '告警引擎开发', 'task', OPEN_IDS.zhengshuang, 4, 0, '阻塞', 16],
   ['1.3.3', '前端可视化开发', 'task', '', 0, 0, '待办', 20],
   ['1.3.4', '联调脚本编写', 'task', OPEN_IDS.wudi, 2, 20, '进行中', 9],
   ['1.3.5', '性能压测准备', 'task', OPEN_IDS.xuwenbin, 3, 10, '进行中', -3],
@@ -82,7 +100,8 @@ const P0015: NodeSpec[] = [
   ['1.1.3', '调度看板前端', 'task', OPEN_IDS.liming, 1.5, 100, '完成', -1],
   ['1.1.4', '回归测试', 'task', OPEN_IDS.chenjing, 1, 0, '待办', 5],
   ['1.2', '技术债', 'package', '', 0, 0, '待办', 14],
-  ['1.2.1', '调度引擎重构', 'task', OPEN_IDS.wangqiang, 3, 0, '待办', 8],
+  /* B11：阻塞列样本 */
+  ['1.2.1', '调度引擎重构', 'task', OPEN_IDS.wangqiang, 3, 0, '阻塞', 8],
 ];
 
 const P0018: NodeSpec[] = [
@@ -159,10 +178,15 @@ export function createWbs(users: User[]): WbsBundle {
         ownerName: nameOf(users, owner),
         estimateDays,
         actualDays: Number(((estimateDays * progress) / 100).toFixed(1)),
+        // B8：累计实际工时（人日）种子按 0 起步（日志 submit 后累加）；读时由 mock decorateEffort 覆盖父节点 Σ
+        effortHours: 0,
+        effortChildCount: 0,
         startDate: addDays(today(), dueOffset - 10),
         dueDate: addDays(today(), dueOffset),
         status,
         progress,
+        // B14-块1：种子优先级 —— 关键路径给 P1，逾期未完成给 P0，其余走缺省 P2
+        priority: seedPriority(code, status, dueOffset),
         boardOrder: i,
         isCritical: code.startsWith('1.2') || code.startsWith('1.4'),
         milestoneId: milestoneCode ? `${projectId}-${milestoneCode}` : null,
@@ -172,9 +196,10 @@ export function createWbs(users: User[]): WbsBundle {
       });
     });
 
+    /* B11：列定义单一来源 = BOARD_COLUMNS（含「阻塞」共 5 列），禁止再硬编码数组 */
     boardConfigs.push({
       projectId,
-      columns: ['待办', '进行中', '待评审', '完成'],
+      columns: [...BOARD_COLUMNS],
       wipLimits: { 进行中: DEFAULT_WIP_LIMIT },
       updatedAt: ts,
     });

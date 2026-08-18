@@ -16,6 +16,8 @@ interface AuthState {
   projectRoles: ProjectRole[];
   login: (openId: string) => Promise<User>;
   loginByCode: (code: string) => Promise<User>;
+  /** 浏览器飞书 Web OAuth 回调登录（普通浏览器，不经过 JSSDK） */
+  loginByFeishuWeb: (code: string) => Promise<User>;
   bootstrap: () => Promise<void>;
   logout: () => Promise<void>;
   setProjectRoles: (roles: ProjectRole[]) => void;
@@ -48,6 +50,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       localStorage.setItem('pm_token', session.token);
       set({ user: session.user, ready: true });
       return session.user;
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  /** 浏览器飞书 Web OAuth：换 token 后落到同一用户态（与 loginByCode 对齐） */
+  async loginByFeishuWeb(code) {
+    set({ loading: true });
+    try {
+      const { token, user } = await api.loginByFeishuCode(code);
+      setToken(token);
+      set({ user, ready: true });
+      return user;
     } finally {
       set({ loading: false });
     }

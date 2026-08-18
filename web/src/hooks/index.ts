@@ -3,6 +3,8 @@ import { useMediaQuery, useTheme } from '@mui/material';
 import { useAuthStore } from '@/stores/authStore';
 
 export { useToast } from './useToast';
+export { useDashboardOverview, DASHBOARD_DEFAULT_PAGE_SIZE } from './useDashboardOverview';
+export type { UseDashboardOverviewResult } from './useDashboardOverview';
 
 /**
  * 异步请求 hook：自动管理 loading / error / data

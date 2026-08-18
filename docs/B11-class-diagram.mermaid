@@ -1,0 +1,177 @@
+%% B11 类图 · 仪表盘可视化 + 看板补缺
+%% 架构：高见远 | 来源：docs/B11-架构设计.md §3.1
+classDiagram
+    direction LR
+
+    %% ═══ 既有契约（不变，仅标注） ═══
+    class WbsNode {
+        +string id
+        +string projectId
+        +string wbsCode
+        +string name
+        +string owner
+        +string ownerName
+        +string dueDate
+        +TaskStatus status
+        +number progress
+        +number boardOrder
+        +string milestoneId
+        +string projectName ~B11 新增·仅 workbench 返回~
+    }
+
+    class BoardConfig {
+        +string projectId
+        +TaskStatus[] columns ~B11 自愈为 5 列~
+        +Map~string,number~ wipLimits
+        +string updatedAt
+    }
+
+    class BoardColumn {
+        +TaskStatus status
+        +WbsNode[] cards
+        +number wipLimit
+    }
+
+    class BoardView {
+        +string projectId
+        +BoardColumn[] columns
+        +BoardConfig config
+    }
+
+    class WorkbenchData {
+        +WorkbenchStats stats
+        +ProjectListItem[] myProjects
+        +WbsNode[] myTasks
+        +Review[] myApprovals
+        +ReportReminder[] reportReminders
+    }
+
+    class WorkbenchStats {
+        +number pendingApprovals
+        +number overdueTasks
+        +number missingReports
+    }
+
+    class ProjectListItem {
+        +string id
+        +string name
+        +Health health
+        +number progress
+        +ProjectStatus status
+    }
+
+    BoardView "1" *-- "5" BoardColumn : 含
+    BoardView "1" *-- "1" BoardConfig : 含
+    BoardColumn "1" o-- "0..n" WbsNode : cards
+    WorkbenchData "1" *-- "1" WorkbenchStats
+    WorkbenchData "1" o-- "0..n" ProjectListItem : myProjects
+    WorkbenchData "1" o-- "0..n" WbsNode : myTasks
+
+    %% ═══ B11 新增：仪表盘聚合层 ═══
+    class DashboardSummary {
+        +TaskProgressSummary progress
+        +OverdueByProject[] overdue
+        +HealthDistribution health
+    }
+
+    class TaskProgressSummary {
+        +number total
+        +number done
+        +number active
+        +number pending
+        +number completionRate
+    }
+
+    class OverdueByProject {
+        +string projectId
+        +string projectName
+        +number overdue
+        +number dueSoon
+    }
+
+    class HealthDistribution {
+        +number green
+        +number yellow
+        +number red
+    }
+
+    class DashboardAgg {
+        <<module · utils/dashboardAgg.ts>>
+        +aggregateTaskProgress(tasks) TaskProgressSummary
+        +aggregateOverdue(tasks, projects) OverdueByProject[]
+        +aggregateHealth(projects) HealthDistribution
+        +buildDashboard(data) DashboardSummary
+    }
+
+    DashboardSummary *-- TaskProgressSummary
+    DashboardSummary *-- OverdueByProject
+    DashboardSummary *-- HealthDistribution
+    DashboardAgg ..> WorkbenchData : 输入
+    DashboardAgg ..> DashboardSummary : 输出
+
+    %% ═══ B11 新增：看板视图层 ═══
+    class BoardFilter {
+        +string keyword
+        +string owner
+        +string milestoneId
+        +boolean overdueOnly
+    }
+
+    class BoardViewMode {
+        <<enumeration>>
+        status
+        owner
+    }
+
+    class BoardUtil {
+        <<module · utils/board.ts>>
+        +filterCards(cards, filter) WbsNode[]
+        +groupByOwner(cards) OwnerLane[]
+        +collectOwnerOptions(cards) Option[]
+    }
+
+    class OwnerLane {
+        +string owner
+        +string ownerName
+        +WbsNode[] cards
+        +number overdueCount
+    }
+
+    BoardUtil ..> BoardFilter : 消费
+    BoardUtil ..> OwnerLane : 产出
+    BoardUtil ..> WbsNode : 过滤
+
+    %% ═══ B11 新增：图表配色 ═══
+    class ChartPalette {
+        <<module · theme/chartPalette.ts>>
+        +string[] brand
+        +HealthColors health
+        +string axis
+        +string grid
+        +getChartPalette(mode) ChartPalette
+        +useChartPalette() ChartPalette
+    }
+    note for ChartPalette "全部真 hex；SVG 不吃 var()/color-mix()<br/>图表层禁 import tokens / alphaOf"
+
+    %% ═══ 服务端 ═══
+    class BoardService {
+        <<server/services/board.service.js>>
+        +ensureBoardConfig(db, projectId) BoardConfig
+        +getBoard(db, projectId) BoardView
+        +moveTask(db, req, nodeId, status, order) BoardView
+        +updateBoardConfig(db, req, projectId, wipLimits) BoardConfig
+    }
+    note for BoardService "B11 仅改 ensureBoardConfig：<br/>列快照与 enums.BOARD_COLUMNS 不一致时自愈<br/>其余三个方法签名与行为零改动"
+
+    class WorkbenchService {
+        <<server/services/workbench.service.js>>
+        +listMyTasks(db, me) WbsNode[]
+        +countOverdue(tasks) number
+        +listMyApprovals(db, me) Review[]
+        +listReportReminders(db, me) ReportReminder[]
+    }
+    note for WorkbenchService "B11 仅 listMyTasks 追加 projectName 字段"
+
+    BoardService ..> BoardView : 返回
+    BoardService ..> BoardConfig : 自愈
+    WorkbenchService ..> WbsNode : 返回

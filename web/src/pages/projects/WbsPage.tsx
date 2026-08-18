@@ -31,7 +31,7 @@ import {
   UserAvatar,
 } from '@/components/common';
 import { ReportFormModal } from '@/components/report/ReportFormModal';
-import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules } from '@/types/wbs';
+import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules, Priority } from '@/types/wbs';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { useFlowStore } from '@/stores/flowStore';
@@ -43,11 +43,13 @@ import {
   GRANULARITY_LIMIT,
   TASK_STATUSES,
   WBS_NODE_TYPE_LABEL,
+  PRIORITY_OPTIONS,
+  DEFAULT_PRIORITY,
 } from '@/config/enums';
 import { tokens, toneColor, progressToneOf } from '@/theme/tokens';
 import { flattenTree, rollupProgress } from '@/utils/wbs';
 import { fmtDays } from '@/utils/format';
-import { dayjs, fmtDate, DATE_FMT } from '@/utils/date';
+import { dayjs, fmtDate, DATE_FMT, isOverdue, today, diffDays } from '@/utils/date';
 import { reportCountByNode, nodeReportsOf } from '@/utils/reportAgg';
 import { memberNameOf } from '@/utils/member';
 
@@ -62,6 +64,8 @@ interface NodeForm {
   milestoneId: string;
   /** 截止日期 YYYY-MM-DD（用户反馈③ · 硬拦截） */
   dueDate: string;
+  /** 任务优先级（B14-块1）：默认 P2 */
+  priority: Priority;
 }
 
 const EMPTY_FORM: NodeForm = {
@@ -73,6 +77,7 @@ const EMPTY_FORM: NodeForm = {
   status: '待办',
   milestoneId: '',
   dueDate: '',
+  priority: DEFAULT_PRIORITY,
 };
 
 /**
@@ -206,6 +211,8 @@ export function WbsPage(): JSX.Element {
       // 用户反馈②：子任务默认继承上级绑定的里程碑与截止日期
       milestoneId: parent?.milestoneId ?? '',
       dueDate: parent?.dueDate ?? '',
+      // B14-块1：新节点默认 P2（服务端与 EMPTY_FORM 兜底一致）
+      priority: DEFAULT_PRIORITY,
     });
     // 用户反馈④a：继承自上二级碑则锁定，避免误改
     setLockMilestone(Boolean(parent?.milestoneId));
@@ -225,6 +232,7 @@ export function WbsPage(): JSX.Element {
       status: node.status,
       milestoneId: node.milestoneId ?? '',
       dueDate: node.dueDate ?? '',
+      priority: node.priority,
     });
     setLockMilestone(false);
     // R5-P0-2（AC-2.8）：编辑是合法的「移动节点」路径，上级保持可改
@@ -281,6 +289,8 @@ export function WbsPage(): JSX.Element {
       // 任务 / 子任务均可挂里程碑
       milestoneId: form.milestoneId || null,
       dueDate: form.dueDate || undefined,
+      // B14-块1：优先级随表单上报（缺省已在 EMPTY_FORM / openCreate 兜底为 P2）
+      priority: form.priority,
     };
     try {
       if (editingId) {
@@ -314,6 +324,9 @@ export function WbsPage(): JSX.Element {
     const boundMs = milestoneOf(node.milestoneId);
     const canAddChild = allowedChildTypes(node, rules).length > 0;
     const logCount = reportCounts.get(node.id) ?? 0;
+    /* B16：逾期（未完成且超截止日）红标 / 临期（未完成且 3 天内）黄标，口径同工作台 utils/date；已完成不标 */
+    const overdue = node.status !== '完成' && isOverdue(node.dueDate);
+    const dueSoon = node.status !== '完成' && !overdue && diffDays(today(), node.dueDate) <= 3;
     return (
       <TreeItem
         key={node.id}
@@ -347,9 +360,17 @@ export function WbsPage(): JSX.Element {
                 sx={{ height: 20, flexShrink: 0 }}
               />
             )}
-            {/* R3-3：所有节点行内显示截止日期（无 dueDate 显示「截止 —」） */}
-            <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
+            {/* R3-3：所有节点行内显示截止日期（无 dueDate 显示「截止 —」）；B16：逾期红 / 临期黄标记 */}
+            <Typography
+              variant="caption"
+              sx={{
+                color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
+                fontWeight: overdue || dueSoon ? 600 : 400,
+                flexShrink: 0,
+              }}
+            >
               截止 {fmtDate(node.dueDate)}
+              {overdue ? ' · 已逾期' : dueSoon ? ' · 临期' : ''}
             </Typography>
             {/* R3-5：日志聚合徽标（n=0 弱化样式，仍可点击查看空态） */}
             <Chip
@@ -394,12 +415,19 @@ export function WbsPage(): JSX.Element {
                 <ProgressBar value={progress} height={5} showLabel={false} tone={progressToneOf(node.status)} />
               </Box>
             </Tooltip>
-            {/* 估算列保持叶子条件（父节点无估算展示，120px 进度条保证行对齐） */}
-            {isLeaf && (
-              <Typography variant="caption" sx={{ color: 'text.secondary', width: 56, flexShrink: 0 }}>
-                {fmtDays(node.estimateDays)}
+            {/* B9（R5）：全节点「估 x.x · 实 x.x 人日」只读（前端零聚合，直接用出参
+                estimateDays/effortHours/effortChildCount；父=Σ 子由服务端 decorateEffort 保证） */}
+            <Tooltip
+              title={isLeaf ? '估算 vs 累计实际工时（人日）' : `实为 Σ ${node.effortChildCount} 个子任务（由工作日志累计）`}
+              arrow
+            >
+              <Typography
+                variant="caption"
+                sx={{ color: 'text.secondary', width: 116, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}
+              >
+                估 {fmtDays(node.estimateDays)} · 实 {fmtDays(node.effortHours)}
               </Typography>
-            )}
+            </Tooltip>
             {node.ownerName ? (
               <UserAvatar name={node.ownerName} size={24} />
             ) : (
@@ -592,6 +620,34 @@ export function WbsPage(): JSX.Element {
           fullWidth
           InputProps={{ inputProps: { min: 0 } }}
         />
+        {/* B8（R1）：累计实际工时（人日）只读展示 —— 不进 form state；
+            唯一写入方 = 工作日志 submit / 已提交日志编辑（WBS 不再支持填写工时） */}
+        <Stack spacing={0.5}>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+            累计实际工时（人日）：{editingNode ? editingNode.effortHours : 0}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {editingNode
+              ? editingNode.children.length > 0
+                ? `由 ${editingNode.effortChildCount} 个子任务汇总（只读，由工作日志累计）`
+                : '由工作日志累计（只读）'
+              : '0（提交工作日志后累计）'}
+          </Typography>
+        </Stack>
+        <TextField
+          select
+          label="优先级"
+          value={form.priority}
+          onChange={(e) => setForm({ ...form, priority: e.target.value as Priority })}
+          fullWidth
+          helperText="P0 最高（阻塞交付立即处理）→ P3 最低（有空再做）；默认 P2"
+        >
+          {PRIORITY_OPTIONS.map((o) => (
+            <MenuItem key={o.value} value={o.value}>
+              {o.label}
+            </MenuItem>
+          ))}
+        </TextField>
         <TextField
           select
           label="状态"

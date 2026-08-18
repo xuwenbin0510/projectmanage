@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
+  CircularProgress,
   Stack,
+  TableSortLabel,
+  TextField,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -27,9 +31,11 @@ import { useProjectStore } from '@/stores/projectStore';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
-import { REPORT_SECTION_TITLE } from '@/config/enums';
-import { fmtDate } from '@/utils/date';
+import { api } from '@/api/client';
+import { REPORT_SECTION_TITLE, REJECT_REASON_MAX } from '@/config/enums';
+import { fmtDateTime } from '@/utils/date';
 import { memberNameOf } from '@/utils/member';
+import { tokens } from '@/theme/tokens';
 
 /**
  * 结构化周报：① 完成 ② 计划 ③ 风险 ④ 协调资源（P0-08）
@@ -58,6 +64,83 @@ export function ReportsPage(): JSX.Element {
   const [prefillLockNodeId, setPrefillLockNodeId] = useState<string | null>(null);
   /** R3-5 接收端：避免同一路由 state（prefillNodeId）重复触发新建弹窗 */
   const prefilledRef = useRef<boolean>(false);
+
+  /* ── B14-块2：周报轻量闭环（确认 / 打回）────────────────────────── */
+  /**
+   * 待「我」确认的周报 id 集合：来自 `listPendingConfirmation()`（服务端按
+   * `resolveConfirmers` 权威判定过滤，**绝不**前端自行推断确认人）。
+   * 该接口跨项目聚合，故本页用 `id` 集合与当前项目列表取交集即可。
+   */
+  const [confirmableIds, setConfirmableIds] = useState<Set<string>>(new Set());
+  const [confirmableLoading, setConfirmableLoading] = useState<boolean>(false);
+  /** 打回原因弹窗目标（null = 关闭） */
+  const [rejectTarget, setRejectTarget] = useState<Report | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('');
+  /** 正在执行确认 / 打回动作的周报 id（禁重复点击） */
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const reloadConfirmable = useCallback((): void => {
+    setConfirmableLoading(true);
+    void api
+      .listPendingConfirmation()
+      .then((list) => setConfirmableIds(new Set(list.map((p) => p.id))))
+      .catch(() => setConfirmableIds(new Set()))
+      .finally(() => setConfirmableLoading(false));
+  }, []);
+
+  useEffect(() => {
+    void reloadConfirmable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadConfirmable]);
+
+  /** 当前周报是否可被「我」确认（已提交 + 在服务端确认人集合内 + 项目未归档） */
+  const isConfirmable = (r: Report): boolean =>
+    !archived && r.status === '已提交' && confirmableIds.has(r.id);
+
+  const handleConfirm = async (r: Report): Promise<void> => {
+    setBusyId(r.id);
+    try {
+      await api.confirmReport(id, r.id);
+      toast.success('已确认该周报');
+      await Promise.all([fetchReports(id), Promise.resolve(reloadConfirmable())]);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openReject = (r: Report): void => {
+    setRejectReason('');
+    setRejectTarget(r);
+  };
+  const closeReject = (): void => {
+    setRejectReason('');
+    setRejectTarget(null);
+  };
+  const handleReject = async (): Promise<void> => {
+    if (!rejectTarget) return;
+    const reason = rejectReason.trim();
+    if (!reason) {
+      toast.warning('请填写打回原因');
+      return;
+    }
+    if (reason.length > REJECT_REASON_MAX) {
+      toast.warning(`打回原因不超过 ${REJECT_REASON_MAX} 字`);
+      return;
+    }
+    setBusyId(rejectTarget.id);
+    try {
+      await api.rejectReport(id, rejectTarget.id, reason);
+      toast.success('已打回该周报');
+      closeReject();
+      await Promise.all([fetchReports(id), Promise.resolve(reloadConfirmable())]);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   useEffect(() => {
     void fetchReports(id).catch((e: unknown) => toast.error(e));
@@ -112,6 +195,28 @@ export function ReportsPage(): JSX.Element {
     setPrefillLockNodeId(null);
   };
 
+  /** B5-R3：页面级排序状态（默认填报时间倒序；点击表头切换升/降，不改共享 DataTable） */
+  const [sortState, setSortState] = useState<{ key: 'createdAt'; order: 'asc' | 'desc' }>({
+    key: 'createdAt',
+    order: 'desc',
+  });
+
+  const toggleSort = (): void => {
+    setSortState((prev) => ({ key: 'createdAt', order: prev.order === 'desc' ? 'asc' : 'desc' }));
+  };
+
+  /** B5-R3：渲染前按排序状态对行排序（字符串比较，空值兜底排后） */
+  const sortedReports = useMemo(() => {
+    const rows = [...reports];
+    rows.sort((a, b) => {
+      const av = a.createdAt || '';
+      const bv = b.createdAt || '';
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return sortState.order === 'desc' ? -cmp : cmp;
+    });
+    return rows;
+  }, [reports, sortState]);
+
   const columns: Array<Column<Report>> = [
     { key: 'week', label: '周次', width: 110, render: (r) => <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{r.week}</Typography> },
     { key: 'status', label: '状态', width: 90, render: (r) => <StatusChip status={r.status} /> },
@@ -126,7 +231,17 @@ export function ReportsPage(): JSX.Element {
       render: (r) => <Chip size="small" label={r.tasks.filter((t) => t.selected).length} sx={{ height: 20 }} />,
     },
     { key: 'risks', label: '风险项', width: 80, align: 'center', render: (r) => <Chip size="small" label={r.risks.length} color={r.risks.length ? 'warning' : 'default'} sx={{ height: 20 }} /> },
-    { key: 'submittedAt', label: '提交时间', width: 150, render: (r) => <Typography variant="caption" color="text.secondary">{r.submittedAt ? fmtDate(r.submittedAt) : '—'}</Typography> },
+    /* B5-R3：新增「填报时间」列（createdAt，YYYY-MM-DD HH:mm，空值兜底 —，title 放完整时间） */
+    {
+      key: 'createdAt',
+      label: '填报时间',
+      width: 150,
+      render: (r) => (
+        <Typography variant="caption" color="text.secondary" title={r.createdAt || undefined} sx={{ whiteSpace: 'nowrap' }}>
+          {fmtDateTime(r.createdAt)}
+        </Typography>
+      ),
+    },
     {
       key: 'actions',
       label: '操作',
@@ -140,10 +255,41 @@ export function ReportsPage(): JSX.Element {
           <Button size="small" color="primary" onClick={() => openEditReport(r)}>
             编辑
           </Button>
+          {isConfirmable(r) && (
+            <>
+              <Button
+                size="small"
+                color="success"
+                disabled={busyId === r.id}
+                onClick={() => void handleConfirm(r)}
+              >
+                {busyId === r.id ? <CircularProgress size={14} /> : '确认'}
+              </Button>
+              <Button
+                size="small"
+                color="error"
+                disabled={busyId === r.id}
+                onClick={() => openReject(r)}
+              >
+                打回
+              </Button>
+            </>
+          )}
         </Stack>
       ),
     },
   ];
+
+  /** B5-R4：详情分段标题（品牌青左侧竖条装饰 + 统一字号） */
+  const SectionTitle = (props: { title: string; count?: number }): JSX.Element => (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
+      <Box sx={{ width: 3, height: 14, borderRadius: 1, bgcolor: tokens.brand.accent, flexShrink: 0 }} />
+      <Typography variant="subtitle2">
+        {props.title}
+        {props.count !== undefined ? `（${props.count}）` : ''}
+      </Typography>
+    </Stack>
+  );
 
   return (
     <Stack spacing={2.5}>
@@ -170,7 +316,18 @@ export function ReportsPage(): JSX.Element {
         ) : reports.length === 0 ? (
           <EmptyState title="暂无工作日志" description="点击右上角「新建日志」记录本周进展" />
         ) : (
-          <DataTable<Report> columns={columns} rows={reports} rowKey={(r) => r.id} />
+          <>
+            {/* B5-R3：页面级排序控制（默认填报时间倒序，点击切换升/降 + 箭头） */}
+            <Stack direction="row" alignItems="center" justifyContent="flex-end" sx={{ px: 2, pt: 1.25 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                排序：
+              </Typography>
+              <TableSortLabel active direction={sortState.order} onClick={toggleSort} sx={{ fontSize: 13 }}>
+                填报时间
+              </TableSortLabel>
+            </Stack>
+            <DataTable<Report> columns={columns} rows={sortedReports} rowKey={(r) => r.id} />
+          </>
         )}
       </SectionCard>
 
@@ -199,29 +356,49 @@ export function ReportsPage(): JSX.Element {
       >
         {detail && (
           <Stack spacing={1.5}>
-            <Stack direction="row" spacing={1} alignItems="center">
+            {/* B5-R4：顶部 meta 行 = 状态 Chip + 填报人 + 填报时间（caption 次要色） */}
+            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexWrap: 'wrap' }}>
               <StatusChip status={detail.status} />
               <Typography variant="caption" color="text.secondary">
                 填报人：{detail.authorName}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                提交：{detail.submittedAt ? fmtDate(detail.submittedAt) : '—'}
+                填报：{fmtDateTime(detail.createdAt)}
               </Typography>
             </Stack>
+            {/* B14-块2：闭环状态展示（已确认 / 已打回原因） */}
+            {detail.status === '已确认' && (
+              <Alert severity="success" variant="outlined" sx={{ fontSize: 13 }}>
+                已由 {detail.confirmedBy ? memberNameOf(members, detail.confirmedBy) : '—'} 确认
+                {detail.confirmedAt ? `（${fmtDateTime(detail.confirmedAt)}）` : ''}
+              </Alert>
+            )}
+            {detail.status === '草稿' && detail.rejectReason && (
+              <Alert severity="warning" variant="outlined" sx={{ fontSize: 13 }}>
+                <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                  打回原因：
+                </Typography>
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mt: 0.25 }}>
+                  {detail.rejectReason}
+                </Typography>
+              </Alert>
+            )}
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.done}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.done} />
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
                 {detail.doneNote || '—'}
               </Typography>
             </Box>
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.plan}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.plan} />
               {detail.planItems.length ? (
-                detail.planItems.map((p, i) => (
-                  <Typography key={i} variant="body2">
-                    · {p}
-                  </Typography>
-                ))
+                <Stack spacing={0.5}>
+                  {detail.planItems.map((p, i) => (
+                    <Typography key={i} variant="body2">
+                      · {p}
+                    </Typography>
+                  ))}
+                </Stack>
               ) : (
                 <Typography variant="caption" color="text.secondary">
                   —
@@ -229,20 +406,23 @@ export function ReportsPage(): JSX.Element {
               )}
             </Box>
             <Box>
-              <Typography variant="subtitle2">
-                关联任务（{detail.tasks.filter((t) => t.selected).length}）
-              </Typography>
+              <SectionTitle
+                title="关联任务"
+                count={detail.tasks.filter((t) => t.selected).length}
+              />
               {detail.tasks.filter((t) => t.selected).length ? (
-                detail.tasks
-                  .filter((t) => t.selected)
-                  .map((t) => (
-                    <Stack key={t.nodeId} direction="row" spacing={1} alignItems="center">
-                      <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>
-                        {t.nodeName}
-                      </Typography>
-                      <Chip size="small" label={`${t.progressBefore}% → ${t.progressAfter}%`} />
-                    </Stack>
-                  ))
+                <Stack spacing={0.75}>
+                  {detail.tasks
+                    .filter((t) => t.selected)
+                    .map((t) => (
+                      <Stack key={t.nodeId} direction="row" spacing={1} alignItems="center">
+                        <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }} noWrap>
+                          {t.nodeName}
+                        </Typography>
+                        <Chip size="small" label={`${t.progressBefore}% → ${t.progressAfter}%`} sx={{ height: 20 }} />
+                      </Stack>
+                    ))}
+                </Stack>
               ) : (
                 <Typography variant="caption" color="text.secondary">
                   —
@@ -250,14 +430,19 @@ export function ReportsPage(): JSX.Element {
               )}
             </Box>
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.risks}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.risks} />
               {detail.risks.length ? (
-                detail.risks.map((rk) => (
-                  <Typography key={rk.id} variant="body2">
-                    {/* R3-8：责任人显示成员姓名（解析不到显示 openId 原文） */}
-                    · {rk.description}（责任人：{memberNameOf(members, rk.owner)}，截止：{rk.dueDate}）
-                  </Typography>
-                ))
+                <Stack spacing={1}>
+                  {detail.risks.map((rk) => (
+                    <Stack key={rk.id} direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+                      <Typography variant="body2" sx={{ flex: '1 1 220px', minWidth: 0 }}>
+                        · {rk.description}
+                      </Typography>
+                      <Chip size="small" variant="outlined" label={`责任人：${memberNameOf(members, rk.owner)}`} sx={{ height: 20 }} />
+                      <Chip size="small" variant="outlined" label={`截止：${rk.dueDate}`} sx={{ height: 20 }} />
+                    </Stack>
+                  ))}
+                </Stack>
               ) : (
                 <Typography variant="caption" color="text.secondary">
                   —
@@ -265,11 +450,48 @@ export function ReportsPage(): JSX.Element {
               )}
             </Box>
             <Box>
-              <Typography variant="subtitle2">{REPORT_SECTION_TITLE.resource}</Typography>
+              <SectionTitle title={REPORT_SECTION_TITLE.resource} />
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
                 {detail.resourceNote || '—'}
               </Typography>
             </Box>
+          </Stack>
+        )}
+      </FormDialog>
+
+      {/* B14-块2：打回原因必填弹窗 */}
+      <FormDialog
+        open={Boolean(rejectTarget)}
+        title="打回周报"
+        submitText="确认打回"
+        disabled={!rejectReason.trim() || rejectReason.trim().length > REJECT_REASON_MAX || busyId === rejectTarget?.id}
+        maxWidth="sm"
+        onClose={closeReject}
+        onSubmit={() => void handleReject()}
+      >
+        {rejectTarget && (
+          <Stack spacing={1.5}>
+            <Alert severity="info" variant="outlined" sx={{ fontSize: 13 }}>
+              打回后该周报状态回退为「草稿」，作者需重新提交。请填写明确的打回原因（必填）。
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              周次：{rejectTarget.week}　填报人：{rejectTarget.authorName}
+            </Typography>
+            <TextField
+              label={`打回原因（必填，≤${REJECT_REASON_MAX}字）`}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              fullWidth
+              multiline
+              minRows={3}
+              autoFocus
+              error={rejectReason.trim().length > REJECT_REASON_MAX}
+              helperText={
+                rejectReason.trim().length > REJECT_REASON_MAX
+                  ? `已超过 ${REJECT_REASON_MAX} 字上限`
+                  : `${rejectReason.trim().length}/${REJECT_REASON_MAX}`
+              }
+            />
           </Stack>
         )}
       </FormDialog>

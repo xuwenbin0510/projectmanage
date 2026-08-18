@@ -1,39 +1,571 @@
-import { Box, Stack, Typography } from '@mui/material';
-import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+/**
+ * 全局总览（B12 · T05）
+ *
+ * 复用 `/metrics` 路由：顶部 4 张指标卡 + 筛选栏（分类 / 状态 / 健康度 /
+ * 关键字 / 范围开关）+ 图表区（7 张：状态环 DonutChart / 健康环 HealthDonut /
+ * 逾期 OverdueBarChart / 负责人负荷 OwnerLoadBarChart / 优先级 CategoryBarChart /
+ * 状态 CategoryBarChart / 逾期时长 CategoryBarChart）+ 项目明细表（DataTable），
+ * 行点击钻取到 B11 单项目仪表盘，健康/状态色段下钻到同页筛选，负责人行
+ * 下钻到 OwnerLoadDrawer（P1-6）。
+ *
+ * 全部数据由 `useDashboardOverview` 一次性从 `GET /api/dashboard/overview`
+ * 拉取（服务端聚合，前端只展示），避免 B11 式前端聚合在多项目量级下漂移。
+ *
+ * ⚠ 范围（scope）语义（SK-B12-7）：
+ *  - `canSeeAll`（admin / pmo / management）：可切「公司全量 all」↔「我参与的 mine」；
+ *  - 其余角色：scope 恒为 `mine`（服务端强制降级，P1-9 不报错），前端用 `onlyMine`
+ *    在「我参与的」与「我负责的（PM）」之间细分。
+ *
+ * @prd B12
+ */
 
-import { PageHeader, SectionCard, StatCard } from '@/components/common';
+import { useEffect, useState } from 'react';
+import {
+  Box,
+  Button,
+  FormControlLabel,
+  InputAdornment,
+  MenuItem,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
+import AssignmentLateOutlinedIcon from '@mui/icons-material/AssignmentLateOutlined';
+
+import {
+  DataTable,
+  ErrorState,
+  HealthDot,
+  PageHeader,
+  ProgressBar,
+  SectionCard,
+  StatCard,
+  StatusChip,
+} from '@/components/common';
+import type { Column } from '@/components/common';
+import {
+  CategoryBarChart,
+  DistributionTaskDrawer,
+  DonutChart,
+  HealthDonut,
+  OverdueBarChart,
+  OwnerLoadBarChart,
+  OwnerLoadDrawer,
+  OverdueTaskDrawer,
+} from '@/components/dashboard';
+import type { CategoryBarRow, DonutSegment } from '@/components/dashboard';
+import { useDashboardOverview, useDebounced } from '@/hooks';
+import { useNavigate } from 'react-router-dom';
+import { ROUTES } from '@/config/routes';
+import { useAuthStore } from '@/stores/authStore';
+import {
+  HEALTH_LABEL,
+  PRIORITIES,
+  PRIORITY_OPTIONS,
+  PROJECT_TYPE_SHORT,
+  PROJECT_TYPES,
+  TASK_STATUSES,
+} from '@/config/enums';
+import { fmtDate } from '@/utils/date';
+import { hexAlpha, useChartPalette } from '@/theme/chartPalette';
+import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
+import type { DashboardTasksQuery, OverdueBucket, OwnerLoadRow, StatusDonutSegment } from '@/types/dashboard';
+import type { Priority, TaskStatus } from '@/types/wbs';
+import type { SemanticTone } from '@/theme/tokens';
+
+/** 决策 ⑥：统计基线恒为「在管三态」，其余状态入参会被服务端丢弃（避免误导） */
+const MANAGED_STATUSES: ProjectStatus[] = ['已批准', '进行中', '挂起'];
+const HEALTH_OPTIONS: Health[] = ['green', 'yellow', 'red'];
+
+/** 周报填报率阈值色调：100% 成功 / ≥60% 警示 / 其余危险 */
+function rateTone(rate?: number): SemanticTone {
+  const r = rate ?? 0;
+  if (r >= 100) return 'success';
+  if (r >= 60) return 'warning';
+  return 'danger';
+}
+
+/** B18：逾期时长图 key（days1to7/days8to30/daysOver30）→ 接口档位 / 抽屉标题 */
+const DURATION_KEY_TO_BUCKET: Record<string, OverdueBucket> = {
+  days1to7: '1to7',
+  days8to30: '8to30',
+  daysOver30: 'over30',
+};
+const DURATION_TITLE: Record<string, string> = {
+  days1to7: '逾期 1–7 天任务明细',
+  days8to30: '逾期 8–30 天任务明细',
+  daysOver30: '逾期 >30 天任务明细',
+};
+
+/* ── 项目明细表列（模块级常量，避免每次渲染重建） ───────────── */
+const projectColumns: Array<Column<ProjectListItem>> = [
+  {
+    key: 'name',
+    label: '项目',
+    render: (r) => (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+        <HealthDot health={r.health} />
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
+            {r.name}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {r.code} · {r.customer || '内部'}
+          </Typography>
+        </Box>
+      </Stack>
+    ),
+  },
+  {
+    key: 'type',
+    label: '分类',
+    width: 78,
+    render: (r) => (
+      <Typography sx={{ fontSize: 13 }} variant="caption">
+        {PROJECT_TYPE_SHORT[r.type]}
+      </Typography>
+    ),
+  },
+  { key: 'status', label: '状态', width: 92, render: (r) => <StatusChip status={r.status} /> },
+  {
+    key: 'nextMilestone',
+    label: '下一里程碑 / 门',
+    width: 190,
+    hideOnMobile: true,
+    render: (r) => (
+      <Box>
+        <Typography sx={{ fontSize: 13 }} noWrap>
+          {r.nextMilestoneCode ? `${r.nextMilestoneCode} ${r.nextMilestoneName}` : '全部里程碑已达成'}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          已过 {r.gatePassed}/{r.gateTotal} 道门
+          {r.currentGateCode ? ` · ${r.currentGateCode} ${r.currentGateStatus}` : ''}
+        </Typography>
+      </Box>
+    ),
+  },
+  {
+    key: 'progress',
+    label: '进度',
+    width: 140,
+    hideOnMobile: true,
+    render: (r) => <ProgressBar value={r.progress} tone={r.health === 'red' ? 'danger' : 'brand'} />,
+  },
+  {
+    key: 'milestone',
+    label: '里程碑',
+    width: 130,
+    hideOnMobile: true,
+    render: (r) => (
+      <Box>
+        <Typography sx={{ fontSize: 13 }}>
+          {r.milestoneDone} / {r.milestoneTotal}
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          下一个 {fmtDate(r.nextMilestoneDate)}
+        </Typography>
+      </Box>
+    ),
+  },
+  { key: 'pmName', label: 'PM', width: 84, hideOnMobile: true },
+];
 
 /**
- * 度量看板（P1 二期规划占位）
- * @prd P0-13（一期仅展示占位）
+ * 全局总览页（多项目组合视图）。
+ *
+ * ```tsx
+ * <MetricsPage />
+ * ```
  */
 export function MetricsPage(): JSX.Element {
+  const navigate = useNavigate();
+  const me = useAuthStore((s) => s.user);
+  const {
+    data,
+    loading,
+    error,
+    query,
+    scope,
+    canSeeAll,
+    refreshedAt,
+    setQuery,
+    setScope,
+    refresh,
+  } = useDashboardOverview();
+
+  const [keyword, setKeyword] = useState<string>(query.keyword ?? '');
+  const debounced = useDebounced(keyword, 300);
+  useEffect(() => {
+    setQuery({ keyword: debounced });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debounced]);
+
+  const [drawerRow, setDrawerRow] = useState<OwnerLoadRow | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const openOwner = (row: OwnerLoadRow): void => {
+    setDrawerRow(row);
+    setDrawerOpen(true);
+  };
+
+  /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含） */
+  const [ovDrawer, setOvDrawer] = useState<{
+    open: boolean;
+    projectId: string;
+    projectName: string;
+  }>({ open: false, projectId: '', projectName: '' });
+
+  const openOverdue = (projectId: string): void => {
+    const name = data?.overdue?.find((o) => o.projectId === projectId)?.projectName ?? '';
+    setOvDrawer({ open: true, projectId, projectName: name });
+  };
+
+  /* B18：分布图点档下钻抽屉（受控组件，query 存 state 保证身份稳定） */
+  const [distDrawer, setDistDrawer] = useState<{
+    open: boolean;
+    title: string;
+    query: DashboardTasksQuery;
+  }>({ open: false, title: '', query: {} });
+
+  const openDist = (
+    title: string,
+    dim: Partial<Pick<DashboardTasksQuery, 'priority' | 'taskStatus' | 'overdueBucket'>>,
+  ): void => {
+    const base: DashboardTasksQuery = {
+      scope,                              // 有效 scope（服务端降级后）
+      type: query.type ?? '',
+      status: query.status ?? '',
+      health: query.health ?? '',
+      keyword: query.keyword ?? '',
+      onlyMine: query.onlyMine ?? false,
+    };
+    setDistDrawer({ open: true, title, query: { ...base, ...dim } });
+  };
+
+  const stats = data?.stats;
+  const projects = data?.projects;
+
+  /* 状态环：在管三态计数 → DonutChart 段（颜色按品牌色阶自动轮转） */
+  const statusSegments: DonutSegment[] = (data?.statusDonut.segments ?? []).map((s: StatusDonutSegment) => ({
+    id: s.status,
+    label: s.status,
+    value: s.value,
+  }));
+
+  /* B17：新增 3 张分布图的 rows（局部取色，真 hex + hexAlpha 预乘半透明） */
+  const palette = useChartPalette();
+
+  /* 优先级 4 档：P0 红 / P1 黄 / P2 品牌蓝 / P3 灰（同 B14 工作台优先级环） */
+  const priorityRows: CategoryBarRow[] = PRIORITIES.map((p) => ({
+    key: p,
+    label: PRIORITY_OPTIONS.find((o) => o.value === p)?.label ?? p, // 'P0 最高' 等
+    value: data?.priorityDist[p] ?? 0,
+    color:
+      p === 'P0'
+        ? palette.health.red
+        : p === 'P1'
+          ? palette.health.yellow
+          : p === 'P2'
+            ? palette.brandMain
+            : palette.track,
+  }));
+
+  /* 状态 5 档：待办灰 / 进行中品牌蓝 / 待评审黄 / 阻塞红 / 完成绿（主理人拍板 #4） */
+  const statusRows: CategoryBarRow[] = TASK_STATUSES.map((s) => ({
+    key: s,
+    label: s,
+    value: data?.statusDist[s] ?? 0,
+    color:
+      s === '待办'
+        ? palette.track
+        : s === '进行中'
+          ? palette.brand[1]
+          : s === '待评审'
+            ? palette.health.yellow
+            : s === '阻塞'
+              ? palette.health.red
+              : palette.health.green, // 完成
+  }));
+
+  /* 逾期时长 3 段：红系递进（浅 → 中 → 深） */
+  const durationRows: CategoryBarRow[] = [
+    { key: 'days1to7', label: '逾期 1–7 天', value: data?.overdueDuration.days1to7 ?? 0, color: hexAlpha(palette.health.red, 0.5) },
+    { key: 'days8to30', label: '逾期 8–30 天', value: data?.overdueDuration.days8to30 ?? 0, color: hexAlpha(palette.health.red, 0.75) },
+    { key: 'daysOver30', label: '逾期 >30 天', value: data?.overdueDuration.daysOver30 ?? 0, color: palette.health.red },
+  ];
+
+  const scopeLabel = canSeeAll
+    ? scope === 'all'
+      ? '公司全量'
+      : '我参与的'
+    : query.onlyMine
+      ? '我负责的（PM）'
+      : '我参与的';
+
   return (
-    <Stack spacing={2.5}>
+    <Box>
       <PageHeader
-        title="度量看板"
-        subtitle="P1 二期能力：进度偏差、缺陷密度、评审通过率、资源负荷等多维度量（本期为占位）"
+        title="全局总览"
+        subtitle={`${scopeLabel} · ${refreshedAt ? `更新于 ${refreshedAt}` : '加载中…'}`}
+        actions={
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<RefreshIcon />}
+            onClick={refresh}
+            disabled={loading}
+          >
+            刷新
+          </Button>
+        }
       />
+
+      {/* ══ 筛选栏 ══ */}
+      <SectionCard sx={{ mb: 2 }}>
+        <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap alignItems="center">
+          <TextField
+            size="small"
+            placeholder="搜索项目名 / 编号 / 客户"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            sx={{ minWidth: 240, flex: '1 1 240px' }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+          />
+          <TextField
+            size="small"
+            select
+            label="分类"
+            value={query.type ?? ''}
+            onChange={(e) => setQuery({ type: e.target.value as ProjectType | '' })}
+            sx={{ minWidth: 132 }}
+          >
+            <MenuItem value="">全部分类</MenuItem>
+            {PROJECT_TYPES.map((t) => (
+              <MenuItem key={t} value={t}>
+                {PROJECT_TYPE_SHORT[t]}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            size="small"
+            select
+            label="状态"
+            value={query.status ?? ''}
+            onChange={(e) => setQuery({ status: e.target.value as ProjectStatus | '' })}
+            sx={{ minWidth: 132 }}
+          >
+            <MenuItem value="">在管三态</MenuItem>
+            {MANAGED_STATUSES.map((s) => (
+              <MenuItem key={s} value={s}>
+                {s}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            size="small"
+            select
+            label="健康度"
+            value={query.health ?? ''}
+            onChange={(e) => setQuery({ health: e.target.value as Health | '' })}
+            sx={{ minWidth: 124 }}
+          >
+            <MenuItem value="">全部</MenuItem>
+            {HEALTH_OPTIONS.map((h) => (
+              <MenuItem key={h} value={h}>
+                {HEALTH_LABEL[h]}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          {canSeeAll ? (
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={scope === 'all'}
+                  onChange={(e) => setScope(e.target.checked ? 'all' : 'mine')}
+                />
+              }
+              label={<Typography sx={{ fontSize: 13 }}>公司全量</Typography>}
+            />
+          ) : (
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={Boolean(query.onlyMine)}
+                  onChange={(e) => setQuery({ onlyMine: e.target.checked })}
+                />
+              }
+              label={<Typography sx={{ fontSize: 13 }}>只看我负责的</Typography>}
+            />
+          )}
+        </Stack>
+      </SectionCard>
+
+      {/* ══ 顶部四张指标卡 ══ */}
       <Box
         sx={{
           display: 'grid',
           gap: 2,
           gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+          mb: 2.5,
         }}
       >
-        <StatCard label="在管项目" value="—" tone="brand" hint="P1 接入后展示" icon={<InsightsOutlinedIcon />} />
-        <StatCard label="平均进度偏差" value="—" tone="warning" hint="P1 接入后展示" icon={<InsightsOutlinedIcon />} />
-        <StatCard label="评审通过率" value="—" tone="success" hint="P1 接入后展示" icon={<InsightsOutlinedIcon />} />
-        <StatCard label="逾期任务数" value="—" tone="danger" hint="P1 接入后展示" icon={<InsightsOutlinedIcon />} />
+        <StatCard
+          label="在管项目"
+          value={stats?.managedProjects ?? 0}
+          unit="个"
+          tone="brand"
+          hint={scopeLabel}
+          icon={<BusinessOutlinedIcon fontSize="small" />}
+        />
+        <StatCard
+          label="红灯项目"
+          value={stats?.redProjects ?? 0}
+          unit="个"
+          tone={(stats?.redProjects ?? 0) > 0 ? 'danger' : 'success'}
+          hint="健康度 = 红"
+          icon={<ErrorOutlineIcon fontSize="small" />}
+        />
+        <StatCard
+          label="逾期任务"
+          value={stats?.overdueTasks ?? 0}
+          unit="个"
+          tone={(stats?.overdueTasks ?? 0) > 0 ? 'danger' : 'success'}
+          hint="范围内未完成且超期"
+          icon={<ReportProblemOutlinedIcon fontSize="small" />}
+        />
+        <StatCard
+          label="本周周报填报率"
+          value={stats?.reportFillRate ?? 0}
+          unit="%"
+          tone={rateTone(stats?.reportFillRate)}
+          hint={`已填 ${stats?.reportFilled ?? 0} / 应填 ${stats?.reportDue ?? 0}`}
+          icon={<AssignmentLateOutlinedIcon fontSize="small" />}
+        />
       </Box>
-      <SectionCard title="趋势与明细">
-        <Stack alignItems="center" justifyContent="center" sx={{ py: 8, color: 'text.secondary' }}>
-          <InsightsOutlinedIcon sx={{ fontSize: 40, opacity: 0.5 }} />
-          <Typography variant="body2" sx={{ mt: 1 }}>
-            度量看板将在 P1 阶段接入实时数据，支持按项目 / 团队 / 时间维度下钻。
-          </Typography>
-        </Stack>
+
+      {/* ══ 图表区（7 张等高图表，md+ 两列、xl+ 三列） ══ */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2.5,
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
+          mb: 2.5,
+        }}
+      >
+        {/* ① 项目状态分布（不动） */}
+        <DonutChart
+          title="项目状态分布"
+          subtitle="口径：在管三态（已批准 / 进行中 / 挂起）"
+          segments={statusSegments}
+          centerValue={String(stats?.managedProjects ?? 0)}
+          centerLabel="在管项目"
+          loading={loading}
+          empty={(data?.statusDonut.total ?? 0) === 0}
+          emptyTitle="暂无在管项目"
+          emptyDescription="切换范围或调整筛选条件试试"
+          onSegmentClick={(seg) => {
+            const st = seg.id as ProjectStatus;
+            setQuery({ status: query.status === st ? '' : st });
+          }}
+        />
+        {/* ② 项目健康度分布（HealthDistBar → HealthDonut，props 等价） */}
+        <HealthDonut
+          dist={data?.health ?? { green: 0, yellow: 0, red: 0, total: 0 }}
+          loading={loading}
+          onDrill={(h) => setQuery({ health: query.health === h ? '' : h })}
+        />
+        {/* ③ 逾期 / 临期任务（不动） */}
+        <OverdueBarChart rows={data?.overdue ?? []} loading={loading} onDrill={openOverdue} />
+        {/* ④ 负责人负荷（不动） */}
+        <OwnerLoadBarChart rows={data?.ownerLoad ?? []} loading={loading} onDrill={openOwner} />
+        {/* ⑤ 任务优先级分布（B18：点档下钻到任务明细抽屉） */}
+        <CategoryBarChart
+          title="任务优先级分布"
+          subtitle={`共 ${data?.priorityDist.total ?? 0} 个未完成任务`}
+          rows={priorityRows}
+          loading={loading}
+          emptyTitle="暂无进行中的任务"
+          emptyDescription="没有需要按优先级排期的任务"
+          onDrill={(key) => openDist(`${key} 任务明细`, { priority: key as Priority })}
+        />
+        {/* ⑥ 任务状态分布（B18：点档下钻到任务明细抽屉） */}
+        <CategoryBarChart
+          title="任务状态分布"
+          subtitle={`共 ${data?.statusDist.total ?? 0} 个任务（含已完成）`}
+          rows={statusRows}
+          loading={loading}
+          emptyTitle="当前范围暂无任务"
+          onDrill={(key) => openDist(`${key}任务明细`, { taskStatus: key as TaskStatus })}
+        />
+        {/* ⑦ 逾期时长分段（B18：点档下钻到任务明细抽屉） */}
+        <CategoryBarChart
+          title="逾期时长分段"
+          subtitle={`共 ${data?.overdueDuration.total ?? 0} 个逾期任务`}
+          rows={durationRows}
+          loading={loading}
+          emptyTitle="太好了，没有逾期任务 🎉"
+          emptyDescription="所有任务都在计划节奏内"
+          onDrill={(key) =>
+            openDist(DURATION_TITLE[key] ?? `${key} 任务明细`, {
+              overdueBucket: DURATION_KEY_TO_BUCKET[key],
+            })
+          }
+        />
+      </Box>
+
+      {/* ══ 项目明细表（整行下钻到单项目仪表盘） ══ */}
+      <SectionCard flush>
+        {error ? (
+          <ErrorState error={error} onRetry={refresh} />
+        ) : (
+          <DataTable<ProjectListItem>
+            columns={projectColumns}
+            rows={projects?.items ?? []}
+            rowKey={(r) => r.id}
+            loading={loading}
+            emptyTitle="没有符合条件的项目"
+            emptyDescription="调整筛选条件，或切换到「我参与的」范围"
+            onRowClick={(r) => navigate(ROUTES.projectOverview(r.id))}
+            pagination={{
+              page: query.page ?? 1,
+              pageSize: query.pageSize ?? 20,
+              total: projects?.total ?? 0,
+              onChange: (page, pageSize) => setQuery({ page, pageSize }),
+            }}
+          />
+        )}
       </SectionCard>
-    </Stack>
+
+      <OwnerLoadDrawer open={drawerOpen} row={drawerRow} onClose={() => setDrawerOpen(false)} />
+      <OverdueTaskDrawer
+        open={ovDrawer.open}
+        projectId={ovDrawer.projectId}
+        projectName={ovDrawer.projectName}
+        currentUserId={me?.openId}
+        onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
+      />
+      {/* B18：分布图点档下钻任务明细抽屉（受控组件，query 存 state 保证身份稳定） */}
+      <DistributionTaskDrawer
+        open={distDrawer.open}
+        title={distDrawer.title}
+        query={distDrawer.query}
+        onClose={() => setDistDrawer((s) => ({ ...s, open: false }))}
+      />
+    </Box>
   );
 }

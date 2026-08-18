@@ -24,15 +24,17 @@ import { useProjectStore } from '@/stores/projectStore';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
-import { REPORT_SECTION_TITLE } from '@/config/enums';
+import { REPORT_SECTION_TITLE, WEEK_ACTUAL_DAYS_MAX } from '@/config/enums';
 import { dayjs, weekCode, shiftWeek } from '@/utils/date';
-import { tokens, progressToneOf } from '@/theme/tokens';
+import { tokens, alphaOf, progressToneOf } from '@/theme/tokens';
 import { memberNameOf } from '@/utils/member';
 import { flattenTree, parentIdSet } from '@/utils/wbs';
 
 interface TaskProgress {
   progressAfter: number;
   selected: boolean;
+  /** 本周实际工时（人日，B8 R2）：仅勾选叶子可填；编辑态=冲正入口（回显原值） */
+  actualDays: number;
 }
 
 /* ── R5 统一文案（设计 §8.2：逐字使用，禁止改写） ── */
@@ -72,9 +74,10 @@ export interface ReportFormModalProps {
   /** 编辑目标；null/undefined = 新建 */
   editingReport?: Report | null;
   /**
-   * R4-P0-4 新建态预关联锁定节点 id（WBS 入口传入）：
-   * checkbox `checked + disabled` + 锁图标 + tooltip「由「写日志」进入，该任务已锁定；可继续勾选其他任务」；
-   * 仅锁定关联关系，进度值输入保持可编辑；可额外勾选其他任务。
+   * B5-R1 锁定入口（WBS「写日志」/ ReportsPage 旧链接传入 lockNodeId）：
+   * 任务树全锁定——仅当前节点 `checked + disabled`，其余节点 checkbox 全 disabled；
+   * 仅当前关联任务（lockNodeId 对应节点）的「完成进度(%)」可编辑，其余任务进度输入只读；
+   * 当前节点进度初始值 = WBS 当前进度（系统带入，提交后按填写值回写该节点）。
    *
    * R5-P0-3（AC-3.8）：若该 id 指向的节点**已有子节点**，自动降级为不锁定
    * （见 `effectiveLockNodeId`），并在任务关联区 caption 提示，保护 ReportsPage 旧链接兼容路径。
@@ -137,6 +140,9 @@ export function ReportFormModal({
   );
   /** 锁定被降级（仅用于区域 caption 提示，D-2：不弹 toast） */
   const lockDowngraded = Boolean(lockNodeId) && !effectiveLockNodeId;
+  /** B5-R1：新建态 + 锁定入口（WBS「写日志」/ ReportsPage 旧链接）→ 任务树全锁定；
+   *  仅当前关联任务（effectiveLockNodeId）进度可编辑，其余进度输入只读 */
+  const lockMode = !editingReport && effectiveLockNodeId !== null;
 
   const {
     control,
@@ -169,7 +175,15 @@ export function ReportFormModal({
       setPlanItems(editingReport.planItems.length ? editingReport.planItems : ['']);
       setTaskMap(
         Object.fromEntries(
-          editingReport.tasks.map((t) => [t.nodeId, { progressAfter: t.progressAfter, selected: t.selected }]),
+          editingReport.tasks.map((t) => [
+            t.nodeId,
+            {
+              progressAfter: t.progressAfter,
+              selected: t.selected,
+              // B8（R2）：编辑态回显原日志行本周实际人日（冲正入口）
+              actualDays: t.weekActualDays ?? 0,
+            },
+          ]),
         ),
       );
     } else {
@@ -178,7 +192,15 @@ export function ReportFormModal({
       setPlanItems(['']);
       setTaskMap(
         Object.fromEntries(
-          latestNodes.map((n) => [n.id, { progressAfter: n.progress, selected: n.id === effectiveLockNodeId }]),
+          latestNodes.map((n) => [
+            n.id,
+            {
+              progressAfter: n.progress,
+              selected: n.id === effectiveLockNodeId,
+              // B8（R2）：新建态默认 0
+              actualDays: 0,
+            },
+          ]),
         ),
       );
     }
@@ -200,34 +222,80 @@ export function ReportFormModal({
     const latestParentIds = parentIdSet(latest);
     return latest.map<ReportTaskRef>((n) => {
       const isParent = latestParentIds.has(n.id);
+      const selected = isParent ? false : (taskMap[n.id]?.selected ?? false);
       return {
         nodeId: n.id,
         progressAfter: isParent ? n.progress : (taskMap[n.id]?.progressAfter ?? n.progress),
-        selected: isParent ? false : (taskMap[n.id]?.selected ?? false),
+        selected,
+        // B8（R2）：仅勾选叶子携带 actualDays（父 / 未勾选 undefined → 后端按 0 处理）
+        actualDays: isParent || !selected ? undefined : (taskMap[n.id]?.actualDays ?? 0),
       };
     });
   };
 
-  const assemble = (values: FormValues): ReportPayload => ({
-    projectId,
-    // R3-7：编辑态周次以原始报告为准（引擎不更新 week；也规避 disabled 字段丢失）
-    week: editingReport ? editingReport.week : values.week,
-    doneNote: values.doneNote,
-    planItems: planItems.map((p) => p.trim()).filter(Boolean),
-    resourceNote: values.resourceNote,
-    // ★ R3-7 关键：编辑态原样回传原始 report.tasks（selected / progressAfter 不变），
-    //   引擎按 payload.tasks 整体重建 report.tasks，否则关联会被清空
-    tasks: editingReport
-      ? editingReport.tasks.map<ReportTaskRef>((t) => ({
-          nodeId: t.nodeId,
-          progressAfter: t.progressAfter,
-          selected: t.selected,
-        }))
-      : buildNewTaskRefs(),
-    risks: values.risks,
-  });
+  const assemble = (values: FormValues): ReportPayload => {
+    // B8（R2）修复：编辑分支 = 冲正入口，父子判定与 buildNewTaskRefs 同源（latestNodesOf 重算，
+    // 避免与渲染 tree 时序漂移 —— R5-P0-3 约定）
+    const latestParentIds = parentIdSet(latestNodesOf());
+    return {
+      projectId,
+      // R3-7：编辑态周次以原始报告为准（引擎不更新 week；也规避 disabled 字段丢失）
+      week: editingReport ? editingReport.week : values.week,
+      doneNote: values.doneNote,
+      planItems: planItems.map((p) => p.trim()).filter(Boolean),
+      resourceNote: values.resourceNote,
+      // ★ R3-7 关键：编辑态原样回传原始 report.tasks（selected / progressAfter 不变），
+      //   引擎按 payload.tasks 整体重建 report.tasks，否则关联会被清空
+      tasks: editingReport
+        ? editingReport.tasks.map<ReportTaskRef>((t) => ({
+            nodeId: t.nodeId,
+            progressAfter: t.progressAfter,
+            selected: t.selected,
+            // ★ B8（R2）P0 修复：仅 selected=true 的勾选叶子行携带 actualDays（取表单编辑值=冲正入口）；
+            //   未勾选行与父节点行置 undefined（不携带）→ 后端 resolveTaskRefs 按 0 处理。
+            //   否则每行塞 0 会被「未勾选/父节点携带 actualDays → 400 E_VALIDATION」整体拒绝（R4 冲正入口不可用）
+            actualDays:
+              t.selected && !latestParentIds.has(t.nodeId)
+                ? (taskMap[t.nodeId]?.actualDays ?? t.weekActualDays ?? 0)
+                : undefined,
+          }))
+        : buildNewTaskRefs(),
+      risks: values.risks,
+    };
+  };
+
+  /**
+   * B8（R2）前端校验：提交/编辑时对本轮实际参与提交的「勾选叶子」行校验
+   * `0 ≤ 本周实际工时（人日） ≤ WEEK_ACTUAL_DAYS_MAX`、最多 2 位小数；非法返回提示文案。
+   * 存草稿不校验（同进度语义，服务端仍兜底）。
+   */
+  const validateActualDays = (): string | null => {
+    const latest = latestNodesOf();
+    const latestParentIds = parentIdSet(latest);
+    const rows = editingReport ? editingReport.tasks : latest;
+    for (const row of rows) {
+      const nodeId = 'nodeId' in row ? row.nodeId : row.id;
+      if (latestParentIds.has(nodeId)) continue; // 父节点不可登记（恒禁用，跳过）
+      const t = taskMap[nodeId];
+      if (!t || !t.selected) continue; // 未勾选不提交（disabled 灰显，跳过）
+      const v = Number(t.actualDays);
+      if (!Number.isFinite(v) || v < 0 || v > WEEK_ACTUAL_DAYS_MAX || Math.round(v * 100) / 100 !== v) {
+        const label = 'nodeName' in row ? row.nodeName || nodeId : `${row.wbsCode} ${row.name}`;
+        return `「${label}」本周实际工时（人日）须为 0~${WEEK_ACTUAL_DAYS_MAX} 的数字，最多 2 位小数`;
+      }
+    }
+    return null;
+  };
 
   const doSave = async (values: FormValues, submit: boolean): Promise<void> => {
+    // B8（R2）：提交 / 编辑已提交日志时校验实际工时；存草稿允许任意值（同进度语义）
+    if (submit) {
+      const actualErr = validateActualDays();
+      if (actualErr) {
+        toast.warning(actualErr);
+        return;
+      }
+    }
     const payload = assemble(values);
     try {
       let saved: Report;
@@ -252,7 +320,11 @@ export function ReportFormModal({
           Object.fromEntries(
             latestNodes.map((n) => [
               n.id,
-              { progressAfter: progressByNode.get(n.id) ?? n.progress, selected: n.id === effectiveLockNodeId },
+              {
+                progressAfter: progressByNode.get(n.id) ?? n.progress,
+                selected: n.id === effectiveLockNodeId,
+                actualDays: 0,
+              },
             ]),
           ),
         );
@@ -267,29 +339,44 @@ export function ReportFormModal({
   /**
    * WBS 树形勾选（R4-P0-4：新建态 lockNodeId 锁定勾选 + 锁图标；编辑态只读）。
    *
-   * R5-P0-3：父节点行「禁用可见」——checkbox 与「完%」`disabled` + Tooltip 解释（AC-3.3），
+   * R5-P0-3：父节点行「禁用可见」——checkbox 与「完成进度(%)」`disabled` + Tooltip 解释（AC-3.3），
    * 叶子行行为完全不变（AC-3.4）。
    * ⚠️ 不变量：本轮**只动 `disabled` 与文案，绝不动 `checked`**，否则历史父节点关联
    *    在编辑态会被显示成未勾选（违反 AC-3.9 存量如实展示）。
    */
   const renderTaskTree = (list: WbsTreeNode[], depth: number): JSX.Element[] =>
     list.map((n) => {
-      const t = taskMap[n.id] ?? { progressAfter: n.progress, selected: false };
+      const t = taskMap[n.id] ?? { progressAfter: n.progress, selected: false, actualDays: 0 };
       const readOnly = Boolean(editingReport);
       const locked = !editingReport && effectiveLockNodeId === n.id;
       /** 有子节点 = 父节点：进度纯由子任务加权汇总，不可勾选、不可录入 */
       const hasChildren = parentIds.has(n.id);
+      /** B8（R2）交互矩阵（D-B8-7）：实际工时输入 —— 仅勾选叶子可填；
+       *  新建未勾选灰显（值保留不提交）、父节点恒禁用、lockMode 仅锁定行可填、
+       *  编辑态勾选行可编辑 = 冲正入口（勾选/进度仍只读） */
+      const actualDaysDisabled = hasChildren || !t.selected || (lockMode && effectiveLockNodeId !== n.id);
       const checkbox = (
         <input
           type="checkbox"
           checked={t.selected || locked}
-          disabled={readOnly || locked || hasChildren}
+          disabled={readOnly || lockMode || hasChildren}
           onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, selected: e.target.checked } }))}
-          style={{ accentColor: tokens.brand.primary }}
+          // 固定尺寸：checkbox 宽 16 高 16，与行高匹配（单行布局下所有元素垂直居中）
+          style={{ accentColor: tokens.brand.primary, width: 16, height: 16 }}
         />
       );
       return (
-        <Box key={n.id} sx={{ pl: depth * 2 }}>
+        <Box
+          key={n.id}
+          sx={{
+            pl: depth * 2,
+            // B5-R4：锁定节点行品牌青 tint（checked+disabled + 锁图标 + 浅青底）
+            ...(locked ? { backgroundColor: alphaOf(tokens.brand.primary, 0.05), borderRadius: 1 } : {}),
+          }}
+        >
+          {/* B8.3：一个任务 = 一行——勾选 + 锁图标 + 任务名 + 进度条 + 完成进度(%) + 本周实际工时（人日）
+              全部在同一行（用户明确要求不换行）；弹窗已加宽 lg(1200px)，一行 6 元素不再拥挤；
+              flexWrap 仅作极端窄屏兜底，正常视口下不触发 */}
           <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', py: 0.25 }}>
             {/* disabled input 不触发 hover，父节点行必须套 span 才能出 Tooltip（布局不跳动） */}
             {hasChildren ? (
@@ -300,34 +387,57 @@ export function ReportFormModal({
               checkbox
             )}
             {locked && (
-              <Tooltip title="由「写日志」进入，该任务已锁定；可继续勾选其他任务" arrow>
+              <Tooltip title="由「写日志」进入，仅可关联当前任务" arrow>
                 <LockOutlinedIcon sx={{ fontSize: 14, color: tokens.text.secondary, flexShrink: 0 }} />
               </Tooltip>
             )}
             <Typography
-              sx={{ fontSize: 13, flex: '1 1 160px', minWidth: 0, color: hasChildren ? 'text.secondary' : undefined }}
+              sx={{
+                fontSize: 13,
+                flex: '1 1 120px',
+                minWidth: 0,
+                // B8.2：minWidth 0 + ellipsis 才能让 noWrap 在窄容器正常省略而非 shrink 到空白
+                textOverflow: 'ellipsis',
+                overflow: 'hidden',
+                color: hasChildren ? 'text.secondary' : undefined,
+              }}
               noWrap
             >
               {n.wbsCode} {n.name}
             </Typography>
-            {/* R4-P0-5：进度条包 Tooltip + 状态色调（ReportsPage 树部分） */}
+            {/* R4-P0-5：进度条包 Tooltip + 状态色调（ReportsPage 树部分）；flexShrink 0 防被压缩消失 */}
             <Tooltip title={`${n.name} ${n.progress}%（${n.status}）`} arrow>
-              <Box sx={{ width: 90 }}>
+              <Box sx={{ width: 90, flexShrink: 0 }}>
                 <ProgressBar value={n.progress} height={5} showLabel={false} tone={progressToneOf(n.status)} />
               </Box>
             </Tooltip>
+            {/* B8.3：完成进度(%) 紧接进度条右侧（同行）；disabled 三态与 B8.2 完全一致，仅挪回同行不改逻辑 */}
             <TextField
               type="number"
-              label="完%"
+              label="完成进度(%)"
               size="small"
               value={t.progressAfter}
-              /* R5-P0-3：父节点「完%」禁用，灰显当前汇总值（AC-3.3） */
-              disabled={readOnly || hasChildren}
+              /* B5-R1：锁定模式下仅当前关联任务（effectiveLockNodeId）可改进度，其余只读；父节点天然禁用（AC-3.3） */
+              disabled={readOnly || (lockMode && effectiveLockNodeId !== n.id) || hasChildren}
               onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, progressAfter: Number(e.target.value) } }))}
-              sx={{ width: 92 }}
+              sx={{ width: 110, flexShrink: 0 }}
               InputProps={{ inputProps: { min: 0, max: 100 } }}
             />
+            {/* B8（R2）：本周实际工时（人日）—— 仅勾选叶子可填（min 0 / step 0.5 / max WEEK_ACTUAL_DAYS_MAX）；
+                未勾选 disabled 灰显（值保留但不提交）、父节点恒禁用、编辑态勾选行=冲正入口；
+                B8.3：与完成进度(%) 并排同行（在完成进度右侧） */}
+            <TextField
+              type="number"
+              label="本周实际工时（人日）"
+              size="small"
+              value={t.actualDays}
+              disabled={actualDaysDisabled}
+              onChange={(e) => setTaskMap((m) => ({ ...m, [n.id]: { ...t, actualDays: Number(e.target.value) } }))}
+              sx={{ width: 150, flexShrink: 0 }}
+              InputProps={{ inputProps: { min: 0, step: 0.5, max: WEEK_ACTUAL_DAYS_MAX } }}
+            />
           </Stack>
+          {/* 子任务递归：子任务行自然换行缩进到下一层 */}
           {n.children && n.children.length > 0 && renderTaskTree(n.children, depth + 1)}
         </Box>
       );
@@ -338,7 +448,8 @@ export function ReportFormModal({
       open={open}
       title={editingReport ? `编辑工作日志 · ${project?.name ?? ''}` : `新建工作日志 · ${project?.name ?? ''}`}
       submitText="提交"
-      maxWidth="md"
+      // B8.3：弹窗加宽 lg(1200px)，保证一行 6 元素（勾选/名称/进度条/完成进度/实际工时）不换行不拥挤
+      maxWidth="lg"
       onClose={onClose}
       onSubmit={handleSubmit((v) => void doSave(v, true))}
       extraActions={
@@ -382,18 +493,18 @@ export function ReportFormModal({
           <Typography variant="subtitle2">{REPORT_SECTION_TITLE.taskAssoc}</Typography>
           {editingReport && (
             <Typography variant="caption" color="text.secondary">
-              编辑已提交日志时该区域只读
+              编辑已提交日志：勾选与进度只读，本周实际工时可修改（保存后自动冲正累计）
             </Typography>
           )}
           {!editingReport && effectiveLockNodeId && (
             <Typography variant="caption" color="text.secondary">
-              由「写日志」进入，预关联任务已锁定；可继续勾选其他任务
+              由「写日志」进入，仅关联当前任务；进度可修改，仅影响当前关联任务
             </Typography>
           )}
           {/* R5-P0-3：新建态恒显父节点规则说明（AC-3.3） */}
           {!editingReport && (
             <Typography variant="caption" color="text.secondary">
-              {PARENT_SECTION_TIP}
+              {PARENT_SECTION_TIP}；仅勾选任务可登记实际工时
             </Typography>
           )}
           {/* AC-3.8：lockNodeId 指向非叶子 → 降级不锁定 + 行内提示（D-2：不弹 toast） */}

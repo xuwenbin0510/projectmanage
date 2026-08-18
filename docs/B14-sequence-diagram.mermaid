@@ -1,0 +1,62 @@
+%% ===== 时序一：周报提交 → 确认人收到 → 确认/打回 =====
+sequenceDiagram
+    autonumber
+    participant A as 填报人
+    participant FE as ReportsPage
+    participant API as report.service
+    participant DB as SQLite
+    participant C as 确认人
+    participant Bell as TodoBell/useTodos
+
+    A->>FE: 填写周报并提交(submit=true)
+    FE->>API: POST /api/projects/:pid/reports {submit:true}
+    API->>DB: INSERT work_reports(status='已提交', submitted_at=now)
+    API-->>FE: Report(已提交)
+
+    Note over C, Bell: 确认人侧拉取待确认
+    Bell->>API: GET /api/reports/pending-confirmation
+    API->>DB: SELECT work_reports WHERE status='已提交'
+    API->>API: 逐条 resolveConfirmers(projectId, author)
+    API-->>Bell: Report[] (仅含 currentUser ∈ 确认人集合)
+    Bell-->>C: 铃铛徽标计数 + 下拉条目
+
+    C->>FE: 点击「确认」/「打回」
+    alt 确认
+        FE->>API: POST /api/projects/:pid/reports/:id/confirm
+        API->>API: 校验 currentUser ∈ resolveConfirmers
+        API->>DB: UPDATE work_reports SET status='已确认', confirmed_by, confirmed_at
+        API-->>FE: Report(已确认)
+    else 打回(原因必填)
+        FE->>API: POST /api/projects/:pid/reports/:id/reject {rejectReason}
+        API->>API: 校验原因非空 + 权限
+        API->>DB: UPDATE work_reports SET status='草稿', reject_reason
+        API-->>FE: Report(草稿)
+    end
+
+%% ===== 时序二：待办中心前端并发聚合 =====
+sequenceDiagram
+    autonumber
+    participant Top as Topbar(TodoBell)
+    participant H as useTodos
+    participant S1 as GET /api/approvals
+    participant S2 as GET /api/dashboard/overview
+    participant S3 as GET /api/workbench
+    participant S4 as GET /api/.../wbs
+    participant S5 as GET /api/reports/pending-confirmation
+
+    Top->>H: 打开铃铛(onOpen)
+    par 并发拉取六类源
+        H->>S1: 待我审批
+        H->>S2: reportMissing(待填周报)
+        H->>S3: myTasks(指派/逾期)
+        H->>S4: wbs(status='阻塞' + 逾期筛选)
+        H->>S5: 待确认周报
+    end
+    S1-->>H: Approval[]
+    S2-->>H: { reportMissing: [] }
+    S3-->>H: { myTasks: [] }
+    S4-->>H: WbsNode[]
+    S5-->>H: Report[]
+    H->>H: 归一为 TodoItem[] 并按 type 分组/排序
+    H-->>Top: { total, groups[] }
+    Top->>Top: 徽标显 total；下拉按组渲染；点条目 navigate(targetRoute)

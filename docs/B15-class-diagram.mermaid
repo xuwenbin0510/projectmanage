@@ -1,0 +1,124 @@
+classDiagram
+  direction LR
+
+  class WorkbenchPage {
+    +ovDrawer: {open, mode, projectId, projectName}
+    +myTasksDrawer: {open, progress?, priority?}
+    +sortedTasks: WbsNode[]
+    +dashboard: DashboardSummary
+    +openOverdue(projectId) void
+    +openGlobalOverdue() void
+    +openMyTasks(opts) void
+  }
+
+  class OverdueTaskDrawerProps {
+    +open: boolean
+    +projectId: string
+    +projectName?: string
+    +initialTab?: OverdueDrawerTab
+    +currentUserId?: string
+    +mode?: 'project' | 'all'
+    +projects?: Array~{projectId, projectName}~
+    +onClose: () => void
+  }
+
+  class OverdueTaskDrawer {
+    -nodes: ScopedWbsNode[]
+    -msMap: Map~string, string~
+    -tab: OverdueDrawerTab
+    -page: number
+    -onlyMine: boolean
+    -statusFilter: string
+    -priorityFilter: string
+    -keyword: string
+    -load() Promise~void~
+    +baseRows: OverdueTaskRow[]
+    +filteredRows: OverdueTaskRow[]
+  }
+
+  class ScopedWbsNode {
+    <<internal>>
+    __projectId: string
+    __projectName: string
+    +WbsNode 全部字段
+  }
+
+  class MyTasksDrawerProps {
+    +open: boolean
+    +tasks: WbsNode[]
+    +initialProgress?: ProgressSegment
+    +initialPriority?: Priority
+    +onClose: () => void
+  }
+
+  class MyTasksDrawer {
+    -progressFilter: ProgressSegment | ''
+    -priorityFilter: Priority | ''
+    -statusFilter: string
+    -keyword: string
+    -page: number
+    +filteredRows: WbsNode[]
+    +columns: Column~WbsNode~[]
+  }
+
+  class ProgressDonut {
+    +summary: TaskProgressSummary
+    +loading?: boolean
+    +onDrill?: (segment: ProgressSegment) => void
+  }
+
+  class PriorityDonut {
+    +dist: PriorityDistribution
+    +loading?: boolean
+    +onDrill?: (priority: Priority) => void
+  }
+
+  class DonutChart {
+    +onSegmentClick?: (segment: DonutSegment) => void
+  }
+
+  class DataTable~T~ {
+    +columns: Column~T~[]
+    +rows: T[]
+    +rowKey: (row: T) => string
+    +onRowClick?: (row: T) => void
+    +pagination?: {page, pageSize, total, onChange}
+    +dense?: boolean
+  }
+
+  class OverdueTaskRow {
+    +id: string
+    +wbsCode: string
+    +name: string
+    +ownerId: string
+    +ownerName: string
+    +dueDate: string
+    +status: TaskStatus
+    +progress: number
+    +milestoneName: string
+    +priority: Priority
+    +priorityRank: number
+    +projectId: string
+    +projectName: string
+  }
+
+  class ProgressSegment {
+    <<enumeration>>
+    done
+    active
+    pending
+  }
+
+  WorkbenchPage ..> OverdueTaskDrawer : renders mode/projects= dashboard.overdue
+  WorkbenchPage ..> MyTasksDrawer : renders tasks= sortedTasks
+  WorkbenchPage ..> ProgressDonut : passes onDrill → openMyTasks
+  WorkbenchPage ..> PriorityDonut : passes onDrill → openMyTasks
+
+  ProgressDonut ..> DonutChart : onSegmentClick passthrough
+  PriorityDonut ..> DonutChart : onSegmentClick passthrough
+
+  OverdueTaskDrawer ..> ScopedWbsNode : wraps WbsNode + project ctx
+  OverdueTaskDrawer ..> DataTable : renders OverdueTaskRow
+  OverdueTaskDrawer ..> OverdueTaskRow : maps ScopedWbsNode
+  MyTasksDrawer ..> DataTable : renders WbsNode
+  MyTasksDrawer ..> ProgressSegment : filters by segment

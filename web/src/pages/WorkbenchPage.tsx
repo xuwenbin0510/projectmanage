@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -13,6 +13,7 @@ import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
 import { useNavigate } from 'react-router-dom';
+import { useAuthStore } from '@/stores/authStore';
 
 import {
   EmptyState,
@@ -20,31 +21,89 @@ import {
   HealthDot,
   LoadingState,
   PageHeader,
+  PriorityChip,
   ProgressBar,
   SectionCard,
   StatCard,
   StatusChip,
 } from '@/components/common';
 import { ReviewStepper } from '@/components/review/ReviewStepper';
+import {
+  HealthDistBar,
+  MyTasksDrawer,
+  OverdueBarChart,
+  PriorityDonut,
+  ProgressDonut,
+  OverdueTaskDrawer,
+} from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
 import { ROUTES } from '@/config/routes';
 import { PROJECT_TYPE_SHORT, TASK_STATUSES } from '@/config/enums';
-import type { TaskStatus } from '@/types/wbs';
+import type { ProgressSegment } from '@/types/dashboard';
+import type { Priority, TaskStatus } from '@/types/wbs';
+import { buildDashboard, sortByPriority } from '@/utils/dashboardAgg';
 import { fmtDate, isOverdue, today, diffDays } from '@/utils/date';
 import { alphaOf as alpha, tokens, colorOf } from '@/theme/tokens';
 
 /**
- * 我的工作台：待办审批 / 我的任务 / 我的项目 / 周报提醒
- * @prd P0-13
+ * 我的工作台：仪表盘三图 + 待办审批 / 我的任务 / 我的项目 / 周报提醒
+ *
+ * B11 增量：在 3 张 `StatCard` 与既有 4 区块之间插入「图表区」，
+ * 数据由 `buildDashboard(data)` **纯前端聚合**（§1.3，不新增后端接口）。
+ * 既有 4 区块与全部交互零改动。
+ *
+ * @prd P0-13 / B11
  */
 export function WorkbenchPage(): JSX.Element {
   const navigate = useNavigate();
+  const me = useAuthStore((s) => s.user);
   const toast = useToast();
   const [busyTask, setBusyTask] = useState<string>('');
 
+  /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含）；B15 追加 mode */
+  const [ovDrawer, setOvDrawer] = useState<{
+    open: boolean;
+    mode: 'project' | 'all';
+    projectId: string;
+    projectName: string;
+  }>({ open: false, mode: 'project', projectId: '', projectName: '' });
+
+  /* B15：我的任务明细抽屉的本地状态（三入口共用，打开时带初始筛选） */
+  const [myTasksDrawer, setMyTasksDrawer] = useState<{
+    open: boolean;
+    progress?: ProgressSegment;
+    priority?: Priority;
+  }>({ open: false });
+
   const fetcher = useCallback(() => api.getWorkbench(), []);
   const { data, loading, error, run } = useAsync(fetcher, []);
+
+  /* B11：仪表盘聚合。必须在任何早退之前调用，保证 Hooks 顺序稳定 */
+  const dashboard = useMemo(() => buildDashboard(data), [data]);
+
+  /**
+   * B14-块1：「我的任务」按**优先级升序（P0 置顶）**、同级按截止日升序。
+   * 排序口径唯一实现 `dashboardAgg#comparePriority`（`sortByPriority` 不改原数组），
+   * 必须在早退之前调用以保证 Hooks 顺序稳定。
+   */
+  const sortedTasks = useMemo(() => sortByPriority(data?.myTasks ?? []), [data]);
+
+  /** B13：打开逾期/临期任务下探抽屉（projectName 从本地 dashboard.overdue 解析；B15 补 mode） */
+  const openOverdue = (projectId: string): void => {
+    const name = dashboard.overdue.find((o) => o.projectId === projectId)?.projectName ?? '';
+    setOvDrawer({ open: true, mode: 'project', projectId, projectName: name });
+  };
+
+  /** B15：逾期任务 StatCard → 全局逾期抽屉（项目清单 = dashboard.overdue） */
+  const openGlobalOverdue = (): void => {
+    setOvDrawer({ open: true, mode: 'all', projectId: '', projectName: '' });
+  };
+
+  /** B15：打开我的任务明细抽屉（opts 为空 = 查看全部；可带进度段 / 优先级初始筛选） */
+  const openMyTasks = (opts: { progress?: ProgressSegment; priority?: Priority } = {}): void => {
+    setMyTasksDrawer({ open: true, progress: opts.progress, priority: opts.priority });
+  };
 
   /** 直接在工作台改任务状态（移动端四件事之一，走 moveTask 以保留 WIP 拦截） */
   const handleStatus = async (nodeId: string, status: TaskStatus, order: number): Promise<void> => {
@@ -101,16 +160,53 @@ export function WorkbenchPage(): JSX.Element {
           value={stats.overdueTasks}
           unit="个"
           tone={stats.overdueTasks > 0 ? 'danger' : 'success'}
-          hint="以任务计划完成日为准"
+          hint="点击查看全部逾期任务"
           icon={<ReportProblemOutlinedIcon fontSize="small" />}
+          onClick={openGlobalOverdue}
         />
         <StatCard
           label="本周待填周报"
           value={stats.missingReports}
           unit="份"
           tone={stats.missingReports > 0 ? 'warning' : 'success'}
-          hint="周五 18:00 前提交"
+          hint={missing.length > 0 ? '点击前往填写' : '本周周报已全部填写'}
           icon={<EditNoteOutlinedIcon fontSize="small" />}
+          onClick={() => {
+            if (missing.length > 0) navigate(ROUTES.projectReports(missing[0].projectId));
+          }}
+        />
+      </Box>
+
+      {/* ══ B11 · 仪表盘图表区（B14 追加优先级环 → 四图，栅格 xs:1 / md:2 / xl:4） ══ */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2,
+          gridTemplateColumns: {
+            xs: '1fr',
+            md: 'repeat(2, 1fr)',
+            xl: 'repeat(4, 1fr)',
+          },
+          alignItems: 'stretch',
+          mb: 2.5,
+        }}
+      >
+        <ProgressDonut
+          summary={dashboard.progress}
+          loading={loading}
+          onDrill={(seg) => openMyTasks({ progress: seg })}
+        />
+        {/* B14-块1：优先级分布环，点段下钻我的任务明细（B15：带优先级筛选） */}
+        <PriorityDonut
+          dist={dashboard.priority}
+          loading={loading}
+          onDrill={(pri) => openMyTasks({ priority: pri })}
+        />
+        <OverdueBarChart rows={dashboard.overdue} loading={loading} onDrill={openOverdue} />
+        <HealthDistBar
+          dist={dashboard.health}
+          loading={loading}
+          onDrill={() => navigate(ROUTES.projects)}
         />
       </Box>
 
@@ -222,13 +318,23 @@ export function WorkbenchPage(): JSX.Element {
           )}
         </SectionCard>
 
-        {/* ── 我的任务 ── */}
-        <SectionCard title="我的任务" subtitle={`${myTasks.length} 个未完成`}>
+        {/* ── 我的任务（B14-块1：P0 置顶排序 + 行内优先级色标；B15：查看全部入口） ── */}
+        <SectionCard
+          title="我的任务"
+          subtitle={`${myTasks.length} 个未完成 · 按优先级排序`}
+          actions={
+            myTasks.length > 0 ? (
+              <Button size="small" onClick={() => openMyTasks({})}>
+                查看全部
+              </Button>
+            ) : undefined
+          }
+        >
           {myTasks.length === 0 ? (
             <EmptyState title="没有分配给我的未完成任务" dense />
           ) : (
             <Stack spacing={1}>
-              {myTasks.slice(0, 8).map((t) => {
+              {sortedTasks.slice(0, 8).map((t) => {
                 const overdue = isOverdue(t.dueDate);
                 const soon = !overdue && diffDays(today(), t.dueDate) <= 3;
                 return (
@@ -238,19 +344,30 @@ export function WorkbenchPage(): JSX.Element {
                     spacing={1}
                     alignItems={{ xs: 'stretch', sm: 'center' }}
                     justifyContent="space-between"
+                    /* B16：整行可点击下探 → 该项目 WBS 页（详情/编辑），与 B15 抽屉行行为一致；
+                       点状态下拉不触发跳转（Select 上已 stopPropagation） */
+                    onClick={() => navigate(ROUTES.projectWbs(t.projectId))}
                     sx={{
                       px: 1.5,
                       py: 1.25,
                       borderRadius: 1.5,
+                      cursor: 'pointer',
                       border: `1px solid ${
                         overdue ? alpha(tokens.status.danger, 0.5) : tokens.border.subtle
                       }`,
+                      '&:hover': {
+                        borderColor: overdue ? alpha(tokens.status.danger, 0.85) : alpha(tokens.brand.primary, 0.6),
+                      },
                     }}
                   >
                     <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Typography sx={{ fontSize: 13.5 }} noWrap>
-                        {t.wbsCode} {t.name}
-                      </Typography>
+                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                        {/* B14-块1：优先级色标（P0 红 / P1 橙 / P2 蓝 / P3 灰） */}
+                        <PriorityChip priority={t.priority} />
+                        <Typography sx={{ fontSize: 13.5 }} noWrap>
+                          {t.wbsCode} {t.name}
+                        </Typography>
+                      </Stack>
                       <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
                         <Typography
                           variant="caption"
@@ -266,6 +383,7 @@ export function WorkbenchPage(): JSX.Element {
                       size="small"
                       value={t.status}
                       disabled={busyTask === t.id}
+                      onClick={(e) => e.stopPropagation()}
                       onChange={(e) => void handleStatus(t.id, e.target.value as TaskStatus, t.boardOrder)}
                       sx={{ minWidth: 108, fontSize: 13 }}
                     >
@@ -328,6 +446,23 @@ export function WorkbenchPage(): JSX.Element {
           )}
         </SectionCard>
       </Box>
+
+      <OverdueTaskDrawer
+        open={ovDrawer.open}
+        mode={ovDrawer.mode}
+        projectId={ovDrawer.projectId}
+        projectName={ovDrawer.projectName}
+        projects={dashboard.overdue}
+        currentUserId={me?.openId}
+        onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
+      />
+      <MyTasksDrawer
+        open={myTasksDrawer.open}
+        tasks={sortedTasks}
+        initialProgress={myTasksDrawer.progress}
+        initialPriority={myTasksDrawer.priority}
+        onClose={() => setMyTasksDrawer((s) => ({ ...s, open: false }))}
+      />
     </Box>
   );
 }

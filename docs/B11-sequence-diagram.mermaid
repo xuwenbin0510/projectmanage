@@ -1,0 +1,141 @@
+%% B11 时序图 · 仪表盘可视化 + 看板补缺
+%% 架构：高见远 | 来源：docs/B11-架构设计.md §4
+%% ─────────────────────────────────────────────
+%% 图 1：工作台加载 → 三图渲染（纯前端聚合）
+%% ─────────────────────────────────────────────
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant WP as WorkbenchPage
+    participant UA as useAsync
+    participant API as api.getWorkbench()
+    participant RT as workbench.routes.js
+    participant WS as workbench.service.js
+    participant PS as project.service.js
+    participant DB as SQLite
+    participant AGG as utils/dashboardAgg.ts
+    participant CP as useChartPalette()
+    participant CH as ProgressDonut / OverdueBarChart / HealthDistBar
+
+    U->>WP: 进入 /workbench
+    WP->>UA: run()
+    UA->>API: GET /api/workbench
+    API->>RT: requireAuth → getWorkbench
+    RT->>PS: listMyProjectItems(db, req.user)
+    PS->>DB: SELECT projects JOIN members
+    DB-->>PS: rows
+    PS-->>RT: ProjectListItem[] (含 health / progress)
+    RT->>WS: listMyTasks(db, req.user)
+    Note over WS,DB: B11：SQL 追加 p.name AS __project_name
+    WS->>DB: SELECT wbs_nodes JOIN projects
+    DB-->>WS: rows
+    WS->>WS: 按项目分组 → leafNodesOf → owner==me && status!=完成
+    WS-->>RT: WbsNode[] (含 projectName)
+    RT->>WS: listMyApprovals / listReportReminders
+    WS-->>RT: Review[] / ReportReminder[]
+    RT-->>API: ok({stats, myProjects, myTasks, myApprovals, reportReminders})
+    API-->>WP: WorkbenchData
+
+    rect rgb(226, 243, 246)
+        Note over WP,AGG: B11 新增 · 纯前端聚合（零网络、useMemo 缓存）
+        WP->>AGG: buildDashboard(data)
+        AGG->>AGG: aggregateTaskProgress(myTasks)<br/>done/active/pending + completionRate
+        AGG->>AGG: aggregateOverdue(myTasks, myProjects)<br/>按 projectName 分组，逾期 / 临期≤3d
+        AGG->>AGG: aggregateHealth(myProjects)<br/>green / yellow / red 计数
+        AGG-->>WP: DashboardSummary
+    end
+
+    WP->>CP: useChartPalette()
+    CP->>CP: useThemeMode() → palettes[mode] + brandScale
+    CP-->>WP: 真 hex 色板（非 var()）
+    WP->>CH: <ProgressDonut summary palette/>
+    WP->>CH: <OverdueBarChart rows palette/>
+    WP->>CH: <HealthDistBar dist palette/>
+    CH-->>U: 三图渲染（浅色主题 · 品牌色阶 + 语义色）
+
+    U->>CH: 点击健康分布「红」段
+    CH->>WP: onDrill('red')
+    WP->>U: navigate(ROUTES.projects) 并带健康筛选
+
+%% ─────────────────────────────────────────────
+%% 图 2：看板加载 → 列自愈 / 筛选 / 维度切换 / 拖拽
+%% ─────────────────────────────────────────────
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant BP as BoardPage
+    participant ST as wbsStore
+    participant API as api.getBoard()
+    participant PR as projects.routes.js
+    participant BS as board.service.js
+    participant DB as SQLite
+    participant TB as BoardToolbar
+    participant BU as utils/board.ts
+    participant CV as BoardColumnView / OwnerSwimlanes
+
+    U->>BP: 进入 /projects/:id/board
+    BP->>ST: fetchBoard(projectId)
+    ST->>API: GET /projects/:id/board
+    API->>PR: requireAuth
+    PR->>BS: getBoard(db, projectId)
+    BS->>BS: rbac.loadProject
+    BS->>BS: ensureBoardConfig(db, projectId)
+
+    rect rgb(226, 243, 246)
+        Note over BS,DB: B11 新增 · 列快照自愈（幂等，无迁移）
+        BS->>DB: SELECT * FROM board_configs WHERE project_id=?
+        alt 行不存在
+            BS->>DB: INSERT columns = enums.BOARD_COLUMNS (5 列) + wipLimits {进行中:5}
+        else 行存在但 columns ≠ BOARD_COLUMNS
+            BS->>DB: UPDATE board_configs SET columns=? (只改 columns，wip_limits 原样保留)
+        else 行存在且一致
+            BS->>BS: 跳过，零写入
+        end
+        DB-->>BS: 最新配置行
+    end
+
+    BS->>DB: loadNodes(projectId)
+    DB-->>BS: WbsNode[]
+    BS->>BS: leafNodesOf → 按 config.columns 逐列过滤 + boardOrder 排序
+    BS-->>ST: BoardView (5 列)
+    ST-->>BP: board
+
+    BP->>BP: useState filter={keyword,owner,milestoneId,overdueOnly}<br/>useState groupBy='status'
+
+    alt groupBy === 'status'（默认）
+        BP->>BU: filterCards(col.cards, filter) · 逐列
+        BU-->>BP: 过滤后卡片
+        BP->>CV: <BoardColumnView col movable={can&&!archived}/>
+        Note over CV: WIP Chip 恒按全量计数 n/limit<br/>筛选生效时列头补「显示 m / 共 n」
+    else groupBy === 'owner'（切换）
+        BP->>BU: groupByOwner(filterCards(allCards, filter))
+        BU-->>BP: OwnerLane[]（按 逾期数↓ / 任务数↓ 排序，未分配置末列）
+        BP->>CV: <OwnerSwimlanes lanes movable={false}/>
+        Note over CV: 只读；卡片带 StatusChip；列头显示 n 个任务 / m 逾期
+    end
+    CV-->>U: 看板渲染
+
+    U->>TB: 输入关键字 / 选负责人 / 开「仅看逾期」
+    TB->>BP: onFilterChange(next)
+    BP->>BP: setFilter → useMemo 重算（纯前端，零网络）
+    BP-->>U: 卡片即时重渲染
+
+    U->>TB: 切「按负责人」
+    TB->>BP: onGroupByChange('owner')
+    BP-->>U: 立即切换（零网络往返）
+
+    U->>CV: 拖卡片到「阻塞」列（仅 status 视图）
+    CV->>BP: handleDragEnd(active, over)
+    BP->>ST: moveTask(nodeId, '阻塞', 0)
+    ST->>API: POST /wbs/:id/move-status
+    API->>BS: moveTask
+    BS->>BS: assertWritable → assertCan('task:status')
+    BS->>BS: 校验 status ∈ TASK_STATUSES（'阻塞' 本就合法 ✅ 零改动）
+    BS->>BS: checkWip（阻塞列默认无上限 → 放行）
+    BS->>DB: UPDATE wbs_nodes SET status='阻塞', board_order, progress, actual_days
+    BS->>BS: syncWbsProgressStatus → refreshMilestoneStatuses → writeAudit
+    BS-->>ST: BoardView (5 列)
+    ST->>ST: set board + 刷新 nodes/tree + syncMilestones
+    ST-->>BP: 新 board
+    BP->>BP: 按当前 filter/groupBy 重新派生视图
+    BP-->>U: toast「『X』已移至『阻塞』」

@@ -17,10 +17,12 @@ import type {
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
+import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
+import type { DashboardOverview, DashboardOverviewQuery, DashboardTasksQuery, DashboardTaskRow } from '@/types/dashboard';
 import type {
   ApiClient,
   ProjectQuery,
@@ -104,6 +106,11 @@ const del = <T>(p: string): Promise<T> => request<T>('DELETE', p);
 
 export class HttpApiClient implements ApiClient {
   /* 认证 */
+  async getAppId(): Promise<string> {
+    const res = await get<{ appId: string } | null>('/appid');
+    return res && typeof res.appId === 'string' ? res.appId : '';
+  }
+
   async devLogin(openId: string): Promise<Session> {
     const s = await post<Session>('/auth/devlogin', { openId });
     setToken(s.token);
@@ -114,6 +121,13 @@ export class HttpApiClient implements ApiClient {
     const s = await post<Session>('/auth/feishu', { code });
     setToken(s.token);
     return s;
+  }
+
+  /** @prd P0-11 / B4-T03 飞书网页登录（浏览器 Web OAuth，对应 `POST /auth/feishu/web`） */
+  async loginByFeishuCode(code: string): Promise<{ token: string; user: User }> {
+    const r = await post<{ token: string; user: User }>('/auth/feishu/web', { code });
+    setToken(r.token);
+    return r;
   }
 
   me(): Promise<User> {
@@ -257,6 +271,24 @@ export class HttpApiClient implements ApiClient {
     return patch<Report>(`/projects/${payload.projectId}/reports/${id}`, payload);
   }
 
+  /* 周报轻量闭环 B14-块2 */
+  confirmReport(projectId: string, id: string): Promise<Report> {
+    return post<Report>(`/projects/${projectId}/reports/${id}/confirm`, {});
+  }
+
+  rejectReport(projectId: string, id: string, reason: string): Promise<Report> {
+    return post<Report>(`/projects/${projectId}/reports/${id}/reject`, { reason });
+  }
+
+  listPendingConfirmation(): Promise<Report[]> {
+    return get<Report[]>('/reports/pending-confirmation');
+  }
+
+  /* 工时统计报表 B9 */
+  getEffortReport(projectId: string): Promise<EffortReport> {
+    return get<EffortReport>(`/projects/${projectId}/effort-report`);
+  }
+
   /* 评审 */
   listReviews(projectId?: string): Promise<Review[]> {
     return get<Review[]>(`/reviews${qs({ projectId })}`);
@@ -319,6 +351,18 @@ export class HttpApiClient implements ApiClient {
   /* 工作台 */
   getWorkbench(): Promise<WorkbenchData> {
     return get<WorkbenchData>('/workbench');
+  }
+
+  /* 全局总览 B12 */
+  getDashboardOverview(query: DashboardOverviewQuery): Promise<DashboardOverview> {
+    /* `qs` 会跳过 undefined / null / ''，所以未选中的筛选项不会污染 URL；
+       `onlyMine: false` 会被序列化成 'false'，服务端只认 'true' / '1'，语义一致。 */
+    return get<DashboardOverview>(`/dashboard/overview${qs(query as Record<string, unknown>)}`);
+  }
+
+  getDashboardTasks(query: DashboardTasksQuery): Promise<Paged<DashboardTaskRow>> {
+    /* qs 跳过 undefined / null / ''，未选中的维度参数不污染 URL；语义与服务端一致 */
+    return get<Paged<DashboardTaskRow>>(`/dashboard/tasks${qs(query as Record<string, unknown>)}`);
   }
 
   /* 管理后台 */

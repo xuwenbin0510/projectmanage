@@ -19,6 +19,7 @@ import { MilestonesPage } from '@/pages/projects/MilestonesPage';
 import { WbsPage } from '@/pages/projects/WbsPage';
 import { BoardPage } from '@/pages/projects/BoardPage';
 import { ReportsPage } from '@/pages/projects/ReportsPage';
+import { EffortReportPage } from '@/pages/projects/EffortReportPage';
 import { ReviewsPage } from '@/pages/projects/ReviewsPage';
 import { ChangesPage } from '@/pages/projects/ChangesPage';
 import { ProjectAuditPage } from '@/pages/projects/ProjectAuditPage';
@@ -94,6 +95,7 @@ export function AppRouter(): JSX.Element {
           <Route path="wbs" element={<WbsPage />} />
           <Route path="board" element={<BoardPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="effort" element={<EffortReportPage />} />
           <Route path="reviews" element={<ReviewsPage />} />
           <Route path="changes" element={<ChangesPage />} />
           <Route path="audit" element={<ProjectAuditPage />} />

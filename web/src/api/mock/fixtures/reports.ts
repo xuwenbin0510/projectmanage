@@ -108,6 +108,8 @@ export function createReports(users: User[], wbsNodes: WbsNode[]): Report[] {
       progressBefore: Math.max(0, n.progress - 20),
       progressAfter: n.progress,
       selected: n.progress > 0,
+      // B8（R3）：本周实际人日（种子按 0，与 wbs fixtures effortHours=0 一致）
+      weekActualDays: 0,
     }));
 
     const risks: ReportRisk[] = spec.risks.map((r, i) => ({
@@ -141,6 +143,10 @@ export function createReports(users: User[], wbsNodes: WbsNode[]): Report[] {
       risks,
       snapshot,
       submittedAt: submitted ? `${range.end}T17:30:00.000Z` : null,
+      // B14-块2：种子数据一律停在「已提交 / 草稿」，确认三字段留空，便于演示确认/打回
+      confirmedBy: null,
+      confirmedAt: null,
+      rejectReason: null,
       createdAt: `${range.start}T09:00:00.000Z`,
       updatedAt: `${range.end}T17:30:00.000Z`,
     };

@@ -19,7 +19,7 @@ import { GLOBAL_ROLE_LABEL } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
 import { useToast } from '@/hooks/useToast';
-import { USE_MOCK } from '@/api/client';
+import { api, USE_MOCK } from '@/api/client';
 import { isInFeishu, hasFeishuSdk, requestAuthCode, waitSdkReady } from '@/utils/feishu';
 import { alphaOf as alpha, tokens } from '@/theme/tokens';
 
@@ -37,10 +37,13 @@ export function LoginPage(): JSX.Element {
   const toast = useToast();
   const login = useAuthStore((s) => s.login);
   const loginByCode = useAuthStore((s) => s.loginByCode);
+  const loginByFeishuWeb = useAuthStore((s) => s.loginByFeishuWeb);
   const loading = useAuthStore((s) => s.loading);
 
   const [feishuReady, setFeishuReady] = useState<boolean>(false);
   const [feishuBusy, setFeishuBusy] = useState<boolean>(false);
+  /** 服务端下发的飞书 AppID（Web OAuth 按钮是否可用取决于它，与 JSSDK 的 feishuReady 解耦） */
+  const [appId, setAppId] = useState<string>('');
   const [picked, setPicked] = useState<string>('');
 
   const from = (location.state as LocationState | null)?.from ?? ROUTES.workbench;
@@ -50,11 +53,54 @@ export function LoginPage(): JSX.Element {
     void (async () => {
       const ok = await waitSdkReady(1500);
       if (alive) setFeishuReady(ok && hasFeishuSdk());
+      // 取服务端 AppID（B4-T03 浏览器飞书登录按钮的可用开关）
+      const id = await api.getAppId();
+      if (alive) setAppId(id || '');
     })();
     return () => {
       alive = false;
     };
   }, []);
+
+  /**
+   * 飞书 Web OAuth 回调处理（B4-T03）：飞书授权后重定向回 `/login?code=..&state=..`。
+   * - 校验 `state` 防 CSRF（与发起时写入 sessionStorage 的值比对）；
+   * - 调 `loginByFeishuWeb` 换 token 并落到同一用户态；
+   * - 清理 URL 中的 `code/state`，避免刷新重复消费。
+   */
+  useEffect(() => {
+    if (window.location.pathname !== ROUTES.login) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    if (!code || !state) return; // 非回调进入，忽略
+
+    const expected = sessionStorage.getItem('feishu_oauth_state');
+    sessionStorage.removeItem('feishu_oauth_state');
+    if (state !== expected) {
+      toast.error('飞书授权校验失败（state 不匹配），请重试');
+      window.history.replaceState({}, '', ROUTES.login);
+      return;
+    }
+
+    let alive = true;
+    void (async () => {
+      try {
+        const user = await loginByFeishuWeb(code);
+        if (!alive) return;
+        toast.success(`欢迎回来，${user.name}`);
+        window.history.replaceState({}, '', ROUTES.login);
+        navigate(from, { replace: true });
+      } catch (e) {
+        if (!alive) return;
+        toast.error(e, '飞书网页登录失败，请改用开发登录');
+        window.history.replaceState({}, '', ROUTES.login);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [loginByFeishuWeb, navigate, from]);
 
   /** 开发登录：直接指定 openId */
   const handleDevLogin = async (account: DemoAccount): Promise<void> => {
@@ -70,11 +116,20 @@ export function LoginPage(): JSX.Element {
     }
   };
 
-  /** 飞书免登：JSSDK 取 code → 换会话 */
+  /**
+   * 飞书免登：服务端取真实 AppID → JSSDK 取 code → 换会话。
+   *
+   * ⚠️ AppID **必须**来自服务端 `GET /api/appid`（后端读 FEISHU_APP_ID）。
+   * 历史实现误传了 `VITE_APP_TITLE`（应用标题），JSSDK 一定取不到 code。
+   */
   const handleFeishuLogin = async (): Promise<void> => {
     setFeishuBusy(true);
     try {
-      const code = await requestAuthCode(import.meta.env.VITE_APP_TITLE ?? 'cli_demo_appid');
+      const appId = await api.getAppId();
+      if (!appId) {
+        throw new Error('服务端未配置飞书应用凭证（FEISHU_APP_ID），请改用开发登录');
+      }
+      const code = await requestAuthCode(appId);
       const user = await loginByCode(code);
       toast.success(`欢迎回来，${user.name}`);
       navigate(from, { replace: true });
@@ -83,6 +138,26 @@ export function LoginPage(): JSX.Element {
     } finally {
       setFeishuBusy(false);
     }
+  };
+
+  /**
+   * 浏览器飞书 Web OAuth 发起（B4-T03）：拼接授权 URL 跳转飞书开放平台。
+   * 注意：`redirect_uri` 必须 == 飞书开放平台「重定向 URL」登记值（含协议/路径/末尾无斜杠）。
+   */
+  const handleFeishuWebLogin = async (): Promise<void> => {
+    const id = await api.getAppId();
+    if (!id) {
+      toast.error('服务端未配置飞书应用凭证（FEISHU_APP_ID），请改用开发登录');
+      return;
+    }
+    const state = Math.random().toString(36).slice(2);
+    sessionStorage.setItem('feishu_oauth_state', state);
+    const redirectUri = encodeURIComponent(`${window.location.origin}${ROUTES.login}`);
+    const url =
+      'https://open.feishu.cn/open-apis/authen/v2/authorize' +
+      `?app_id=${id}&redirect_uri=${redirectUri}&response_type=code` +
+      `&scope=${encodeURIComponent('contact:user.base:readonly')}&state=${state}`;
+    window.location.href = url; // 跳飞书授权页
   };
 
   return (
@@ -129,6 +204,26 @@ export function LoginPage(): JSX.Element {
               {isInFeishu()
                 ? '检测到飞书环境，但 JSSDK 尚未就绪，请使用下方开发登录。'
                 : '当前不在飞书客户端内，免登不可用，请使用下方开发登录。'}
+            </Typography>
+          )}
+        </Stack>
+
+        {/* 浏览器飞书 Web OAuth 登录（普通浏览器可用，不依赖 JSSDK） */}
+        <Stack spacing={1} sx={{ mb: 2.5 }}>
+          <Button
+            variant="outlined"
+            size="large"
+            fullWidth
+            disabled={!appId}
+            onClick={handleFeishuWebLogin}
+          >
+            {appId ? '使用飞书账号登录（浏览器）' : '飞书 Web 登录未启用'}
+          </Button>
+          {!appId && (
+            <Typography variant="caption" color="text.secondary">
+              {USE_MOCK
+                ? '当前为 Mock 模式，Web 登录不可用，请使用下方开发登录。'
+                : '服务端未配置飞书应用凭证（FEISHU_APP_ID），Web 登录不可用，请使用下方开发登录。'}
             </Typography>
           )}
         </Stack>

@@ -1,0 +1,29 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant Chart as OverdueBarChart
+    participant Page as MetricsPage/WorkbenchPage
+    participant Drawer as OverdueTaskDrawer
+    participant API as api (client.ts)
+    participant MS as GET /milestones
+
+    User->>Chart: 点击某项目逾期柱
+    Chart->>Chart: onItemClick → dataset[dataIndex].projectId
+    Chart->>Page: onDrill(projectId)
+    Page->>Page: 解析 projectName（本地 overdue 行）
+    Page->>Drawer: open=true, projectId, projectName
+    Drawer->>Drawer: useEffect(open && projectId) 触发
+    par 并行局部拉取（不碰 wbsStore）
+        Drawer->>API: api.listWbs(projectId)
+        API-->>Drawer: WbsNode[]（项目全量扁平节点）
+        Drawer->>MS: api.listMilestones(projectId)
+        MS-->>Drawer: MilestoneWithGate[]
+    end
+    Drawer->>Drawer: 建 milestoneId→name Map
+    Drawer->>Drawer: splitOverdueByStatus(nodes) 按 today()/diffDays 过滤
+    Drawer->>Drawer: 渲染默认 Tab=逾期 + DataTable(六字段)
+    User->>Drawer: 切换「临期」Tab
+    Drawer->>Drawer: 仅换数据集，不重新请求
+    User->>Drawer: 关闭（遮罩 / × / ESC）
+    Drawer->>Page: onClose()
+    Page->>Drawer: open=false

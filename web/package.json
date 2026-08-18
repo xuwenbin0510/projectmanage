@@ -6,8 +6,9 @@
   "description": "太空字节项目管理系统 · 前端（Vite + React + TS + MUI + Tailwind）",
   "scripts": {
     "dev": "vite",
-    "dev:mock": "vite --mode development",
+    "dev:mock": "vite --mode mock",
     "build": "tsc --noEmit && vite build",
+    "build:mock": "tsc --noEmit && vite build --mode mock",
     "typecheck": "tsc --noEmit",
     "verify:simplify": "node scripts/verify_simplify.mjs",
     "smoke:engine": "node scripts/smoke_engine.mjs",
@@ -22,6 +23,7 @@
     "@hookform/resolvers": "^3.9.0",
     "@mui/icons-material": "^5.16.7",
     "@mui/material": "^5.16.7",
+    "@mui/x-charts": "^7.12.0",
     "@mui/x-date-pickers": "^7.12.0",
     "@mui/x-tree-view": "^7.12.0",
     "clsx": "^2.1.1",

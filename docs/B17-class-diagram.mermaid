@@ -1,0 +1,114 @@
+classDiagram
+    class MetricsPage {
+        +statusSegments: DonutSegment[]
+        +priorityRows: CategoryBarRow[]
+        +statusRows: CategoryBarRow[]
+        +durationRows: CategoryBarRow[]
+        +setQuery(query): void
+    }
+    class DashboardOverview {
+        +stats: OverviewStats
+        +statusDonut: StatusDonut
+        +health: HealthDistribution
+        +priorityDist: PriorityDistribution
+        +statusDist: TaskStatusDistribution
+        +overdueDuration: OverdueDurationDistribution
+        +overdue: OverdueByProject[]
+        +ownerLoad: OwnerLoadRow[]
+        +reportMissing: ReportMissingRow[]
+        +projects: Paged~ProjectListItem~
+    }
+    class TaskStatusDistribution {
+        +待办: number
+        +进行中: number
+        +待评审: number
+        +完成: number
+        +阻塞: number
+        +total: number
+    }
+    class OverdueDurationDistribution {
+        +days1to7: number
+        +days8to30: number
+        +daysOver30: number
+        +total: number
+    }
+    class PriorityDistribution {
+        +P0: number
+        +P1: number
+        +P2: number
+        +P3: number
+        +total: number
+    }
+    class HealthDonut {
+        +dist: HealthDistribution
+        +loading?: boolean
+        +onDrill?: (health: Health) => void
+    }
+    class CategoryBarChart {
+        +title: string
+        +subtitle?: string
+        +rows: CategoryBarRow[]
+        +loading?: boolean
+        +empty?: boolean
+        +emptyTitle?: string
+        +emptyDescription?: string
+        +unit?: string
+    }
+    class CategoryBarRow {
+        +key: string
+        +label: string
+        +value: number
+        +color: string
+    }
+    class DonutChart {
+        +segments: DonutSegment[]
+        +centerValue: string
+        +centerLabel?: string
+        +centerColor?: string
+        +onSegmentClick?: (seg) => void
+    }
+    class ChartCard {
+        +title: string
+        +subtitle?: string
+        +loading?: boolean
+        +empty?: boolean
+        +footer?: ReactNode
+    }
+    class ChartLegend
+    class useChartPalette {
+        +brand: string[]
+        +brandMain: string
+        +brandStrong: string
+        +health: ChartHealthColors
+        +track: string
+        +axis: string
+    }
+    class dashboardService {
+        +getDashboardOverview(db, query, me): DashboardOverview
+        +listScopeAllLeafTasks(db, projectIds): WbsNode[]
+    }
+    class portfolioAgg {
+        +aggregatePriorityDist(tasks): PriorityDistribution
+        +aggregateStatusDist(allLeafTasks): TaskStatusDistribution
+        +aggregateOverdueDuration(tasks, todayStr): OverdueDurationDistribution
+        +isOverdue(node, todayStr): boolean
+        +countOverdueTasks(tasks, todayStr): number
+    }
+
+    MetricsPage --> DonutChart : ① 状态环（不动）
+    MetricsPage --> HealthDonut : ② 健康环
+    MetricsPage --> CategoryBarChart : ⑤⑥⑦ 三张条形
+    MetricsPage --> OverdueBarChart : ③（不动）
+    MetricsPage --> OwnerLoadBarChart : ④（不动）
+    MetricsPage ..> DashboardOverview : useDashboardOverview()
+    DashboardOverview --> TaskStatusDistribution
+    DashboardOverview --> OverdueDurationDistribution
+    DashboardOverview --> PriorityDistribution
+    HealthDonut --> DonutChart : 薄封装
+    CategoryBarChart --> ChartCard
+    CategoryBarChart --> ChartLegend
+    DonutChart --> ChartCard
+    HealthDonut ..> useChartPalette : 真 hex 取色
+    CategoryBarChart ..> useChartPalette : palette.axis
+    MetricsPage ..> useChartPalette : rows 取色 + hexAlpha
+    dashboardService --> portfolioAgg : 调用 3 新函数 + 既有函数

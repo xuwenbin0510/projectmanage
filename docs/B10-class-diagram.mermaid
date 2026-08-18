@@ -1,0 +1,140 @@
+classDiagram
+  direction LR
+
+  %% ── 领域模型（对齐 web/src/types/review.ts） ──
+  class Review {
+    +string id
+    +string projectId
+    +string projectName
+    +string refType
+    +string refId
+    +string reviewType
+    +string title
+    +string templateKey
+    +string mode
+    +string status
+    +number currentStep
+    +string initiator
+    +string initiatorName
+    +string createdAt
+    +string updatedAt
+    +string|null closedAt
+    +ReviewStep[] steps
+    +Approval[] approvals
+  }
+  class ReviewStep {
+    +string id
+    +string reviewId
+    +number stepIndex
+    +string role
+    +string|null assigneeOpenId
+    +string assigneeName
+    +boolean required
+    +string status
+    +string|null decidedBy
+    +string decidedByName
+    +string|null decidedAt
+    +string comment
+  }
+  class Approval {
+    +string id
+    +string reviewId
+    +string projectId
+    +number stepIndex
+    +string stepRole
+    +string actorOpenId
+    +string actorName
+    +string action
+    +string comment
+    +string evidenceUrl
+    +string createdAt
+  }
+  class CloseBlocker {
+    +string kind
+    +string message
+  }
+  class ReportReminder {
+    +string projectId
+    +string projectName
+    +string week
+    +string weekStart
+    +string weekEnd
+    +boolean filled
+  }
+
+  %% ── 服务层（新增） ──
+  class ReviewService {
+    +listReviews(db, projectId?) Review[]
+    +listMyApprovals(db, me) Review[]
+    +getReview(db, id) Review
+    +createReview(db, payload, me) Review
+    +approveReview(db, id, payload, me) Review
+    +rejectReview(db, id, payload, me) Review
+    +withdrawReview(db, id, payload, me) Review
+    +canDecide(review, openId) ReviewStep|null
+    -buildSteps(db, reviewId, projectId, chain, assignees) ReviewStep[]
+    -decide(db, id, action, payload, me) Review
+    -onReviewApproved(db, review, actor) void
+  }
+  class ProjectFlowService {
+    +transitionProject(db, req, id, to, comment) Project
+    +closeBlockers(db, projectId) CloseBlocker[]
+    +checkClose(db, projectId) CloseBlocker[]
+  }
+  class WorkbenchService {
+    +listMyTasks(db, me) WbsNode[]
+    +countOverdue(tasks) number
+    +listMyApprovals(db, me) Review[]
+    +countPendingApprovals(db, me) number
+    +listReportReminders(db, me) ReportReminder[]
+    +countMissingReports(db, me) number
+  }
+
+  %% ── 复用点（既有，不改） ──
+  class ProjectService {
+    +listMyProjectItems(db, me) ProjectListItem[]
+  }
+  class MilestoneService {
+    +achieveMilestoneByGate(db, actor, gateRow) void
+    +refreshMilestoneStatuses(db, projectId) void
+  }
+  class GateService {
+    +decideGate(db, req, projectId, gateId, payload) MilestoneWithGate[]
+  }
+  class ReportService {
+    +listReports(db, projectId) Report[]
+    +getReport(db, projectId, week) Report|null
+  }
+  class DatesLib {
+    +weekCode(dateStr?) string
+    +weekRange(code) {start, end}
+    +today() string
+    +nowIso() string
+  }
+  class RbacLib {
+    +assertWritable(db, projectId) ProjectRow
+    +assertCan(db, req, action, projectId?) User
+  }
+  class AuditLib {
+    +writeAudit(db, actor, entityType, entityId, action, projectId, summary, diff?) string|null
+  }
+
+  %% ── 关系 ──
+  Review "1" --> "*" ReviewStep : contains
+  Review "1" --> "*" Approval : 留痕
+  ReviewService ..> Review : assembles
+  ReviewService ..> ReviewStep : builds
+  ReviewService ..> Approval : writes
+  ReviewService ..> ProjectService : 终态联动(project)
+  ReviewService ..> MilestoneService : 终态联动(gate→碑)
+  ReviewService ..> DatesLib
+  ReviewService ..> AuditLib
+  ReviewService ..> RbacLib : 由路由层调用
+  ProjectFlowService ..> Review : close-check 直查 reviews 表
+  ProjectFlowService ..> DatesLib
+  ProjectFlowService ..> AuditLib
+  ProjectFlowService ..> RbacLib
+  WorkbenchService ..> ReviewService : listMyApprovals 复用
+  WorkbenchService ..> ProjectService : listMyProjectItems 复用
+  WorkbenchService ..> ReportService : work_reports 口径参考
+  WorkbenchService ..> DatesLib : weekCode/weekRange

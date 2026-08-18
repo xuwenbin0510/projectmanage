@@ -43,6 +43,10 @@ export const ErrorCode = {
   E_WBS_DEADLINE_OVERFLOW: 'E_WBS_DEADLINE_OVERFLOW',
   /** 工时估算超过起止区间可用天数（用户反馈④b · 硬拦截） */
   E_WBS_ESTIMATE_OVERFLOW: 'E_WBS_ESTIMATE_OVERFLOW',
+  /** 有子节点的节点禁止手填工时（B7 R4 · 方案 A 强制汇总；B8 保留定义、不再抛出） */
+  E_WBS_EFFORT_PARENT: 'E_WBS_EFFORT_PARENT',
+  /** WBS 写通道关闭（B8 D4）：工时唯一写入方 = 工作日志，携带 effortHours → 400 */
+  E_WBS_EFFORT_WRITE_DISABLED: 'E_WBS_EFFORT_WRITE_DISABLED',
   E_REPORT_RISK_INCOMPLETE: 'E_REPORT_RISK_INCOMPLETE',
   E_REPORT_DUPLICATE: 'E_REPORT_DUPLICATE',
   E_NOT_APPROVER: 'E_NOT_APPROVER',
@@ -54,6 +58,11 @@ export const ErrorCode = {
   E_PROJECT_ARCHIVED: 'E_PROJECT_ARCHIVED',
   E_CLOSE_BLOCKED: 'E_CLOSE_BLOCKED',
   E_NETWORK: 'E_NETWORK',
+  /* ── 后端专有码（server/lib/errors.js）：前端只消费、不主动产生 ── */
+  /** 501 · 接口尚未实现（Connect v1 降级桩返回，页面应降级为空态而非白屏） */
+  E_NOT_IMPLEMENTED: 'E_NOT_IMPLEMENTED',
+  /** 500 · 服务器内部错误（未捕获异常经 errorMiddleware 兜底） */
+  E_INTERNAL: 'E_INTERNAL',
 } as const;
 
 export type ErrorCodeKey = keyof typeof ErrorCode;
@@ -79,6 +88,8 @@ export const ERROR_MESSAGE_ZH: Record<string, string> = {
   E_WIP_EXCEEDED: 'WIP 已达上限，请先完成在办任务',
   E_WBS_DEADLINE_OVERFLOW: '子任务截止日期不能超过上级任务或关联里程碑的计划日期',
   E_WBS_ESTIMATE_OVERFLOW: '工时估算不得超过起止区间的可用天数',
+  E_WBS_EFFORT_PARENT: '有子节点的节点工时由子任务自动汇总，不可手填',
+  E_WBS_EFFORT_WRITE_DISABLED: '工时登记已移至工作日志，WBS 不再支持填写工时',
   E_REPORT_RISK_INCOMPLETE: '风险条目缺少责任人或截止日',
   E_REPORT_DUPLICATE: '本周周报已存在',
   E_NOT_APPROVER: '当前步骤无需您审批',
@@ -90,6 +101,8 @@ export const ERROR_MESSAGE_ZH: Record<string, string> = {
   E_PROJECT_ARCHIVED: '项目已结项，处于只读归档状态',
   E_CLOSE_BLOCKED: '结项被阻塞，请先处理阻塞项',
   E_NETWORK: '网络异常，请稍后重试',
+  E_NOT_IMPLEMENTED: '该功能尚未上线',
+  E_INTERNAL: '服务器内部错误',
 };
 
 /** 业务异常（client.ts 抛出，页面统一 catch） */

@@ -21,10 +21,23 @@ import type {
 import type { WbsNode, TaskStatus, BoardConfig, BoardView, BoardColumn } from '@/types/wbs';
 import { BOARD_COLUMNS } from '@/types/wbs';
 import type { Report, ReportTaskRow, ReportRisk } from '@/types/report';
+import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem } from '@/types/effort';
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument } from '@/types/audit';
 import type { WorkbenchData, ReportReminder, Session } from '@/types/workbench';
+import type {
+  DashboardOverview,
+  DashboardOverviewQuery,
+  DashboardScope,
+  DashboardTaskRow,
+  DashboardTasksQuery,
+  OverdueBucket,
+  OwnerLoadProjectRow,
+  OwnerLoadRow,
+  ReportMissingRow,
+  StatusDonutSegment,
+} from '@/types/dashboard';
 import type {
   ApiClient,
   ProjectQuery,
@@ -68,11 +81,26 @@ import {
 } from './rules';
 import {
   PROJECT_TRANSITIONS,
+  PROJECT_STATUSES,
   REVIEW_TEMPLATES,
   DEFAULT_WIP_LIMIT,
+  WEEK_ACTUAL_DAYS_MAX,
+  EFFORT_DAYS_CUM_MAX,
   AUDIT_ACTION_LABEL,
   GATE_PASSED_STATUSES,
+  DEFAULT_PRIORITY,
+  normalizePriority,
+  REJECT_REASON_MAX,
+  TASK_STATUSES,
 } from '@/config/enums';
+import {
+  aggregateHealth,
+  aggregateOverdue,
+  aggregatePriorityDistribution,
+  aggregateStatusDist,
+  aggregateOverdueDuration,
+  overdueBucketOf,
+} from '@/utils/dashboardAgg';
 import { canDo } from '@/config/permissions';
 import { addDays, today, nowIso, diffDays, weekCode, weekRange, fitMilestoneDates } from '@/utils/date';
 import { genId, deepClone } from '@/utils/format';
@@ -81,6 +109,7 @@ import {
   nextChildCode,
   leafNodesOf,
   isLeafNode,
+  parentIdSet,
   milestoneTaskStats,
   rollupProgressFlat,
 } from '@/utils/wbs';
@@ -93,8 +122,98 @@ import {
 const MOCK_TOKEN_PREFIX = 'mock-token-';
 const ROLE_FALLBACK_ORDER: GlobalRole[] = ['pmo', 'management', 'tl', 'qa', 'cm', 'po', 'pm'];
 
+/**
+ * B12 决策 ⑥：全局总览统计基线 —— 在管三态。
+ * ⚠ 与 `server/services/dashboard.service.js#MANAGED_STATUSES` 逐字一致。
+ */
+const DASHBOARD_MANAGED_STATUSES: ProjectStatus[] = ['已批准', '进行中', '挂起'];
+
+/** B12 明细表默认页大小（与服务端 `DEFAULT_PAGE_SIZE` 一致） */
+const DASHBOARD_PAGE_SIZE = 20;
+
+/** B12 明细表页大小上限（与服务端 `MAX_PAGE_SIZE` 一致） */
+const DASHBOARD_MAX_PAGE_SIZE = 200;
+
+/** B12 未分配负责人展示名（与 `server/lib/portfolioAgg.js#UNASSIGNED_LABEL` 一致） */
+const DASHBOARD_UNASSIGNED_LABEL = '未分配';
+
+/** B12 项目名缺失占位（与 `server/lib/portfolioAgg.js#UNNAMED_PROJECT` 一致） */
+const DASHBOARD_UNNAMED_PROJECT = '未命名项目';
+
+/** B12 明细表健康度排序权重：红 → 黄 → 绿（问题优先） */
+const DASHBOARD_HEALTH_RANK: Record<string, number> = { red: 0, yellow: 1, green: 2 };
+
 function nf(): never {
   throw new ApiError(ErrorCode.E_NOT_FOUND);
+}
+
+/**
+ * B8（与后端 `server/lib/wbs.js#decorateEffort` 同口径）：工时读时汇总。
+ * `effortHours` 恒指「累计实际工时（人日）」：叶子=历次已提交日志累加存储值（缺省 0）；
+ * 父=Σ直接子节点；补充 effortChildCount（直接子节点数）。
+ * 返回**新数组**，不改入参。Mock 与真实后端出参形态保持一致。
+ */
+function decorateEffort(nodes: WbsNode[]): WbsNode[] {
+  const childrenOf = new Map<string, WbsNode[]>();
+  for (const n of nodes) {
+    const key = n.parentId ?? '__root__';
+    const arr = childrenOf.get(key);
+    if (arr) arr.push(n);
+    else childrenOf.set(key, [n]);
+  }
+  const memo = new Map<string, { effortHours: number; effortChildCount: number }>();
+  const compute = (n: WbsNode, guard: number): { effortHours: number; effortChildCount: number } => {
+    if (guard > 64) return { effortHours: Number(n.effortHours) || 0, effortChildCount: 0 };
+    const cached = memo.get(n.id);
+    if (cached) return cached;
+    const kids = childrenOf.get(n.id) ?? [];
+    const effortHours = kids.length
+      ? kids.reduce((s, k) => s + compute(k, guard + 1).effortHours, 0)
+      : (Number(n.effortHours) || 0);
+    const result = { effortHours, effortChildCount: kids.length };
+    memo.set(n.id, result);
+    return result;
+  };
+  return nodes.map((n) => {
+    const r = compute(n, 0);
+    return { ...n, effortHours: r.effortHours, effortChildCount: r.effortChildCount };
+  });
+}
+
+/**
+ * B8（D4）工时写通道守卫（与后端 assertEffortWriteDisabled 同口径）：
+ * 任意 WBS 写（create/update）携带 effortHours → E_WBS_EFFORT_WRITE_DISABLED。
+ * 工时唯一写入方 = 工作日志 submit / 已提交日志编辑（upsertReport / updateReport）。
+ */
+function assertEffortWriteDisabled(payload: object): void {
+  const p = payload as { effortHours?: unknown };
+  if (p.effortHours !== undefined) {
+    throw new ApiError(ErrorCode.E_WBS_EFFORT_WRITE_DISABLED, '工时登记已移至工作日志，WBS 不再支持填写工时', {});
+  }
+}
+
+/**
+ * B8（R5）日志行 actualDays 校验（与后端 resolveTaskRefs 同口径，仅勾选叶子可携带）：
+ * - 0 ≤ v ≤ WEEK_ACTUAL_DAYS_MAX、最多 2 位小数（非法 → E_VALIDATION）
+ * - 未勾选携带 → E_VALIDATION（拒绝）
+ * - 有子节点（父节点）携带 → E_VALIDATION（拒绝）
+ */
+function assertActualDaysValid(t: { nodeId: string; selected: boolean; actualDays?: number }, isParent: boolean): void {
+  if (t.actualDays === undefined) return;
+  const v = Number(t.actualDays);
+  if (!Number.isFinite(v) || v < 0 || v > WEEK_ACTUAL_DAYS_MAX || Math.round(v * 100) / 100 !== v) {
+    throw new ApiError(
+      ErrorCode.E_VALIDATION,
+      `本周实际工时（人日）须为 0~${WEEK_ACTUAL_DAYS_MAX} 的数字，最多 2 位小数`,
+      { nodeId: t.nodeId, fields: { actualDays: '非法取值' } },
+    );
+  }
+  if (!t.selected) {
+    throw new ApiError(ErrorCode.E_VALIDATION, '未勾选的任务不能登记本周实际工时（人日）', { nodeId: t.nodeId, actualDays: t.actualDays });
+  }
+  if (isParent) {
+    throw new ApiError(ErrorCode.E_VALIDATION, '父节点不可登记本周实际工时（人日），请在具体子任务上登记', { nodeId: t.nodeId });
+  }
 }
 
 /** 取当前会话用户，未登录抛 E_UNAUTHORIZED */
@@ -460,6 +579,15 @@ function buildBoard(db: MockDb, projectId: string): BoardView {
     };
     db.boardConfigs.push(config);
   }
+  /* B11 决策 D-B11-1 · 列快照读时自愈（与后端 board.service.js#ensureBoardConfig 同口径）：
+   * columns 只是「创建时刻的枚举快照」且无 API 可改；localStorage 里的老快照会导致
+   * 「老项目 4 列 / 新项目 5 列」。此处幂等修复，**只改 columns，wipLimits 分毫不动**。 */
+  if (
+    config.columns.length !== BOARD_COLUMNS.length ||
+    config.columns.some((c, i) => c !== BOARD_COLUMNS[i])
+  ) {
+    config.columns = [...BOARD_COLUMNS];
+  }
   /* Q-3：看板卡片 = 真叶子（无子节点），不再以 nodeType==='task' 判定 */
   const tasks = leafNodesOf(db.wbsNodes.filter((n) => n.projectId === projectId));
   const columns: BoardColumn[] = config.columns.map((status) => ({
@@ -474,6 +602,15 @@ function buildBoard(db: MockDb, projectId: string): BoardView {
 
 export class MockApiClient implements ApiClient {
   /* ── 认证 ─────────────────────────────────────── */
+
+  /**
+   * @prd P0-11 Mock 态没有服务端凭证，恒返回空串。
+   * 登录页据此提示「请改用开发登录」，而不是拿假 AppID 去调 JSSDK。
+   */
+  async getAppId(): Promise<string> {
+    await delay(30);
+    return '';
+  }
 
   /** @prd P0-11 开发态免飞书登录 */
   async devLogin(openId: string): Promise<Session> {
@@ -495,6 +632,14 @@ export class MockApiClient implements ApiClient {
     db.sessionOpenId = user.openId;
     saveDb();
     return { token: MOCK_TOKEN_PREFIX + user.openId, user: deepClone(user) };
+  }
+
+  /** @prd P0-11 / B4-T03 飞书网页登录 Mock：返回与 loginByCode 同形态（当前登录用户） */
+  async loginByFeishuCode(_code: string): Promise<{ token: string; user: User }> {
+    await delay();
+    const db = getDb();
+    const me = currentUser(db);
+    return { token: MOCK_TOKEN_PREFIX + me.openId, user: deepClone(me) };
   }
 
   async me(): Promise<User> {
@@ -713,10 +858,15 @@ export class MockApiClient implements ApiClient {
             ownerName: '',
             estimateDays: 0,
             actualDays: 0,
+            // B7：骨架根节点此刻是叶子，工时按 0 起步；读时由 decorateEffort 覆盖父节点 Σ
+            effortHours: 0,
+            effortChildCount: 0,
             startDate: '',
             dueDate: ms.currentDate,
             status: '待办',
             progress: 0,
+            // B14-块1：骨架节点走缺省优先级
+            priority: DEFAULT_PRIORITY,
             boardOrder: idx,
             isCritical: false,
             milestoneId: ms.id,
@@ -1159,7 +1309,9 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     currentUser(db);
     return deepClone(
-      db.wbsNodes.filter((n) => n.projectId === projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      decorateEffort(
+        db.wbsNodes.filter((n) => n.projectId === projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      ),
     );
   }
 
@@ -1177,6 +1329,9 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_VALIDATION, '父节点不属于当前项目', { parentId: parent.id });
     }
 
+    /* B8（D4）：WBS 写通道关闭 —— 携带 effortHours → E_WBS_EFFORT_WRITE_DISABLED */
+    assertEffortWriteDisabled(payload);
+
     // W-1 深度 / W-2 父子类型 —— fail-fast，先于叶子完整性
     const rules = resolveWbsRules(projectTemplateOf(db, projectId));
     const placementError = validateWbsPlacement({ nodeType: payload.nodeType, parent }, rules);
@@ -1188,6 +1343,8 @@ export class MockApiClient implements ApiClient {
     if (!payload.owner || !payload.estimateDays) {
       throw new ApiError(ErrorCode.E_WBS_LEAF_INCOMPLETE);
     }
+
+    const newId = genId('W');
 
     // 关联里程碑：显式传入用传入值；未传则默认继承上级节点的里程碑（用户反馈②）
     const milestoneId = payload.milestoneId !== undefined ? payload.milestoneId : (parent?.milestoneId ?? null);
@@ -1218,7 +1375,7 @@ export class MockApiClient implements ApiClient {
     }
 
     const node: WbsNode = {
-      id: genId('W'),
+      id: newId,
       projectId,
       parentId: payload.parentId,
       wbsCode,
@@ -1230,10 +1387,15 @@ export class MockApiClient implements ApiClient {
       ownerName: u?.name ?? '',
       estimateDays: payload.estimateDays ?? 0,
       actualDays: 0,
+      // B8（D9）：新节点 effortHours 存储值恒 0（后端列 NULL → 展示 0）；由日志 submit 累加
+      effortHours: 0,
+      effortChildCount: 0,
       startDate: payload.startDate ?? today(),
       dueDate: effectiveDue,
       status: payload.status ?? '待办',
       progress: payload.progress ?? 0,
+      // B14-块1：与后端 wbs.service#createWbsNode 同构 —— 缺省 P2，非法值收敛
+      priority: normalizePriority(payload.priority ?? DEFAULT_PRIORITY),
       boardOrder: db.wbsNodes.filter((n) => n.projectId === projectId).length,
       isCritical: false,
       milestoneId,
@@ -1242,13 +1404,14 @@ export class MockApiClient implements ApiClient {
       updatedAt: ts,
     };
     db.wbsNodes.push(node);
+    /* B8（D9）：WBS 写路径不再触碰 effort_hours —— 不再「成为父即清」父节点存储值 */
     audit(db, me, 'wbs_node', node.id, 'create', projectId, `新增 WBS 节点「${wbsCode} ${payload.name}」`);
     /* R4-P0-3：新叶子改变父子汇总 → 父链回写 + 状态收敛 */
     syncWbsProgressStatus(db, projectId);
     /* 新叶子会改变里程碑完成度 → 触发状态重推 */
     refreshMilestoneStatuses(db, projectId);
     saveDb();
-    return deepClone(node);
+    return deepClone(decorateEffort([node])[0]);
   }
 
   async updateWbsNode(id: string, payload: Partial<WbsNodePayload>): Promise<WbsNode> {
@@ -1258,10 +1421,14 @@ export class MockApiClient implements ApiClient {
     assertWritable(db, node.projectId);
     const me = assertCan(db, 'wbs.edit', node.projectId);
 
+    /* B8（D4）：WBS 写通道关闭 —— 携带 effortHours → E_WBS_EFFORT_WRITE_DISABLED */
+    assertEffortWriteDisabled(payload);
+
     const diff: AuditDiffEntry[] = [];
 
     // R-4 类型锁：已有子节点的节点不可改 nodeType
     const children = db.wbsNodes.filter((n) => n.parentId === node.id);
+
     if (payload.nodeType !== undefined && payload.nodeType !== node.nodeType) {
       if (children.length > 0) {
         throw new ApiError(ErrorCode.E_WBS_TYPE_LOCKED, undefined, { nodeId: id, childCount: children.length });
@@ -1297,6 +1464,14 @@ export class MockApiClient implements ApiClient {
         after: String(payload.estimateDays),
       });
       node.estimateDays = payload.estimateDays;
+    }
+    /* B14-块1：优先级变更（与后端 wbs.service#updateWbsNode 同构，含审计 diff） */
+    if (payload.priority !== undefined) {
+      const nextPriority = normalizePriority(payload.priority);
+      if (nextPriority !== node.priority) {
+        diff.push({ field: 'priority', label: '优先级', before: node.priority, after: nextPriority });
+        node.priority = nextPriority;
+      }
     }
     if (payload.startDate !== undefined) node.startDate = payload.startDate;
     if (payload.dueDate !== undefined) {
@@ -1356,7 +1531,8 @@ export class MockApiClient implements ApiClient {
     /* 进度 / 挂载关系变化会影响里程碑完成度 → 触发状态重推 */
     refreshMilestoneStatuses(db, node.projectId);
     saveDb();
-    return deepClone(node);
+    /* B7：返回装饰后的单节点（父=Σ直接子节点，叶=存储值） */
+    return deepClone(decorateEffort(db.wbsNodes).find((n) => n.id === id) ?? node);
   }
 
   async deleteWbsNode(id: string): Promise<void> {
@@ -1378,6 +1554,7 @@ export class MockApiClient implements ApiClient {
       }
     }
     db.wbsNodes = db.wbsNodes.filter((n) => !toDelete.has(n.id));
+    /* B8（D9）：WBS 写路径不再触碰 effort_hours —— 删除不再清父节点存储值 */
     audit(db, me, 'wbs_node', id, 'delete', node.projectId, `删除节点「${node.wbsCode} ${node.name}」及其 ${toDelete.size - 1} 个子节点`);
     /* R4-P0-3：删除改变父子汇总 → 父链回写 + 状态收敛 */
     syncWbsProgressStatus(db, node.projectId);
@@ -1419,6 +1596,7 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(placementError.code, placementError.message, placementError.data);
     }
 
+    /* B8（D9）：移动不再清原父/新父 effort_hours —— 叶子积累后成为父 → 存储值保留、展示走 Σ 子 */
     node.parentId = newParentId;
     const siblings = db.wbsNodes
       .filter((n) => n.projectId === node.projectId && n.parentId === newParentId && n.id !== id)
@@ -1437,7 +1615,9 @@ export class MockApiClient implements ApiClient {
     syncWbsProgressStatus(db, node.projectId);
     saveDb();
     return deepClone(
-      db.wbsNodes.filter((n) => n.projectId === node.projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      decorateEffort(
+        db.wbsNodes.filter((n) => n.projectId === node.projectId).sort((a, b) => compareWbsCode(a.wbsCode, b.wbsCode)),
+      ),
     );
   }
 
@@ -1548,6 +1728,12 @@ export class MockApiClient implements ApiClient {
     const range = weekRange(payload.week);
     const ts = nowIso();
 
+    /* B8（R5）：mock 与后端同构 —— actualDays 结构校验（0~100/≤2 位小数/未勾选拒绝/父节点拒绝） */
+    const parentIdsOf = parentIdSet(db.wbsNodes);
+    payload.tasks.forEach((t) => {
+      assertActualDaysValid(t, parentIdsOf.has(t.nodeId));
+    });
+
     // 用户反馈⑤：工作日志允许同周多次提交，不再按周次查重；每次存/交均新建一条
     const report: Report = {
       id: genId('RP'),
@@ -1565,6 +1751,10 @@ export class MockApiClient implements ApiClient {
       risks: [],
       snapshot: null,
       submittedAt: null,
+      // B14-块2：新建/提交时确认三字段恒空（确认态只由 confirmReport/rejectReport 写入）
+      confirmedBy: null,
+      confirmedAt: null,
+      rejectReason: null,
       createdAt: ts,
       updatedAt: ts,
     };
@@ -1587,6 +1777,8 @@ export class MockApiClient implements ApiClient {
         progressBefore: node?.progress ?? 0,
         progressAfter: t.progressAfter,
         selected: t.selected,
+        // B8（R3）：本周实际人日（仅勾选行携带；未勾选 / 父节点为 0）
+        weekActualDays: t.actualDays ?? 0,
       };
     });
 
@@ -1611,6 +1803,21 @@ export class MockApiClient implements ApiClient {
           node.updatedAt = ts;
         }
         snapshot[t.nodeId] = t.progressAfter;
+      });
+      /* B8（R3）：提交日志 → 累加实际工时（人日）到节点（仅勾选；草稿不累加） */
+      report.tasks.forEach((t) => {
+        const node = db.wbsNodes.find((n) => n.id === t.nodeId);
+        if (node && t.selected) {
+          const next = (node.effortHours ?? 0) + (t.weekActualDays ?? 0);
+          if (next < 0 || next > EFFORT_DAYS_CUM_MAX) {
+            throw new ApiError(
+              ErrorCode.E_VALIDATION,
+              `累计实际工时（人日）须为 0~${EFFORT_DAYS_CUM_MAX}，当前操作将超出该范围`,
+              { nodeId: t.nodeId, next },
+            );
+          }
+          node.effortHours = next;
+        }
       });
       /* R4-P0-3：进度→状态自动流转统一收口（父节点回写 + 状态收敛），
        * 不再散落 if(progress>=100) 类判断（规则唯一实现 syncNodeStatusFromProgress） */
@@ -1637,6 +1844,46 @@ export class MockApiClient implements ApiClient {
     const me = assertCan(db, 'report.write', report.projectId);
     const ts = nowIso();
 
+    /* B8（R5）：mock 与后端同构 —— actualDays 结构校验（0~100/≤2 位小数/未勾选拒绝/父节点拒绝） */
+    const parentIdsOf = parentIdSet(db.wbsNodes);
+    payload.tasks.forEach((t) => {
+      assertActualDaysValid(t, parentIdsOf.has(t.nodeId));
+    });
+
+    /* B8（R4）：已提交日志先扣旧后加新（同构后端）；草稿不冲正 */
+    const wasSubmitted = report.status === '已提交';
+    const oldTaskRows = report.tasks;
+    if (wasSubmitted) {
+      oldTaskRows.forEach((t) => {
+        const node = db.wbsNodes.find((n) => n.id === t.nodeId);
+        if (node) {
+          const next = (node.effortHours ?? 0) - (t.weekActualDays ?? 0);
+          if (next < 0 || next > EFFORT_DAYS_CUM_MAX) {
+            throw new ApiError(
+              ErrorCode.E_VALIDATION,
+              `累计实际工时（人日）须为 0~${EFFORT_DAYS_CUM_MAX}，当前冲正将超出该范围`,
+              { nodeId: t.nodeId, next },
+            );
+          }
+          node.effortHours = next;
+        }
+      });
+      payload.tasks.forEach((t) => {
+        const node = db.wbsNodes.find((n) => n.id === t.nodeId);
+        if (node && t.selected) {
+          const next = (node.effortHours ?? 0) + (t.actualDays ?? 0);
+          if (next < 0 || next > EFFORT_DAYS_CUM_MAX) {
+            throw new ApiError(
+              ErrorCode.E_VALIDATION,
+              `累计实际工时（人日）须为 0~${EFFORT_DAYS_CUM_MAX}，当前冲正将超出该范围`,
+              { nodeId: t.nodeId, next },
+            );
+          }
+          node.effortHours = next;
+        }
+      });
+    }
+
     report.doneNote = payload.doneNote;
     report.planItems = payload.planItems.filter((p) => p.trim());
     report.resourceNote = payload.resourceNote;
@@ -1651,6 +1898,8 @@ export class MockApiClient implements ApiClient {
         progressBefore: node?.progress ?? 0,
         progressAfter: t.progressAfter,
         selected: t.selected,
+        // B8（R3）：本周实际人日（仅勾选行携带；未勾选 / 父节点为 0）
+        weekActualDays: t.actualDays ?? 0,
       };
     });
     report.risks = payload.risks.map<ReportRisk>((r, i) => ({
@@ -1667,7 +1916,228 @@ export class MockApiClient implements ApiClient {
     return deepClone(report);
   }
 
-  /* ── 评审 ─────────────────────────────────────── */
+  /* ── 周报轻量闭环 B14-块2（与后端 report.service 同构） ─────────── */
+
+  /**
+   * 确认人解析（架构 §1.3 的 Mock 同构实现）。
+   *
+   * 权威源 = `project_members(project_role='pm')`（mock 里即 `db.members` 的 `projectRole==='pm'`）；
+   * 作者本人恒被剔除 → 天然保证「作者不能确认自己」；
+   * 作者即 PM（或项目无 PM）→ 升级为 `tl` ∪ `global_role='admin'`。
+   *
+   * ⚠️ 唯一权威实现在后端 `report.service#resolveConfirmers`；本函数仅供 Mock 演示态使用。
+   */
+  private resolveConfirmers(db: MockDb, projectId: string, authorOpenId: string): Set<string> {
+    const pm = db.members
+      .filter((m) => m.projectId === projectId && m.projectRole === 'pm')
+      .map((m) => m.userOpenId);
+
+    let result: string[];
+    if (pm.length === 0 || pm.includes(authorOpenId)) {
+      const tl = db.members
+        .filter((m) => m.projectId === projectId && m.projectRole === 'tl')
+        .map((m) => m.userOpenId);
+      const admins = db.users.filter((u) => u.globalRole === 'admin').map((u) => u.openId);
+      result = [...tl, ...admins];
+    } else {
+      result = pm;
+    }
+
+    const set = new Set(result.filter((x) => Boolean(x)));
+    set.delete(authorOpenId);
+    return set;
+  }
+
+  /** 取「已提交」周报并校验当前用户是否为确认人；失败按后端同码抛错 */
+  private assertConfirmable(db: MockDb, id: string, meOpenId: string): Report {
+    const report = db.reports.find((r) => r.id === id) ?? nf();
+    if (report.status !== '已提交') {
+      throw new ApiError(ErrorCode.E_VALIDATION, `仅「已提交」的周报可确认或打回，当前状态：${report.status}`, {
+        id,
+        status: report.status,
+      });
+    }
+    const confirmers = this.resolveConfirmers(db, report.projectId, report.author);
+    if (!confirmers.has(meOpenId)) {
+      throw new ApiError(ErrorCode.E_FORBIDDEN, '你不是该周报的确认人（作者本人不可确认自己的周报）', {
+        id,
+      });
+    }
+    return report;
+  }
+
+  /** B14-块2：确认周报 → `已确认` + 写 `confirmedBy/confirmedAt`，清空打回原因 */
+  async confirmReport(projectId: string, id: string): Promise<Report> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = currentUser(db);
+    const report = this.assertConfirmable(db, id, me.openId);
+    const ts = nowIso();
+
+    report.status = '已确认';
+    report.confirmedBy = me.openId;
+    report.confirmedAt = ts;
+    report.rejectReason = null;
+    report.updatedAt = ts;
+
+    audit(db, me, 'report', report.id, 'approve', report.projectId, `确认周报「${report.week}」`);
+    saveDb();
+    return deepClone(report);
+  }
+
+  /** B14-块2：打回周报 → 回退 `草稿` + 写 `rejectReason`（必填），清空确认字段 */
+  async rejectReport(projectId: string, id: string, reason: string): Promise<Report> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = currentUser(db);
+
+    const trimmed = String(reason ?? '').trim();
+    if (!trimmed) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '打回原因不能为空', { fields: { reason: '必填' } });
+    }
+    if (trimmed.length > REJECT_REASON_MAX) {
+      throw new ApiError(ErrorCode.E_VALIDATION, `打回原因不能超过 ${REJECT_REASON_MAX} 字`, {
+        fields: { reason: '过长' },
+      });
+    }
+
+    const report = this.assertConfirmable(db, id, me.openId);
+    const ts = nowIso();
+
+    report.status = '草稿';
+    report.rejectReason = trimmed;
+    report.confirmedBy = null;
+    report.confirmedAt = null;
+    report.updatedAt = ts;
+
+    audit(db, me, 'report', report.id, 'reject', report.projectId, `打回周报「${report.week}」：${trimmed}`);
+    saveDb();
+    return deepClone(report);
+  }
+
+  /** B14-块2：待我确认的周报（跨项目聚合，服务端过滤口径同构） */
+  async listPendingConfirmation(): Promise<Report[]> {
+    await delay(120);
+    const db = getDb();
+    const me = currentUser(db);
+
+    const rows = db.reports
+      .filter((r) => r.status === '已提交')
+      .filter((r) => this.resolveConfirmers(db, r.projectId, r.author).has(me.openId))
+      .sort((a, b) => String(b.submittedAt ?? '').localeCompare(String(a.submittedAt ?? '')));
+
+    return deepClone(rows);
+  }
+
+  /* ── 工时统计报表 B9（只读聚合 · 与后端 report.service#getEffortReport 同构） ── */
+
+  /**
+   * B9（R2/R3/R4）：工时统计报表。
+   * 行/汇总复用文件内 `decorateEffort`（与后端 loadNodes 出参同口径），
+   * 父估算 = Σ 子树叶子（读时算、不落库）；breakdown 仅已提交 & weekActualDays>0，周倒序。
+   */
+  async getEffortReport(projectId: string): Promise<EffortReport> {
+    await delay(120);
+    const db = getDb();
+    currentUser(db);
+    const nodes = decorateEffort(db.wbsNodes.filter((n) => n.projectId === projectId));
+
+    /* parentId → 直接子数组（'__root__' = 根层），叶子判定唯一入口（SK-4） */
+    const childrenOf = new Map<string, WbsNode[]>();
+    for (const n of nodes) {
+      const key = n.parentId ?? '__root__';
+      const arr = childrenOf.get(key);
+      if (arr) arr.push(n);
+      else childrenOf.set(key, [n]);
+    }
+    const isLeaf = (n: WbsNode): boolean => !(childrenOf.get(n.id) ?? []).length;
+
+    /* 父估算 = Σ 子树叶子 estimateDays（读时算、不落库，与后端 buildEstimateIndex 同构） */
+    const estMemo = new Map<string, number>();
+    const estimateOf = (n: WbsNode, guard: number): number => {
+      if (guard > 64) return 0; // 防御性：脏数据成环时兜底
+      const cached = estMemo.get(n.id);
+      if (cached !== undefined) return cached;
+      const kids = childrenOf.get(n.id) ?? [];
+      const v = kids.length
+        ? kids.reduce((s, k) => s + estimateOf(k, guard + 1), 0)
+        : (Number(n.estimateDays) || 0);
+      estMemo.set(n.id, v);
+      return v;
+    };
+
+    /* 里程碑 badge：一次查表带 code/name */
+    const msMap = new Map<string, { code: string; name: string }>();
+    for (const m of db.milestones) msMap.set(m.id, { code: m.code, name: m.name });
+
+    const rows: EffortReportRow[] = nodes.map((n) => {
+      const leaf = isLeaf(n);
+      const estimateDays = estimateOf(n, 0);
+      const effortHours = Number(n.effortHours) || 0;
+      const diff = effortHours - estimateDays;
+      const diffRate = estimateDays > 0 ? effortHours / estimateDays - 1 : null;
+      const ms = n.milestoneId ? msMap.get(n.milestoneId) : null;
+      return {
+        id: n.id,
+        parentId: n.parentId,
+        wbsCode: n.wbsCode,
+        level: n.level,
+        nodeType: n.nodeType,
+        name: n.name,
+        owner: n.owner,
+        ownerName: n.ownerName,
+        estimateDays,
+        effortHours,
+        effortChildCount: Number(n.effortChildCount) || 0,
+        diff,
+        diffRate,
+        isOverrun: effortHours > estimateDays,
+        progress: n.progress,
+        status: n.status,
+        isLeaf: leaf,
+        milestoneId: n.milestoneId,
+        milestoneCode: ms?.code ?? '',
+        milestoneName: ms?.name ?? '',
+      };
+    });
+
+    const leaves = nodes.filter((n) => isLeaf(n));
+    const estimateTotal = leaves.reduce((s, n) => s + (Number(n.estimateDays) || 0), 0);
+    const actualTotal = leaves.reduce((s, n) => s + (Number(n.effortHours) || 0), 0);
+    const summary: EffortSummary = {
+      estimateTotal,
+      actualTotal,
+      diff: actualTotal - estimateTotal,
+      diffRate: estimateTotal > 0 ? actualTotal / estimateTotal - 1 : null,
+      overrunCount: leaves.filter((n) => (Number(n.effortHours) || 0) > (Number(n.estimateDays) || 0)).length,
+      leafCount: leaves.length,
+      parentCount: nodes.length - leaves.length,
+    };
+
+    /* breakdown：仅已提交 & selected & weekActualDays>0，周倒序（同周按 submittedAt 升序） */
+    const effortBreakdown: Record<string, EffortBreakdownItem[]> = {};
+    const submitted = db.reports
+      .filter((r) => r.projectId === projectId && r.status === '已提交')
+      .sort((a, b) => {
+        if (a.week !== b.week) return a.week < b.week ? 1 : -1;
+        const sa = a.submittedAt ?? '';
+        const sb = b.submittedAt ?? '';
+        return sa < sb ? -1 : sa > sb ? 1 : 0;
+      });
+    for (const r of submitted) {
+      for (const t of r.tasks) {
+        if (!t.selected) continue;
+        const days = Number(t.weekActualDays) || 0;
+        if (days <= 0) continue;
+        const list = effortBreakdown[t.nodeId] ?? (effortBreakdown[t.nodeId] = []);
+        list.push({ week: r.week, reporterName: r.authorName, submittedAt: r.submittedAt, weekActualDays: days });
+      }
+    }
+
+    return deepClone({ projectId, summary, rows, effortBreakdown });
+  }
 
   async listReviews(projectId?: string): Promise<Review[]> {
     await delay(100);
@@ -1685,6 +2155,8 @@ export class MockApiClient implements ApiClient {
     const rows = db.reviews.filter((r) => canDecide(r, me.openId) !== null);
     return deepClone(rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)));
   }
+
+  /* ── 评审 ─────────────────────────────────────── */
 
   async getReview(id: string): Promise<Review> {
     await delay(80);
@@ -2055,9 +2527,12 @@ export class MockApiClient implements ApiClient {
       .map((p) => toListItem(db, p));
 
     /* Q-3：我的任务 = 我负责的真叶子（无子节点），不再以 nodeType==='task' 判定 */
+    /* B11：与真后端 listMyTasks 对齐，纯追加 projectName（逾期柱状图按项目分组用） */
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
     const myTasks = leafNodesOf(db.wbsNodes)
       .filter((n) => n.owner === me.openId && n.status !== '完成')
-      .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1));
+      .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1))
+      .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' }));
 
     const myApprovals = db.reviews.filter((r) => canDecide(r, me.openId) !== null);
 
@@ -2089,6 +2564,351 @@ export class MockApiClient implements ApiClient {
       myTasks,
       myApprovals,
       reportReminders,
+    });
+  }
+
+  /* ── 全局总览 B12 ─────────────────────────────── */
+
+  /**
+   * 全局总览（对应 `GET /api/dashboard/overview`）。
+   *
+   * 与服务端 `dashboard.service.getDashboardOverview` **字段逐个对齐**：
+   *  - 决策 ①：`dashboard:global` 决定能否看公司全量；无权限恒降级为 `mine`（不抛 403）
+   *  - 决策 ②：`timeRange` 接受但忽略
+   *  - 决策 ③：负责人负荷 = 在办任务数 + 逾期数
+   *  - 决策 ⑥：统计基线恒为在管三态，非法 `status` 入参直接丢弃
+   *
+   * ⚠ 已知口径差异（Mock 内部自洽优先）：`toListItem` 的 `progress` 在 Mock 里是
+   *   **WBS 加权**（`rollupProjectProgress`），服务端是**里程碑达成率**。这是 B11 前既有的
+   *   Mock/真后端差异，本期不在 B12 内擅自纠偏，以免 Mock 的总览与项目列表页自相矛盾。
+   */
+  async getDashboardOverview(query: DashboardOverviewQuery): Promise<DashboardOverview> {
+    await delay(200);
+    const db = getDb();
+    const me = currentUser(db);
+
+    /* 1. 范围解析（决策 ① / ⑤） */
+    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
+
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(
+      DASHBOARD_MAX_PAGE_SIZE,
+      Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE),
+    );
+    const sort = query.sort ?? 'health';
+
+    /* 2. 项目范围（决策 ⑥ 三态基线 + scope + 过滤条件） */
+    const statusFilter =
+      query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
+
+    const myProjectIds = new Set(
+      db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
+    );
+    const myPmProjectIds = new Set(
+      db.members
+        .filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm')
+        .map((m) => m.projectId),
+    );
+
+    let items = db.projects
+      .filter((p) =>
+        statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status),
+      )
+      .filter((p) => {
+        if (scope === 'all') return true;
+        return query.onlyMine ? myPmProjectIds.has(p.id) : myProjectIds.has(p.id);
+      })
+      .map((p) => toListItem(db, p));
+
+    if (query.type) items = items.filter((r) => r.type === query.type);
+    if (query.health) items = items.filter((r) => r.health === query.health);
+    if (query.keyword) {
+      const k = query.keyword.trim().toLowerCase();
+      if (k) {
+        items = items.filter(
+          (r) =>
+            r.name.toLowerCase().includes(k) ||
+            r.code.toLowerCase().includes(k) ||
+            r.customer.toLowerCase().includes(k),
+        );
+      }
+    }
+
+    /* 3. 范围内「叶子任务」：真叶子判定要在项目全量节点上做（B17 保留全量叶子，含已完成） */
+    const scopeIds = new Set(items.map((p) => p.id));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+    const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
+    const allLeafTasks = leafNodesOf(db.wbsNodes.filter((n) => scopeIds.has(n.projectId)))
+      .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' })); // 全量叶子（含已完成）
+    const tasks = allLeafTasks.filter((n) => n.status !== '完成'); // 在办（既有口径逐字不变）
+
+    /* 4. 图表聚合（复用 B11/B14 纯函数 + B17 新纯函数，口径零漂移） */
+    const health = aggregateHealth(items);
+    const overdue = aggregateOverdue(tasks, items);
+    const overdueTasks = tasks.filter((t) => !!t.dueDate && diffDays(today(), t.dueDate) < 0).length;
+    const priorityDist = aggregatePriorityDistribution(tasks); // 在办叶子（复用 B14 纯函数）
+    const statusDist = aggregateStatusDist(allLeafTasks); // 全量叶子（含已完成）
+    const overdueDuration = aggregateOverdueDuration(tasks); // 在办叶子中已逾期者分段
+
+    const statusCounter = new Map<string, number>();
+    items.forEach((p) => statusCounter.set(p.status, (statusCounter.get(p.status) ?? 0) + 1));
+    const segments: StatusDonutSegment[] = PROJECT_STATUSES.filter(
+      (s) => (statusCounter.get(s) ?? 0) > 0,
+    ).map((s) => ({ status: s, value: statusCounter.get(s) as number }));
+    const statusDonut = {
+      segments,
+      total: segments.reduce((n, s) => n + s.value, 0),
+    };
+
+    /* 负责人负荷（决策 ③）：排序 逾期 ↓ → 在办 ↓ → 姓名 ↑，未分配恒最后。
+       `projects` 跨项目明细供 P1-6 抽屉直接渲染（与服务端 aggregateOwnerLoad 同构） */
+    interface OwnerLoadAcc {
+      owner: string;
+      ownerName: string;
+      activeTasks: number;
+      overdueTasks: number;
+      projects: Map<string, OwnerLoadProjectRow>;
+    }
+    const loadMap = new Map<string, OwnerLoadAcc>();
+    tasks.forEach((n) => {
+      const owner = n.owner || '';
+      let row = loadMap.get(owner);
+      if (!row) {
+        row = {
+          owner,
+          ownerName: owner
+            ? n.ownerName || userNameById.get(owner) || owner
+            : DASHBOARD_UNASSIGNED_LABEL,
+          activeTasks: 0,
+          overdueTasks: 0,
+          projects: new Map<string, OwnerLoadProjectRow>(),
+        };
+        loadMap.set(owner, row);
+      }
+      const late = !!n.dueDate && diffDays(today(), n.dueDate) < 0;
+      row.activeTasks += 1;
+      if (late) row.overdueTasks += 1;
+      if (n.projectId) {
+        let pr = row.projects.get(n.projectId);
+        if (!pr) {
+          pr = {
+            projectId: n.projectId,
+            projectName: projectNameById.get(n.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+            activeTasks: 0,
+            overdueTasks: 0,
+          };
+          row.projects.set(n.projectId, pr);
+        }
+        pr.activeTasks += 1;
+        if (late) pr.overdueTasks += 1;
+      }
+    });
+    const ownerLoad: OwnerLoadRow[] = Array.from(loadMap.values())
+      .map((r) => {
+        const projects = Array.from(r.projects.values()).sort((a, b) => {
+          if (a.overdueTasks !== b.overdueTasks) return b.overdueTasks - a.overdueTasks;
+          if (a.activeTasks !== b.activeTasks) return b.activeTasks - a.activeTasks;
+          return a.projectName.localeCompare(b.projectName, 'zh-CN');
+        });
+        return {
+          owner: r.owner,
+          ownerName: r.ownerName,
+          activeTasks: r.activeTasks,
+          overdueTasks: r.overdueTasks,
+          projectCount: projects.length,
+          projects,
+        };
+      })
+      .sort((a, b) => {
+        if (!a.owner !== !b.owner) return a.owner ? -1 : 1; // 未分配恒最后
+        if (a.overdueTasks !== b.overdueTasks) return b.overdueTasks - a.overdueTasks;
+        if (a.activeTasks !== b.activeTasks) return b.activeTasks - a.activeTasks;
+        return a.ownerName.localeCompare(b.ownerName, 'zh-CN');
+      });
+
+    /* 5. 周报填报（口径与工作台提醒一致：仅「进行中」项目应填） */
+    const curWeek = weekCode(today());
+    const activeItems = items.filter((p) => p.status === '进行中');
+    const reportMissing: ReportMissingRow[] = activeItems
+      .filter((p) => !db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交'))
+      .map((p) => ({ projectId: p.id, projectName: p.name, pmName: p.pmName }));
+    const reportDue = activeItems.length;
+    const reportFilled = reportDue - reportMissing.length;
+
+    /* 6. 明细表排序 + 分页（决策 ④） */
+    const overdueByProject = new Map(overdue.map((r) => [r.projectId, r.overdue]));
+    const sorted = items.slice().sort((a, b) => {
+      if (sort === 'progress') {
+        if (a.progress !== b.progress) return a.progress - b.progress;
+      } else if (sort === 'overdue') {
+        const oa = overdueByProject.get(a.id) ?? 0;
+        const ob = overdueByProject.get(b.id) ?? 0;
+        if (oa !== ob) return ob - oa;
+      } else if (sort === 'nextMilestone') {
+        const da = a.nextMilestoneDate ?? '';
+        const dbv = b.nextMilestoneDate ?? '';
+        if (!da !== !dbv) return da ? -1 : 1;
+        if (da !== dbv) return da < dbv ? -1 : 1;
+      } else {
+        const ra = DASHBOARD_HEALTH_RANK[a.health] ?? 3;
+        const rb = DASHBOARD_HEALTH_RANK[b.health] ?? 3;
+        if (ra !== rb) return ra - rb;
+        if (a.progress !== b.progress) return a.progress - b.progress;
+      }
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+
+    const averageProgress = items.length
+      ? Math.round(items.reduce((n, p) => n + (Number(p.progress) || 0), 0) / items.length)
+      : 0;
+
+    return deepClone({
+      scope,
+      generatedAt: nowIso(),
+      stats: {
+        managedProjects: items.length,
+        redProjects: health.red,
+        overdueTasks,
+        /* 无应填项目时视为 100%（0 缺口），避免空数据把卡片染成告警色 */
+        reportFillRate: reportDue ? Math.round((reportFilled / reportDue) * 100) : 100,
+        reportFilled,
+        reportDue,
+        averageProgress,
+      },
+      statusDonut,
+      health,
+      priorityDist,
+      statusDist,
+      overdueDuration,
+      overdue,
+      ownerLoad,
+      reportMissing,
+      projects: {
+        items: sorted.slice((page - 1) * pageSize, page * pageSize),
+        total: items.length,
+        page,
+        pageSize,
+      },
+    });
+  }
+
+  /**
+   * B18：分布图点档下钻任务明细（对应 `GET /api/dashboard/tasks`）。
+   * 与服务端 getDashboardTasks 逐字对齐：
+   *  - 步骤 1-2（范围 + 项目过滤）与上方 getDashboardOverview 同口径（mock 手工双写惯例，逐字拷贝）；
+   *  - 维度三选一互斥（taskStatus → overdueBucket → priority），优先级脏值兜底 P2；
+   *  - taskStatus 命中基数 = 全量叶子（含已完成），否则 = 在办叶子；
+   *  - 行 = WbsNode 字段 + projectName 映射；排序 优先级 → 截止日 → 名称；分页返回 { items, total, page, pageSize }。
+   */
+  async getDashboardTasks(query: DashboardTasksQuery): Promise<Paged<DashboardTaskRow>> {
+    await delay(200);
+    const db = getDb();
+    const me = currentUser(db);
+
+    /* 1. 范围解析（与服务端 resolveScope 同口径） */
+    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
+
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE));
+
+    /* 2. 项目范围（决策 ⑥ 三态基线 + scope + 过滤，与 getDashboardOverview 步骤 1-2 逐字一致） */
+    const statusFilter =
+      query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
+    const myProjectIds = new Set(
+      db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
+    );
+    const myPmProjectIds = new Set(
+      db.members
+        .filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm')
+        .map((m) => m.projectId),
+    );
+    let items = db.projects
+      .filter((p) =>
+        statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status),
+      )
+      .filter((p) => {
+        if (scope === 'all') return true;
+        return query.onlyMine ? myPmProjectIds.has(p.id) : myProjectIds.has(p.id);
+      })
+      .map((p) => toListItem(db, p));
+    if (query.type) items = items.filter((r) => r.type === query.type);
+    if (query.health) items = items.filter((r) => r.health === query.health);
+    if (query.keyword) {
+      const k = query.keyword.trim().toLowerCase();
+      if (k) {
+        items = items.filter(
+          (r) =>
+            r.name.toLowerCase().includes(k) ||
+            r.code.toLowerCase().includes(k) ||
+            r.customer.toLowerCase().includes(k),
+        );
+      }
+    }
+
+    /* 3. 维度解析（三选一互斥；priority 脏值兜底 P2 —— normalizePriority('')→P2 与服务端一致） */
+    const dim: { kind: 'taskStatus' | 'overdueBucket' | 'priority' | 'none'; value: string } = {
+      kind: 'none',
+      value: '',
+    };
+    if (query.taskStatus && TASK_STATUSES.includes(query.taskStatus)) {
+      dim.kind = 'taskStatus';
+      dim.value = query.taskStatus;
+    } else if (query.overdueBucket && (query.overdueBucket === '1to7' || query.overdueBucket === '8to30' || query.overdueBucket === 'over30')) {
+      dim.kind = 'overdueBucket';
+      dim.value = query.overdueBucket;
+    } else if (query.priority !== undefined && query.priority !== null) {
+      dim.kind = 'priority';
+      dim.value = normalizePriority(query.priority);
+    }
+
+    /* 4. 叶子任务基数 + 维度过滤 + 行组装（projectName 映射补齐） */
+    const scopeIds = new Set(items.map((p) => p.id));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+    const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
+    const allLeafTasks = leafNodesOf(db.wbsNodes.filter((n) => scopeIds.has(n.projectId)));
+    const base = dim.kind === 'taskStatus'
+      ? allLeafTasks
+      : allLeafTasks.filter((n) => n.status !== '完成');
+
+    const rows: DashboardTaskRow[] = base
+      .filter((n) => {
+        if (dim.kind === 'taskStatus') return n.status === dim.value;
+        if (dim.kind === 'priority') return normalizePriority(n.priority) === dim.value;
+        if (dim.kind === 'overdueBucket') return overdueBucketOf(n.dueDate) === dim.value;
+        return true;
+      })
+      .map((n) => ({
+        id: n.id,
+        projectId: n.projectId,
+        projectName: projectNameById.get(n.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        wbsCode: n.wbsCode,
+        name: n.name,
+        priority: normalizePriority(n.priority),
+        status: n.status,
+        dueDate: n.dueDate,
+        progress: Number(n.progress) || 0,
+        ownerName: n.ownerName ?? userNameById.get(n.owner ?? '') ?? '',
+      }))
+      .sort((a, b) => {
+        const RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+        const ra = RANK[a.priority] ?? 2;
+        const rb = RANK[b.priority] ?? 2;
+        if (ra !== rb) return ra - rb;
+        const da = a.dueDate || '';
+        const dbv = b.dueDate || '';
+        if (!da !== !dbv) return da ? -1 : 1;
+        if (da !== dbv) return da < dbv ? -1 : 1;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      });
+
+    /* 5. 分页返回（与服务端 envelope.paged 同构） */
+    return deepClone({
+      items: rows.slice((page - 1) * pageSize, page * pageSize),
+      total: rows.length,
+      page,
+      pageSize,
     });
   }
 

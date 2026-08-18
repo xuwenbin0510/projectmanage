@@ -11,10 +11,12 @@ import type {
   MilestoneOverride,
   Health,
 } from '@/types/project';
-import type { TaskStatus, WbsNodeType, WbsRules } from '@/types/wbs';
+import type { TaskStatus, WbsNodeType, WbsRules, Priority } from '@/types/wbs';
 import type { ReviewType, ReviewMode, ReviewStatus, ReviewStepStatus } from '@/types/review';
 import type { ChangeType, ChangeRoute, ChangeStatus } from '@/types/change';
 import type { AuditAction, AuditEntityType } from '@/types/audit';
+import type { ReportStatus } from '@/types/report';
+import type { TodoType } from '@/types/todo';
 
 /* ── 角色 ─────────────────────────────────────────── */
 
@@ -179,8 +181,71 @@ export const DEFAULT_WBS_RULES: WbsRules = {
 /** 粒度上限（人日）：A 类 >5 告警，B 类 >2 告警，C 类沿用 A */
 export const GRANULARITY_LIMIT: Record<ProjectType, number> = { A: 5, B: 2, C: 5 };
 
+/** 本周实际工时登记上限（人日/次）：B8 R5，工作日志单行 actualDays 上限，与后端 server/config/enums.js 一致 */
+export const WEEK_ACTUAL_DAYS_MAX = 100;
+
+/** 累计实际工时上限（人日）：B8 R3/R5，节点 effortHours 累计值上限（防溢出 + 防负数），与后端一致 */
+export const EFFORT_DAYS_CUM_MAX = 10000;
+
 /** WIP 默认上限（架构 O8：进行中 ≤ 5，0 = 不限） */
 export const DEFAULT_WIP_LIMIT = 5;
+
+/* ── 任务优先级 B14-块1 ──────────────────────────── */
+
+/**
+ * 优先级下拉选项（**单一真源** · SK-B14-1）
+ *
+ * 色标口径：P0 红 / P1 橙 / P2 蓝 / P3 灰；`color` 取 MUI Chip 语义色，
+ * 图表侧不得直接用本字段（图表层必须走 `useChartPalette()` 拿真 hex）。
+ */
+export const PRIORITY_OPTIONS: ReadonlyArray<{
+  value: Priority;
+  label: string;
+  hint: string;
+  color: 'error' | 'warning' | 'info' | 'default';
+}> = [
+  { value: 'P0', label: 'P0 最高', hint: '阻塞交付，必须立即处理', color: 'error' },
+  { value: 'P1', label: 'P1 高', hint: '本周内必须完成', color: 'warning' },
+  { value: 'P2', label: 'P2 中', hint: '常规排期（缺省）', color: 'info' },
+  { value: 'P3', label: 'P3 低', hint: '有余力再做，可延后', color: 'default' },
+];
+
+/** 优先级取值列表（校验 / 遍历用；顺序 = 由高到低） */
+export const PRIORITIES: Priority[] = ['P0', 'P1', 'P2', 'P3'];
+
+/** 优先级缺省值（与后端迁移 `DEFAULT 'P2'` 逐字一致 · 决策 #1） */
+export const DEFAULT_PRIORITY: Priority = 'P2';
+
+/**
+ * 排序权重：**升序**排列即「P0 置顶」。
+ * ⚠️ 一切按优先级排序都必须 `PRIORITY_RANK[a] - PRIORITY_RANK[b]`，禁止字符串比较。
+ */
+export const PRIORITY_RANK: Record<Priority, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+
+/** 短标签（表格 / Chip 内用，省空间） */
+export const PRIORITY_SHORT: Record<Priority, string> = { P0: 'P0', P1: 'P1', P2: 'P2', P3: 'P3' };
+
+/** Chip 语义色（按值直取，避免遍历 `PRIORITY_OPTIONS`） */
+export const PRIORITY_COLOR: Record<Priority, 'error' | 'warning' | 'info' | 'default'> = {
+  P0: 'error',
+  P1: 'warning',
+  P2: 'info',
+  P3: 'default',
+};
+
+/**
+ * 把任意值收敛为合法 `Priority`（读到脏数据 / 旧数据时兜底 `P2`）。
+ * 前端只做展示兜底，**合法性最终由后端 `normalizePriority` 保证**。
+ */
+export function normalizePriority(raw: unknown): Priority {
+  const v = String(raw ?? '').trim().toUpperCase();
+  return (PRIORITIES as string[]).includes(v) ? (v as Priority) : DEFAULT_PRIORITY;
+}
+
+/** 取排序权重（脏值兜底为 P2 的权重） */
+export function priorityRankOf(raw: unknown): number {
+  return PRIORITY_RANK[normalizePriority(raw)];
+}
 
 /* ── 评审 ─────────────────────────────────────────── */
 
@@ -307,3 +372,62 @@ export const REPORT_SECTION_TITLE = {
   /** R3-6：任务关联区固定标题（新建 / 编辑共用） */
   taskAssoc: '任务关联（勾选本日志涉及的任务，可同步更新进度）',
 } as const;
+
+/* ── 周报状态机 B14-块2 ──────────────────────────── */
+
+/** 周报状态取值（顺序 = 状态机推进顺序 `草稿 → 已提交 → 已确认`） */
+export const REPORT_STATUSES: ReportStatus[] = ['草稿', '已提交', '已确认'];
+
+/** 周报状态 Chip 配色 */
+export const REPORT_STATUS_COLOR: Record<ReportStatus, 'default' | 'info' | 'success'> = {
+  草稿: 'default',
+  已提交: 'info',
+  已确认: 'success',
+};
+
+/** 周报状态提示语（列表/详情 Tooltip） */
+export const REPORT_STATUS_HINT: Record<ReportStatus, string> = {
+  草稿: '尚未提交，作者可继续编辑；若曾被打回会显示打回原因',
+  已提交: '等待上级确认；确认人可「确认」或「打回」',
+  已确认: '已被上级确认，流程闭环',
+};
+
+/** 打回原因长度上限（与后端校验一致） */
+export const REJECT_REASON_MAX = 500;
+
+/* ── 统一待办中心 B14-块3 ────────────────────────── */
+
+/** 待办分组展示顺序（审批 / 待确认最紧急 → 任务类） */
+export const TODO_TYPE_ORDER: TodoType[] = [
+  'APPROVAL',
+  'REPORT_CONFIRM',
+  'REPORT_FILL',
+  'OVERDUE',
+  'BLOCKED',
+  'ASSIGNED',
+];
+
+export const TODO_TYPE_LABEL: Record<TodoType, string> = {
+  APPROVAL: '待我审批',
+  REPORT_CONFIRM: '待我确认周报',
+  REPORT_FILL: '待我填写周报',
+  OVERDUE: '我的逾期任务',
+  BLOCKED: '我的阻塞任务',
+  ASSIGNED: '分配给我的任务',
+};
+
+/** 分组标题色（MUI 语义色，逾期/阻塞用告警色） */
+export const TODO_TYPE_COLOR: Record<TodoType, 'error' | 'warning' | 'info' | 'primary'> = {
+  APPROVAL: 'primary',
+  REPORT_CONFIRM: 'primary',
+  REPORT_FILL: 'info',
+  OVERDUE: 'error',
+  BLOCKED: 'warning',
+  ASSIGNED: 'info',
+};
+
+/** 「任务类」待办（这几类才有 `priority`，组内按 `priorityRank` 升序排） */
+export const TODO_TASK_TYPES: TodoType[] = ['OVERDUE', 'BLOCKED', 'ASSIGNED'];
+
+/** 铃铛下拉每组最多展示条数（超出显「还有 N 条」） */
+export const TODO_GROUP_MAX = 5;
