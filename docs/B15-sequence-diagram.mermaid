@@ -1,0 +1,38 @@
+sequenceDiagram
+  autonumber
+  participant U as 用户
+  participant WP as WorkbenchPage
+  participant OTD as OverdueTaskDrawer
+  participant API as api（listWbs / listMilestones）
+  participant MTD as MyTasksDrawer
+  participant RT as Router（ROUTES）
+
+  Note over U,RT: 流程一 · P0-1：点「逾期任务」StatCard → 全局逾期抽屉（mode=all）
+  U->>WP: 点击「逾期任务」StatCard
+  WP->>WP: openGlobalOverdue() → setOvDrawer({open:true, mode:'all', projectId:''})
+  WP-->>OTD: <OverdueTaskDrawer open mode="all" projects={dashboard.overdue}/>
+  OTD->>OTD: useEffect([open, mode, projects]) → load()（复位 Tab/筛选/分页）
+  OTD->>API: Promise.all(projects.map(p => [listWbs(p.id), listMilestones(p.id)]))
+  API-->>OTD: 各项目 WbsNode[] + Milestone[]（局部拉取，不写 wbsStore）
+  OTD->>OTD: 扁平化 ScopedWbsNode + msMap（key=projectId::milestoneId 复合 key）
+  OTD->>OTD: splitOverdueByStatus → baseRows（comparePriority P0 置顶）→ 仅看我/状态/优先级/关键字筛选 → 分页
+  U->>OTD: 点击某行（含他人任务行）
+  OTD->>RT: navigate(ROUTES.projectWbs(row.projectId)) —— 跳该任务所属项目 WBS
+
+  Note over U,RT: 流程二 · P0-6/P0-7/P0-10：进度环 / 优先级环点段、「查看全部」→ MyTasksDrawer
+  U->>WP: 点击进度环「在办」段（或优先级环 P0 段 / 「查看全部」按钮）
+  WP->>WP: openMyTasks({progress:'active'}) / ({priority:'P0'}) / ({})
+  WP-->>MTD: <MyTasksDrawer open tasks={sortedTasks} initialProgress initialPriority/>
+  MTD->>MTD: useEffect([open]) → 按 initial* 预置筛选、复位分页（快照，零请求）
+  MTD->>MTD: progressSegmentOf + normalizePriority + 状态 + 关键字过滤 → 保序（P0 置顶）→ 分页
+  U->>MTD: 点击某行
+  MTD->>RT: navigate(ROUTES.projectWbs(row.projectId)) —— 项目 WBS 页含详情 + 编辑
+
+  Note over U,RT: 流程三 · P0-4：点「本周待填周报」StatCard → 直达首个未填项目
+  U->>WP: 点击「本周待填周报」StatCard
+  WP->>WP: missing = reportReminders.filter(r => !r.filled)
+  alt missing.length > 0
+    WP->>RT: navigate(ROUTES.projectReports(missing[0].projectId))
+  else missing.length === 0
+    WP-->>U: 无操作（hint=本周周报已全部填写）
+  end

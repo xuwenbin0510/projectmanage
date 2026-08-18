@@ -30,6 +30,7 @@ import {
 import { ReviewStepper } from '@/components/review/ReviewStepper';
 import {
   HealthDistBar,
+  MyTasksDrawer,
   OverdueBarChart,
   PriorityDonut,
   ProgressDonut,
@@ -39,7 +40,8 @@ import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
 import { ROUTES } from '@/config/routes';
 import { PROJECT_TYPE_SHORT, TASK_STATUSES } from '@/config/enums';
-import type { TaskStatus } from '@/types/wbs';
+import type { ProgressSegment } from '@/types/dashboard';
+import type { Priority, TaskStatus } from '@/types/wbs';
 import { buildDashboard, sortByPriority } from '@/utils/dashboardAgg';
 import { fmtDate, isOverdue, today, diffDays } from '@/utils/date';
 import { alphaOf as alpha, tokens, colorOf } from '@/theme/tokens';
@@ -59,12 +61,20 @@ export function WorkbenchPage(): JSX.Element {
   const toast = useToast();
   const [busyTask, setBusyTask] = useState<string>('');
 
-  /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含） */
+  /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含）；B15 追加 mode */
   const [ovDrawer, setOvDrawer] = useState<{
     open: boolean;
+    mode: 'project' | 'all';
     projectId: string;
     projectName: string;
-  }>({ open: false, projectId: '', projectName: '' });
+  }>({ open: false, mode: 'project', projectId: '', projectName: '' });
+
+  /* B15：我的任务明细抽屉的本地状态（三入口共用，打开时带初始筛选） */
+  const [myTasksDrawer, setMyTasksDrawer] = useState<{
+    open: boolean;
+    progress?: ProgressSegment;
+    priority?: Priority;
+  }>({ open: false });
 
   const fetcher = useCallback(() => api.getWorkbench(), []);
   const { data, loading, error, run } = useAsync(fetcher, []);
@@ -79,10 +89,20 @@ export function WorkbenchPage(): JSX.Element {
    */
   const sortedTasks = useMemo(() => sortByPriority(data?.myTasks ?? []), [data]);
 
-  /** B13：打开逾期/临期任务下探抽屉（projectName 从本地 dashboard.overdue 解析） */
+  /** B13：打开逾期/临期任务下探抽屉（projectName 从本地 dashboard.overdue 解析；B15 补 mode） */
   const openOverdue = (projectId: string): void => {
     const name = dashboard.overdue.find((o) => o.projectId === projectId)?.projectName ?? '';
-    setOvDrawer({ open: true, projectId, projectName: name });
+    setOvDrawer({ open: true, mode: 'project', projectId, projectName: name });
+  };
+
+  /** B15：逾期任务 StatCard → 全局逾期抽屉（项目清单 = dashboard.overdue） */
+  const openGlobalOverdue = (): void => {
+    setOvDrawer({ open: true, mode: 'all', projectId: '', projectName: '' });
+  };
+
+  /** B15：打开我的任务明细抽屉（opts 为空 = 查看全部；可带进度段 / 优先级初始筛选） */
+  const openMyTasks = (opts: { progress?: ProgressSegment; priority?: Priority } = {}): void => {
+    setMyTasksDrawer({ open: true, progress: opts.progress, priority: opts.priority });
   };
 
   /** 直接在工作台改任务状态（移动端四件事之一，走 moveTask 以保留 WIP 拦截） */
@@ -140,16 +160,20 @@ export function WorkbenchPage(): JSX.Element {
           value={stats.overdueTasks}
           unit="个"
           tone={stats.overdueTasks > 0 ? 'danger' : 'success'}
-          hint="以任务计划完成日为准"
+          hint="点击查看全部逾期任务"
           icon={<ReportProblemOutlinedIcon fontSize="small" />}
+          onClick={openGlobalOverdue}
         />
         <StatCard
           label="本周待填周报"
           value={stats.missingReports}
           unit="份"
           tone={stats.missingReports > 0 ? 'warning' : 'success'}
-          hint="周五 18:00 前提交"
+          hint={missing.length > 0 ? '点击前往填写' : '本周周报已全部填写'}
           icon={<EditNoteOutlinedIcon fontSize="small" />}
+          onClick={() => {
+            if (missing.length > 0) navigate(ROUTES.projectReports(missing[0].projectId));
+          }}
         />
       </Box>
 
@@ -167,9 +191,17 @@ export function WorkbenchPage(): JSX.Element {
           mb: 2.5,
         }}
       >
-        <ProgressDonut summary={dashboard.progress} loading={loading} />
-        {/* B14-块1：优先级分布环，点段跳 WBS（后续可带筛选参数） */}
-        <PriorityDonut dist={dashboard.priority} loading={loading} />
+        <ProgressDonut
+          summary={dashboard.progress}
+          loading={loading}
+          onDrill={(seg) => openMyTasks({ progress: seg })}
+        />
+        {/* B14-块1：优先级分布环，点段下钻我的任务明细（B15：带优先级筛选） */}
+        <PriorityDonut
+          dist={dashboard.priority}
+          loading={loading}
+          onDrill={(pri) => openMyTasks({ priority: pri })}
+        />
         <OverdueBarChart rows={dashboard.overdue} loading={loading} onDrill={openOverdue} />
         <HealthDistBar
           dist={dashboard.health}
@@ -286,8 +318,18 @@ export function WorkbenchPage(): JSX.Element {
           )}
         </SectionCard>
 
-        {/* ── 我的任务（B14-块1：P0 置顶排序 + 行内优先级色标） ── */}
-        <SectionCard title="我的任务" subtitle={`${myTasks.length} 个未完成 · 按优先级排序`}>
+        {/* ── 我的任务（B14-块1：P0 置顶排序 + 行内优先级色标；B15：查看全部入口） ── */}
+        <SectionCard
+          title="我的任务"
+          subtitle={`${myTasks.length} 个未完成 · 按优先级排序`}
+          actions={
+            myTasks.length > 0 ? (
+              <Button size="small" onClick={() => openMyTasks({})}>
+                查看全部
+              </Button>
+            ) : undefined
+          }
+        >
           {myTasks.length === 0 ? (
             <EmptyState title="没有分配给我的未完成任务" dense />
           ) : (
@@ -399,10 +441,19 @@ export function WorkbenchPage(): JSX.Element {
 
       <OverdueTaskDrawer
         open={ovDrawer.open}
+        mode={ovDrawer.mode}
         projectId={ovDrawer.projectId}
         projectName={ovDrawer.projectName}
+        projects={dashboard.overdue}
         currentUserId={me?.openId}
         onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
+      />
+      <MyTasksDrawer
+        open={myTasksDrawer.open}
+        tasks={sortedTasks}
+        initialProgress={myTasksDrawer.progress}
+        initialPriority={myTasksDrawer.priority}
+        onClose={() => setMyTasksDrawer((s) => ({ ...s, open: false }))}
       />
     </Box>
   );

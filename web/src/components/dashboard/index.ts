@@ -26,3 +26,5 @@ export { OwnerLoadDrawer } from './OwnerLoadDrawer';
 export type { OwnerLoadDrawerProps } from './OwnerLoadDrawer';
 export { OverdueTaskDrawer } from './OverdueTaskDrawer';
 export type { OverdueTaskDrawerProps } from './OverdueTaskDrawer';
+export { MyTasksDrawer } from './MyTasksDrawer';
+export type { MyTasksDrawerProps } from './MyTasksDrawer';

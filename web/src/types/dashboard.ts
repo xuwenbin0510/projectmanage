@@ -189,6 +189,9 @@ export interface DashboardOverview {
 /** 抽屉 Tab 字面量：默认 'overdue'（先救最急的） */
 export type OverdueDrawerTab = 'overdue' | 'dueSoon';
 
+/** 进度环三段字面量（B15 新增）：'done'=完成 / 'active'=在办(进行中+待评审) / 'pending'=未启动(待办+阻塞) */
+export type ProgressSegment = 'done' | 'active' | 'pending';
+
 /** 抽屉表格行视图模型：由 `WbsNode` + 里程碑名解析映射得到（B13） */
 export interface OverdueTaskRow {
   /** 节点 id（WbsNode.id），作为表格行 key */
@@ -213,4 +216,8 @@ export interface OverdueTaskRow {
   priority: Priority;
   /** 排序权重 `PRIORITY_RANK[priority]`，升序即 P0 置顶（B14-块1） */
   priorityRank: number;
+  /** 所属项目 id（B15 新增：全局模式跨项目行跳转用；单项目模式亦填充 = projectId） */
+  projectId: string;
+  /** 所属项目名（B15 新增：全局模式「所属项目」列；单项目模式亦填充 = projectName） */
+  projectName: string;
 }

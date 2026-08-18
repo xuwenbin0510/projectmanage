@@ -20,7 +20,7 @@
  * @prd B11
  */
 
-import type { TaskProgressSummary } from '@/types/dashboard';
+import type { ProgressSegment, TaskProgressSummary } from '@/types/dashboard';
 import { useChartPalette } from '@/theme/chartPalette';
 import { DonutChart, type DonutSegment } from './DonutChart';
 
@@ -29,6 +29,8 @@ export interface ProgressDonutProps {
   summary: TaskProgressSummary;
   /** 加载中 */
   loading?: boolean;
+  /** B15 新增：点击某段（含图例 0 值段）下钻；不传则不可点（与 PriorityDonut 现行为一致） */
+  onDrill?: (segment: ProgressSegment) => void;
 }
 
 /**
@@ -37,7 +39,7 @@ export interface ProgressDonutProps {
  * `summary.total === 0` 时走 `ChartCard` 空态「暂无进行中的任务」，
  * **不会**渲染 `NaN`（T04 完成标准 #3）。
  */
-export function ProgressDonut({ summary, loading = false }: ProgressDonutProps): JSX.Element {
+export function ProgressDonut({ summary, loading = false, onDrill }: ProgressDonutProps): JSX.Element {
   const palette = useChartPalette();
 
   /* 品牌色阶：完成(最深) → 在办 → 未启动(最浅)，同一色系表达量级 */
@@ -58,6 +60,7 @@ export function ProgressDonut({ summary, loading = false }: ProgressDonutProps):
       empty={summary.total === 0}
       emptyTitle="暂无进行中的任务"
       emptyDescription="分配给你的任务都已完成"
+      onSegmentClick={onDrill ? (seg) => onDrill(seg.id as ProgressSegment) : undefined}
     />
   );
 }
