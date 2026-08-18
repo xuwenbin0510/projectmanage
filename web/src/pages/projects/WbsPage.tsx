@@ -49,7 +49,7 @@ import {
 import { tokens, toneColor, progressToneOf } from '@/theme/tokens';
 import { flattenTree, rollupProgress } from '@/utils/wbs';
 import { fmtDays } from '@/utils/format';
-import { dayjs, fmtDate, DATE_FMT } from '@/utils/date';
+import { dayjs, fmtDate, DATE_FMT, isOverdue, today, diffDays } from '@/utils/date';
 import { reportCountByNode, nodeReportsOf } from '@/utils/reportAgg';
 import { memberNameOf } from '@/utils/member';
 
@@ -324,6 +324,9 @@ export function WbsPage(): JSX.Element {
     const boundMs = milestoneOf(node.milestoneId);
     const canAddChild = allowedChildTypes(node, rules).length > 0;
     const logCount = reportCounts.get(node.id) ?? 0;
+    /* B16：逾期（未完成且超截止日）红标 / 临期（未完成且 3 天内）黄标，口径同工作台 utils/date；已完成不标 */
+    const overdue = node.status !== '完成' && isOverdue(node.dueDate);
+    const dueSoon = node.status !== '完成' && !overdue && diffDays(today(), node.dueDate) <= 3;
     return (
       <TreeItem
         key={node.id}
@@ -357,9 +360,17 @@ export function WbsPage(): JSX.Element {
                 sx={{ height: 20, flexShrink: 0 }}
               />
             )}
-            {/* R3-3：所有节点行内显示截止日期（无 dueDate 显示「截止 —」） */}
-            <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
+            {/* R3-3：所有节点行内显示截止日期（无 dueDate 显示「截止 —」）；B16：逾期红 / 临期黄标记 */}
+            <Typography
+              variant="caption"
+              sx={{
+                color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
+                fontWeight: overdue || dueSoon ? 600 : 400,
+                flexShrink: 0,
+              }}
+            >
               截止 {fmtDate(node.dueDate)}
+              {overdue ? ' · 已逾期' : dueSoon ? ' · 临期' : ''}
             </Typography>
             {/* R3-5：日志聚合徽标（n=0 弱化样式，仍可点击查看空态） */}
             <Chip

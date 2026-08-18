@@ -344,13 +344,20 @@ export function WorkbenchPage(): JSX.Element {
                     spacing={1}
                     alignItems={{ xs: 'stretch', sm: 'center' }}
                     justifyContent="space-between"
+                    /* B16：整行可点击下探 → 该项目 WBS 页（详情/编辑），与 B15 抽屉行行为一致；
+                       点状态下拉不触发跳转（Select 上已 stopPropagation） */
+                    onClick={() => navigate(ROUTES.projectWbs(t.projectId))}
                     sx={{
                       px: 1.5,
                       py: 1.25,
                       borderRadius: 1.5,
+                      cursor: 'pointer',
                       border: `1px solid ${
                         overdue ? alpha(tokens.status.danger, 0.5) : tokens.border.subtle
                       }`,
+                      '&:hover': {
+                        borderColor: overdue ? alpha(tokens.status.danger, 0.85) : alpha(tokens.brand.primary, 0.6),
+                      },
                     }}
                   >
                     <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -376,6 +383,7 @@ export function WorkbenchPage(): JSX.Element {
                       size="small"
                       value={t.status}
                       disabled={busyTask === t.id}
+                      onClick={(e) => e.stopPropagation()}
                       onChange={(e) => void handleStatus(t.id, e.target.value as TaskStatus, t.boardOrder)}
                       sx={{ minWidth: 108, fontSize: 13 }}
                     >
