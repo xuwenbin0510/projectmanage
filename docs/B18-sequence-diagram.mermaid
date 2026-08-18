@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant C as CategoryBarChart
+    participant M as MetricsPage
+    participant D as DistributionTaskDrawer
+    participant API as api.getDashboardTasks
+    participant S as dashboard.service
+    participant A as portfolioAgg
+
+    U->>C: 点击某档柱体 / footer 图例
+    C->>C: onItemClick / 图例 onClick → onDrill(r.key)
+    C->>M: onDrill(key)
+    M->>M: openDist(title, dim) → 组装 query（scope + 筛选 + 维度）
+    M->>D: open=true + title + query（受控渲染）
+    D->>D: useEffect(open) → setPage(1) → load(1)
+    D->>API: getDashboardTasks({ ...query, page: 1, pageSize: 8 })
+    API->>S: GET /api/dashboard/tasks?scope=...&priority=P0&page=1&pageSize=8
+    S->>S: normalizeQuery(query) → q
+    S->>S: resolveScope(me, q.scope) → scope
+    S->>S: listScopedItems(db, q, me, scope) → items
+    S->>S: resolveDimension(query) → { kind, value }
+    S->>S: 基数 = taskStatus ? listScopeAllLeafTasks : listScopeLeafTasks
+    S->>A: overdueBucketOf(todayStr, dueDate)（overdueBucket 档过滤）
+    S->>S: 行组装 + projectName 映射 + 排序 + paged
+    S-->>API: { items, total, page, pageSize }
+    API-->>D: Paged~DashboardTaskRow~
+    D->>D: 渲染 DataTable（7 列 + 空/错/加载态）
+    D->>U: 行点击 → navigate(ROUTES.projectWbs(row.projectId))
+    D->>D: 翻页 onChange(page) → load(page)（重新局部拉取）

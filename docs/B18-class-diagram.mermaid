@@ -1,0 +1,107 @@
+classDiagram
+    class MetricsPage {
+        +scope: DashboardScope
+        +query: DashboardOverviewQuery
+        +priorityRows: CategoryBarRow[]
+        +statusRows: CategoryBarRow[]
+        +durationRows: CategoryBarRow[]
+        +distDrawer: { open, title, query }
+        +openDist(title, dim): void
+    }
+    class DistributionTaskDrawer {
+        +open: boolean
+        +title: string
+        +query: DashboardTasksQuery
+        +onClose: () => void
+        +rows: DashboardTaskRow[]
+        +total: number
+        +page: number
+        +loading: boolean
+        +error: string | null
+        +load(page): Promise~void~
+    }
+    class CategoryBarChart {
+        +title: string
+        +subtitle?: string
+        +rows: CategoryBarRow[]
+        +loading?: boolean
+        +empty?: boolean
+        +emptyTitle?: string
+        +emptyDescription?: string
+        +onDrill?: (key: string) => void
+    }
+    class CategoryBarRow {
+        +key: string
+        +label: string
+        +value: number
+        +color: string
+    }
+    class ChartLegend {
+        +items: ChartLegendItem[]
+    }
+    class DashboardTasksQuery {
+        +scope?: DashboardScope
+        +type?: ProjectType | ''
+        +status?: ProjectStatus | ''
+        +health?: Health | ''
+        +keyword?: string
+        +onlyMine?: boolean
+        +priority?: Priority
+        +taskStatus?: TaskStatus
+        +overdueBucket?: OverdueBucket
+        +page?: number
+        +pageSize?: number
+    }
+    class DashboardTaskRow {
+        +id: string
+        +projectId: string
+        +projectName: string
+        +wbsCode: string
+        +name: string
+        +priority: Priority
+        +status: TaskStatus
+        +dueDate: string
+        +progress: number
+        +ownerName: string
+    }
+    class HttpApiClient {
+        +getDashboardTasks(query): Promise~Paged~DashboardTaskRow~~
+    }
+    class MockClient {
+        +getDashboardTasks(query): Promise~Paged~DashboardTaskRow~~
+    }
+    class dashboardService {
+        +getDashboardTasks(db, query, me): Paged~DashboardTaskRow~
+        +resolveDimension(query): { kind, value }
+        +normalizeQuery(query): object
+        +resolveScope(me, requested): 'all' | 'mine'
+        +listScopedItems(db, q, me, scope): ProjectListItem[]
+    }
+    class portfolioAgg {
+        +overdueBucketOf(todayStr, dueDate): OverdueBucket | null
+        +aggregateOverdueDuration(tasks, todayStr): OverdueDurationDistribution
+        +PRIORITIES: string[]
+        +DEFAULT_PRIORITY: string
+    }
+    class dashboardAgg {
+        +overdueBucketOf(dueDate, todayStr?): OverdueBucket | null
+        +aggregateOverdueDuration(nodes, todayStr?): OverdueDurationDistribution
+    }
+    class envelope {
+        +paged(items, total, page, pageSize): Paged
+    }
+    class mappers {
+        +toApiWbsNode(row, nameOf): WbsNode
+    }
+
+    MetricsPage --> CategoryBarChart : ⑤⑥⑦ onDrill(key)
+    MetricsPage --> DistributionTaskDrawer : 渲染 {open,title,query}
+    CategoryBarChart --> ChartLegend : 图例 onClick 透传
+    DistributionTaskDrawer --> HttpApiClient : api.getDashboardTasks
+    DistributionTaskDrawer ..> DashboardTasksQuery : 入参
+    DistributionTaskDrawer ..> DashboardTaskRow : 行
+    HttpApiClient --> dashboardService : GET /api/dashboard/tasks
+    MockClient ..> dashboardAgg : 过滤口径
+    dashboardService --> portfolioAgg : resolveDimension / overdueBucketOf
+    dashboardService --> envelope : paged
+    dashboardService --> mappers : toApiWbsNode

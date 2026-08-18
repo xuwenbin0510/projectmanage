@@ -42,6 +42,11 @@ export interface CategoryBarChartProps {
   emptyDescription?: string;
   /** tooltip / 图例单位（默认「个」） */
   unit?: string;
+  /**
+   * 点击某档柱体或 footer 图例触发，参数 = 该档 key（如 'P0' / '进行中' / '8to30'）。
+   * 0 值档也可点（图例点击，打开空态抽屉）；**不传则不可点（原行为）**。
+   */
+  onDrill?: (key: string) => void;
 }
 
 /**
@@ -62,6 +67,7 @@ export function CategoryBarChart({
   emptyTitle = '暂无数据',
   emptyDescription = '',
   unit = '个',
+  onDrill,
 }: CategoryBarChartProps): JSX.Element {
   const palette = useChartPalette();
 
@@ -88,11 +94,16 @@ export function CategoryBarChart({
       emptyDescription={emptyDescription}
       footer={
         <ChartLegend
-          items={list.map((r) => ({ color: r.color, label: r.label, value: r.value }))}
+          items={list.map((r) => ({
+            color: r.color,
+            label: r.label,
+            value: r.value,
+            onClick: onDrill ? () => onDrill(r.key) : undefined,
+          }))}
         />
       }
     >
-      <Box sx={{ width: '100%', height: CHART_BODY_HEIGHT }}>
+      <Box sx={{ width: '100%', height: CHART_BODY_HEIGHT, cursor: onDrill ? 'pointer' : 'default' }}>
         <BarChart
           dataset={dataset}
           layout="horizontal"
@@ -100,6 +111,14 @@ export function CategoryBarChart({
           margin={{ top: 8, right: 16, bottom: 24, left: 76 }}
           grid={{ vertical: true }}
           slotProps={{ legend: { hidden: true } }}
+          onItemClick={
+            onDrill
+              ? (_event, identifier) => {
+                  const r = list[identifier.dataIndex];
+                  if (r) onDrill(r.key);
+                }
+              : undefined
+          }
           /* 类目/柱间距沿用 x-charts v7 默认值（0.2 / 0.1）：
              其 TS 类型只在窄化后的 band 轴配置上暴露，显式传值会触发
              `AxisConfig<keyof AxisScaleConfig>` 的多余属性检查（参考 OverdueBarChart） */

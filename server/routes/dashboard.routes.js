@@ -32,4 +32,14 @@ router.get(
   }),
 );
 
+/* B18：分布图点档下钻任务明细（本批唯一新接口；鉴权口径与 overview 完全一致，
+   「能不能看公司全量」由 resolveScope 内部按 dashboard:global 判定，不加角色守卫） */
+router.get(
+  '/dashboard/tasks',
+  requireAuth,
+  asyncHandler(async function getDashboardTasks(req, res) {
+    res.json(ok(dashboardService.getDashboardTasks(db, req.query, req.user)));
+  }),
+);
+
 module.exports = router;

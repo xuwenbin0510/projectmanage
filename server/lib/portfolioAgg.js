@@ -309,6 +309,25 @@ function aggregateStatusDist(allLeafTasks) {
 }
 
 /**
+ * 逾期时长档位（B17 · aggregateOverdueDuration 分段口径的纯函数化）。
+ * 入参 = 今天与截止日；返回该任务所属档位；未逾期（含今天到期）/ 无 dueDate / 非法日期 → null。
+ * days = diffDays(dueDate, today)（diffDays(a,b) = b - a）；
+ * 逾期（dueDate < today）时 days ≥ 1；分段 1–7 / 8–30 / ≥31。
+ * @param {string} todayStr `YYYY-MM-DD`
+ * @param {string|null|undefined} dueDate `YYYY-MM-DD`
+ * @returns {'1to7'|'8to30'|'over30'|null}
+ */
+function overdueBucketOf(todayStr, dueDate) {
+  const due = String(dueDate === null || dueDate === undefined ? '' : dueDate);
+  if (!due) return null;
+  const days = dates.diffDays(due, todayStr); // diffDays(a,b) = b - a
+  if (days < 1) return null;                  // 未逾期（含今天到期 / dueDate > today）
+  if (days <= 7) return '1to7';
+  if (days <= 30) return '8to30';
+  return 'over30';
+}
+
+/**
  * 逾期时长分段（B17 · P0-4）。
  * 入参 = 在办叶子任务；仅 `isOverdue` 者（diffDays(today, dueDate) < 0，空 dueDate 恒 false）。
  * 天数 days = diffDays(dueDate, today)（恒 ≥1 的正数）；分段 1–7 / 8–30 / ≥31。
@@ -321,11 +340,10 @@ function aggregateOverdueDuration(tasks, todayStr) {
   const t = todayStr || dates.today();
   const dist = { days1to7: 0, days8to30: 0, daysOver30: 0, total: 0 };
   asArray(tasks).forEach(function (n) {
-    if (!isOverdue(n, t)) return;
-    const due = String((n && n.dueDate) || '');
-    const days = dates.diffDays(due, t); // diffDays(a,b) = b - a；逾期时 dueDate < today → days ≥ 1
-    if (days <= 7) dist.days1to7 += 1;
-    else if (days <= 30) dist.days8to30 += 1;
+    const bucket = overdueBucketOf(t, n && n.dueDate);
+    if (!bucket) return;
+    if (bucket === '1to7') dist.days1to7 += 1;
+    else if (bucket === '8to30') dist.days8to30 += 1;
     else dist.daysOver30 += 1;
     dist.total += 1;
   });
@@ -357,8 +375,11 @@ module.exports = {
   UNASSIGNED_OWNER,
   UNASSIGNED_LABEL,
   UNNAMED_PROJECT,
+  PRIORITIES,
+  DEFAULT_PRIORITY,
   compareText,
   isOverdue,
+  overdueBucketOf,
   aggregateStatusDonut,
   aggregateHealth,
   aggregateOverdue,

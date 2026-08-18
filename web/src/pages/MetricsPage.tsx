@@ -51,6 +51,7 @@ import {
 import type { Column } from '@/components/common';
 import {
   CategoryBarChart,
+  DistributionTaskDrawer,
   DonutChart,
   HealthDonut,
   OverdueBarChart,
@@ -74,7 +75,8 @@ import {
 import { fmtDate } from '@/utils/date';
 import { hexAlpha, useChartPalette } from '@/theme/chartPalette';
 import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
-import type { OwnerLoadRow, StatusDonutSegment } from '@/types/dashboard';
+import type { DashboardTasksQuery, OverdueBucket, OwnerLoadRow, StatusDonutSegment } from '@/types/dashboard';
+import type { Priority, TaskStatus } from '@/types/wbs';
 import type { SemanticTone } from '@/theme/tokens';
 
 /** 决策 ⑥：统计基线恒为「在管三态」，其余状态入参会被服务端丢弃（避免误导） */
@@ -88,6 +90,18 @@ function rateTone(rate?: number): SemanticTone {
   if (r >= 60) return 'warning';
   return 'danger';
 }
+
+/** B18：逾期时长图 key（days1to7/days8to30/daysOver30）→ 接口档位 / 抽屉标题 */
+const DURATION_KEY_TO_BUCKET: Record<string, OverdueBucket> = {
+  days1to7: '1to7',
+  days8to30: '8to30',
+  daysOver30: 'over30',
+};
+const DURATION_TITLE: Record<string, string> = {
+  days1to7: '逾期 1–7 天任务明细',
+  days8to30: '逾期 8–30 天任务明细',
+  daysOver30: '逾期 >30 天任务明细',
+};
 
 /* ── 项目明细表列（模块级常量，避免每次渲染重建） ───────────── */
 const projectColumns: Array<Column<ProjectListItem>> = [
@@ -210,6 +224,28 @@ export function MetricsPage(): JSX.Element {
   const openOverdue = (projectId: string): void => {
     const name = data?.overdue?.find((o) => o.projectId === projectId)?.projectName ?? '';
     setOvDrawer({ open: true, projectId, projectName: name });
+  };
+
+  /* B18：分布图点档下钻抽屉（受控组件，query 存 state 保证身份稳定） */
+  const [distDrawer, setDistDrawer] = useState<{
+    open: boolean;
+    title: string;
+    query: DashboardTasksQuery;
+  }>({ open: false, title: '', query: {} });
+
+  const openDist = (
+    title: string,
+    dim: Partial<Pick<DashboardTasksQuery, 'priority' | 'taskStatus' | 'overdueBucket'>>,
+  ): void => {
+    const base: DashboardTasksQuery = {
+      scope,                              // 有效 scope（服务端降级后）
+      type: query.type ?? '',
+      status: query.status ?? '',
+      health: query.health ?? '',
+      keyword: query.keyword ?? '',
+      onlyMine: query.onlyMine ?? false,
+    };
+    setDistDrawer({ open: true, title, query: { ...base, ...dim } });
   };
 
   const stats = data?.stats;
@@ -457,7 +493,7 @@ export function MetricsPage(): JSX.Element {
         <OverdueBarChart rows={data?.overdue ?? []} loading={loading} onDrill={openOverdue} />
         {/* ④ 负责人负荷（不动） */}
         <OwnerLoadBarChart rows={data?.ownerLoad ?? []} loading={loading} onDrill={openOwner} />
-        {/* ⑤ 任务优先级分布（新增，无下钻） */}
+        {/* ⑤ 任务优先级分布（B18：点档下钻到任务明细抽屉） */}
         <CategoryBarChart
           title="任务优先级分布"
           subtitle={`共 ${data?.priorityDist.total ?? 0} 个未完成任务`}
@@ -465,16 +501,18 @@ export function MetricsPage(): JSX.Element {
           loading={loading}
           emptyTitle="暂无进行中的任务"
           emptyDescription="没有需要按优先级排期的任务"
+          onDrill={(key) => openDist(`${key} 任务明细`, { priority: key as Priority })}
         />
-        {/* ⑥ 任务状态分布（新增，无下钻） */}
+        {/* ⑥ 任务状态分布（B18：点档下钻到任务明细抽屉） */}
         <CategoryBarChart
           title="任务状态分布"
           subtitle={`共 ${data?.statusDist.total ?? 0} 个任务（含已完成）`}
           rows={statusRows}
           loading={loading}
           emptyTitle="当前范围暂无任务"
+          onDrill={(key) => openDist(`${key}任务明细`, { taskStatus: key as TaskStatus })}
         />
-        {/* ⑦ 逾期时长分段（新增，无下钻） */}
+        {/* ⑦ 逾期时长分段（B18：点档下钻到任务明细抽屉） */}
         <CategoryBarChart
           title="逾期时长分段"
           subtitle={`共 ${data?.overdueDuration.total ?? 0} 个逾期任务`}
@@ -482,6 +520,11 @@ export function MetricsPage(): JSX.Element {
           loading={loading}
           emptyTitle="太好了，没有逾期任务 🎉"
           emptyDescription="所有任务都在计划节奏内"
+          onDrill={(key) =>
+            openDist(DURATION_TITLE[key] ?? `${key} 任务明细`, {
+              overdueBucket: DURATION_KEY_TO_BUCKET[key],
+            })
+          }
         />
       </Box>
 
@@ -515,6 +558,13 @@ export function MetricsPage(): JSX.Element {
         projectName={ovDrawer.projectName}
         currentUserId={me?.openId}
         onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
+      />
+      {/* B18：分布图点档下钻任务明细抽屉（受控组件，query 存 state 保证身份稳定） */}
+      <DistributionTaskDrawer
+        open={distDrawer.open}
+        title={distDrawer.title}
+        query={distDrawer.query}
+        onClose={() => setDistDrawer((s) => ({ ...s, open: false }))}
       />
     </Box>
   );

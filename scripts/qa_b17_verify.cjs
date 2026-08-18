@@ -271,8 +271,8 @@ async function main() {
     /data:\s*list\.map\(\(_, j\) => \(j === i \? r\.value : null\)\)/.test(cbcSrc),
     'series data 仅对应档位有值、其余 null');
   check('CategoryBarChart：valueFormatter 显示 N 个 · P%', /`\$\{v\} \$\{unit\} · \$\{pct\(v\)\}%`/.test(cbcSrc));
-  check('CategoryBarChart：无下钻回调（无 onClick 传给 series/legend）',
-    !/onClick/.test(cbcSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')));
+  check('CategoryBarChart：onDrill 可选（B18 新增），缺省时图例 onClick 为 undefined',
+    /onDrill\?:/.test(cbcSrc) && /onClick:\s*onDrill \? \(\) => onDrill\(r\.key\) : undefined/.test(cbcSrc));
 
   const hdSrc = fs.readFileSync(path.join(PM_DIR, 'web/src/components/dashboard/HealthDonut.tsx'), 'utf8');
   check('HealthDonut：centerValue = red+yellow', /centerValue=\{String\(d\.red \+ d\.yellow\)\}/.test(hdSrc) || /centerValue=\{String\(needsAttention\)\}/.test(hdSrc));

@@ -22,6 +22,7 @@
 import type {
   DashboardSummary,
   HealthDistribution,
+  OverdueBucket,
   OverdueByProject,
   OverdueDurationDistribution,
   PriorityDistribution,
@@ -317,6 +318,24 @@ export function aggregateOverdueDuration(
     dist.total += 1;
   });
   return dist;
+}
+
+/**
+ * 逾期档位（B18 · 镜像 server/lib/portfolioAgg.js#overdueBucketOf）。
+ * 入参 = 截止日（+ 可选 todayStr）；未逾期（含今天到期）/ 无 dueDate → null。
+ * days = diffDays(dueDate, todayStr)；分段 1–7 / 8–30 / ≥31。
+ * 供 mock 按档过滤与 QA 断言，杜绝前后端分段漂移。
+ */
+export function overdueBucketOf(
+  dueDate: string | null | undefined,
+  todayStr: string = today(),
+): OverdueBucket | null {
+  if (!dueDate) return null;
+  const days = diffDays(dueDate, todayStr);
+  if (days < 1) return null;
+  if (days <= 7) return '1to7';
+  if (days <= 30) return '8to30';
+  return 'over30';
 }
 
 /**

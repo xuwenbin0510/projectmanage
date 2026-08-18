@@ -22,7 +22,7 @@ import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
-import type { DashboardOverview, DashboardOverviewQuery } from '@/types/dashboard';
+import type { DashboardOverview, DashboardOverviewQuery, DashboardTasksQuery, DashboardTaskRow } from '@/types/dashboard';
 
 /* ── 请求参数类型 ─────────────────────────────────── */
 
@@ -321,6 +321,12 @@ export interface ApiClient {
    *   `DashboardOverview.scope` 为准，前端据此回显开关状态。
    */
   getDashboardOverview(query: DashboardOverviewQuery): Promise<DashboardOverview>;
+
+  /**
+   * B18：分布图点档下钻任务明细（`GET /api/dashboard/tasks`）。
+   * 与 overview 同 scope/过滤口径；维度参数三选一互斥（taskStatus → overdueBucket → priority）。
+   */
+  getDashboardTasks(query: DashboardTasksQuery): Promise<Paged<DashboardTaskRow>>;
 
   /* 管理后台 */
   listUsers(): Promise<User[]>;

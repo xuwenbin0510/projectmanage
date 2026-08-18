@@ -256,3 +256,47 @@ export interface OverdueTaskRow {
   /** 所属项目名（B15 新增：全局模式「所属项目」列；单项目模式亦填充 = projectName） */
   projectName: string;
 }
+
+/* ==========================================================================
+ * B18 · 分布图点档下钻任务明细抽屉
+ * 点击优先级 / 状态 / 逾期时长分布图某档 → 右侧抽屉展示该档任务明细。
+ * 对应后端接口 `GET /api/dashboard/tasks`（本批唯一新接口）。
+ * ========================================================================== */
+
+/** 逾期档位字面量（与服务端 portfolioAgg.overdueBucketOf 返回一致） */
+export type OverdueBucket = '1to7' | '8to30' | 'over30';
+
+/**
+ * 任务明细抽屉查询入参：总览筛选子集 + 维度参数（三选一互斥）+ 分页。
+ * 不含 overview 的 timeRange / sort（服务端忽略）；page/pageSize 由抽屉内部追加。
+ */
+export interface DashboardTasksQuery {
+  scope?: DashboardScope;
+  type?: ProjectType | '';
+  status?: ProjectStatus | '';
+  health?: Health | '';
+  keyword?: string;
+  onlyMine?: boolean;
+  /** 维度：优先级（P0-P3；脏值由服务端兜底 P2） */
+  priority?: Priority;
+  /** 维度：任务状态（五档；命中时基数含已完成） */
+  taskStatus?: TaskStatus;
+  /** 维度：逾期档位（1to7 / 8to30 / over30） */
+  overdueBucket?: OverdueBucket;
+  page?: number;
+  pageSize?: number;
+}
+
+/** 任务明细抽屉表格行（服务端返回字段，与 PRD P0-7 逐字一致） */
+export interface DashboardTaskRow {
+  id: string;
+  projectId: string;
+  projectName: string;
+  wbsCode: string;
+  name: string;
+  priority: Priority;
+  status: TaskStatus;
+  dueDate: string;
+  progress: number;
+  ownerName: string;
+}

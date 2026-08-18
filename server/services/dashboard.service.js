@@ -35,6 +35,9 @@ const projectService = require('./project.service');
 /** 决策 ⑥：在管三态 —— 全局总览的统计基线 */
 const MANAGED_STATUSES = ['已批准', '进行中', '挂起'];
 
+/** B18：逾期档位白名单（与 portfolioAgg.overdueBucketOf 返回值逐字一致） */
+const OVERDUE_BUCKETS = ['1to7', '8to30', 'over30'];
+
 /** 明细表分页默认值 */
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 20;
@@ -118,6 +121,42 @@ function resolveScope(me, requested) {
   const canSeeAll = canDo(role, 'dashboard:global');
   if (!canSeeAll) return 'mine';
   return requested === 'mine' ? 'mine' : 'all';
+}
+
+/**
+ * 优先级归一（P0-P3 白名单，脏值兜底 P2）。
+ * 与 portfolioAgg.aggregatePriorityDist / wbs.service 优先级口径逐字一致（PRD P0-3）。
+ * @param {*} raw
+ * @returns {string}
+ */
+function normalizePriorityValue(raw) {
+  const v = String(raw === null || raw === undefined ? '' : raw).trim().toUpperCase();
+  return agg.PRIORITIES.indexOf(v) >= 0 ? v : agg.DEFAULT_PRIORITY;
+}
+
+/**
+ * 解析 B18 维度过滤参数（三选一互斥 · PRD P0-6）。
+ * 顺序：taskStatus → overdueBucket → priority，只取第一个**合法**维度生效，其余忽略。
+ * - taskStatus：白名单 enums.TASK_STATUSES；非法 → 视为未传，继续看下一维度。
+ * - overdueBucket：白名单 OVERDUE_BUCKETS；非法 → 视为未传，继续看下一维度。
+ * - priority：P0-P3 白名单，**非法值（P9 / 空串 / 小写）兜底归一为 P2**（等价传 P2，
+ *   与 aggregatePriorityDist 脏值兜底一致）；未传（undefined/null）→ 不按优先级过滤。
+ * 注意：本函数读**原始 query**（normalizeQuery 不保留这三个字段），normalizeQuery 零改动。
+ * @param {object} query 原始 req.query
+ * @returns {{kind: 'taskStatus'|'overdueBucket'|'priority'|'none', value: string}}
+ */
+function resolveDimension(query) {
+  const raw = query && typeof query === 'object' ? query : {};
+  if (enums.TASK_STATUSES.indexOf(raw.taskStatus) >= 0) {
+    return { kind: 'taskStatus', value: String(raw.taskStatus) };
+  }
+  if (OVERDUE_BUCKETS.indexOf(raw.overdueBucket) >= 0) {
+    return { kind: 'overdueBucket', value: String(raw.overdueBucket) };
+  }
+  if (raw.priority !== undefined && raw.priority !== null) {
+    return { kind: 'priority', value: normalizePriorityValue(raw.priority) };
+  }
+  return { kind: 'none', value: '' };
 }
 
 /* ── 取数 ───────────────────────────────────────────── */
@@ -409,16 +448,95 @@ function getDashboardOverview(db, query, me) {
   };
 }
 
+/**
+ * B18：分布图点档下钻任务明细（GET /api/dashboard/tasks）。
+ *
+ * 与 getDashboardOverview 同源同口径：
+ *  - normalizeQuery / resolveScope / listScopedItems 全部复用（scope / 筛选 / 决策 ⑥ / 权限降级逐字一致；
+ *    q.sort 忽略，本接口排序固定）；
+ *  - 行字段 = toApiWbsNode 派生 + projectName 映射补齐（缺失回落 UNNAMED_PROJECT）。
+ *
+ * 基数规则（PRD P0-6）：
+ *  - taskStatus 命中 → 范围内**全量叶子（含已完成）**（listScopeAllLeafTasks）——「完成」档可出数；
+ *  - 否则 → 范围内**在办叶子**（listScopeLeafTasks），再按 priority / overdueBucket 过滤；
+ *  - 均未传维度 → 返回范围内全部在办叶子任务分页。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} query req.query（DashboardTasksQuery）
+ * @param {object} me users 行（requireAuth 挂载）
+ * @returns {{items: Array<object>, total: number, page: number, pageSize: number}}
+ */
+function getDashboardTasks(db, query, me) {
+  const q = normalizeQuery(query);
+  const scope = resolveScope(me, q.scope);
+  const todayStr = dates.today();
+
+  const items = listScopedItems(db, q, me, scope);  // ProjectListItem[]（含 name）
+  const projectIds = items.map(function (p) { return String(p.id); });
+
+  const dim = resolveDimension(query);              // { kind, value }
+
+  /* 基数：taskStatus → 全量叶子（含已完成）；否则 → 在办叶子 */
+  const base = dim.kind === 'taskStatus'
+    ? listScopeAllLeafTasks(db, projectIds)
+    : listScopeLeafTasks(db, projectIds);
+
+  /* projectId → projectName（范围内项目名，缺失回落未命名项目） */
+  const nameById = {};
+  items.forEach(function (p) { nameById[String(p.id)] = String(p.name || '') || agg.UNNAMED_PROJECT; });
+
+  const rows = base
+    .filter(function (n) {
+      if (dim.kind === 'taskStatus') return n.status === dim.value;
+      if (dim.kind === 'priority') return normalizePriorityValue(n.priority) === dim.value;
+      if (dim.kind === 'overdueBucket') return agg.overdueBucketOf(todayStr, n.dueDate) === dim.value;
+      return true;
+    })
+    .map(function (n) {
+      return {
+        id: n.id,
+        projectId: n.projectId,
+        projectName: nameById[String(n.projectId)] || agg.UNNAMED_PROJECT,
+        wbsCode: n.wbsCode,
+        name: n.name,
+        priority: normalizePriorityValue(n.priority),
+        status: n.status,
+        dueDate: n.dueDate,
+        progress: n.progress,
+        ownerName: n.ownerName || '',
+      };
+    })
+    .sort(function (a, b) {
+      /* 排序固定（PRD P0-8）：优先级 P0→P3 → 截止日升序（空 dueDate 恒最后）→ 名称升序 */
+      const RANK = { P0: 0, P1: 1, P2: 2, P3: 3 };
+      const ra = RANK[a.priority] !== undefined ? RANK[a.priority] : 2; // 防御：脏值按 P2
+      const rb = RANK[b.priority] !== undefined ? RANK[b.priority] : 2;
+      if (ra !== rb) return ra - rb;
+      const da = String(a.dueDate || '');
+      const dbv = String(b.dueDate || '');
+      if (!da !== !dbv) return da ? -1 : 1;        // 无截止日恒最后
+      if (da !== dbv) return da < dbv ? -1 : 1;
+      return agg.compareText(a.name, b.name);
+    });
+
+  const start = (q.page - 1) * q.pageSize;
+  return paged(rows.slice(start, start + q.pageSize), rows.length, q.page, q.pageSize);
+}
+
 module.exports = {
   MANAGED_STATUSES,
+  OVERDUE_BUCKETS,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   normalizeQuery,
+  normalizePriorityValue,
   resolveScope,
+  resolveDimension,
   listScopedItems,
   listScopeLeafTasks,
   listScopeAllLeafTasks,
   countReportFill,
   sortItems,
   getDashboardOverview,
+  getDashboardTasks,
 };

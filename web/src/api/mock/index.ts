@@ -30,6 +30,9 @@ import type {
   DashboardOverview,
   DashboardOverviewQuery,
   DashboardScope,
+  DashboardTaskRow,
+  DashboardTasksQuery,
+  OverdueBucket,
   OwnerLoadProjectRow,
   OwnerLoadRow,
   ReportMissingRow,
@@ -88,6 +91,7 @@ import {
   DEFAULT_PRIORITY,
   normalizePriority,
   REJECT_REASON_MAX,
+  TASK_STATUSES,
 } from '@/config/enums';
 import {
   aggregateHealth,
@@ -95,6 +99,7 @@ import {
   aggregatePriorityDistribution,
   aggregateStatusDist,
   aggregateOverdueDuration,
+  overdueBucketOf,
 } from '@/utils/dashboardAgg';
 import { canDo } from '@/config/permissions';
 import { addDays, today, nowIso, diffDays, weekCode, weekRange, fitMilestoneDates } from '@/utils/date';
@@ -2785,6 +2790,125 @@ export class MockApiClient implements ApiClient {
         page,
         pageSize,
       },
+    });
+  }
+
+  /**
+   * B18：分布图点档下钻任务明细（对应 `GET /api/dashboard/tasks`）。
+   * 与服务端 getDashboardTasks 逐字对齐：
+   *  - 步骤 1-2（范围 + 项目过滤）与上方 getDashboardOverview 同口径（mock 手工双写惯例，逐字拷贝）；
+   *  - 维度三选一互斥（taskStatus → overdueBucket → priority），优先级脏值兜底 P2；
+   *  - taskStatus 命中基数 = 全量叶子（含已完成），否则 = 在办叶子；
+   *  - 行 = WbsNode 字段 + projectName 映射；排序 优先级 → 截止日 → 名称；分页返回 { items, total, page, pageSize }。
+   */
+  async getDashboardTasks(query: DashboardTasksQuery): Promise<Paged<DashboardTaskRow>> {
+    await delay(200);
+    const db = getDb();
+    const me = currentUser(db);
+
+    /* 1. 范围解析（与服务端 resolveScope 同口径） */
+    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
+
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE));
+
+    /* 2. 项目范围（决策 ⑥ 三态基线 + scope + 过滤，与 getDashboardOverview 步骤 1-2 逐字一致） */
+    const statusFilter =
+      query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
+    const myProjectIds = new Set(
+      db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
+    );
+    const myPmProjectIds = new Set(
+      db.members
+        .filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm')
+        .map((m) => m.projectId),
+    );
+    let items = db.projects
+      .filter((p) =>
+        statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status),
+      )
+      .filter((p) => {
+        if (scope === 'all') return true;
+        return query.onlyMine ? myPmProjectIds.has(p.id) : myProjectIds.has(p.id);
+      })
+      .map((p) => toListItem(db, p));
+    if (query.type) items = items.filter((r) => r.type === query.type);
+    if (query.health) items = items.filter((r) => r.health === query.health);
+    if (query.keyword) {
+      const k = query.keyword.trim().toLowerCase();
+      if (k) {
+        items = items.filter(
+          (r) =>
+            r.name.toLowerCase().includes(k) ||
+            r.code.toLowerCase().includes(k) ||
+            r.customer.toLowerCase().includes(k),
+        );
+      }
+    }
+
+    /* 3. 维度解析（三选一互斥；priority 脏值兜底 P2 —— normalizePriority('')→P2 与服务端一致） */
+    const dim: { kind: 'taskStatus' | 'overdueBucket' | 'priority' | 'none'; value: string } = {
+      kind: 'none',
+      value: '',
+    };
+    if (query.taskStatus && TASK_STATUSES.includes(query.taskStatus)) {
+      dim.kind = 'taskStatus';
+      dim.value = query.taskStatus;
+    } else if (query.overdueBucket && (query.overdueBucket === '1to7' || query.overdueBucket === '8to30' || query.overdueBucket === 'over30')) {
+      dim.kind = 'overdueBucket';
+      dim.value = query.overdueBucket;
+    } else if (query.priority !== undefined && query.priority !== null) {
+      dim.kind = 'priority';
+      dim.value = normalizePriority(query.priority);
+    }
+
+    /* 4. 叶子任务基数 + 维度过滤 + 行组装（projectName 映射补齐） */
+    const scopeIds = new Set(items.map((p) => p.id));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+    const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
+    const allLeafTasks = leafNodesOf(db.wbsNodes.filter((n) => scopeIds.has(n.projectId)));
+    const base = dim.kind === 'taskStatus'
+      ? allLeafTasks
+      : allLeafTasks.filter((n) => n.status !== '完成');
+
+    const rows: DashboardTaskRow[] = base
+      .filter((n) => {
+        if (dim.kind === 'taskStatus') return n.status === dim.value;
+        if (dim.kind === 'priority') return normalizePriority(n.priority) === dim.value;
+        if (dim.kind === 'overdueBucket') return overdueBucketOf(n.dueDate) === dim.value;
+        return true;
+      })
+      .map((n) => ({
+        id: n.id,
+        projectId: n.projectId,
+        projectName: projectNameById.get(n.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        wbsCode: n.wbsCode,
+        name: n.name,
+        priority: normalizePriority(n.priority),
+        status: n.status,
+        dueDate: n.dueDate,
+        progress: Number(n.progress) || 0,
+        ownerName: n.ownerName ?? userNameById.get(n.owner ?? '') ?? '',
+      }))
+      .sort((a, b) => {
+        const RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+        const ra = RANK[a.priority] ?? 2;
+        const rb = RANK[b.priority] ?? 2;
+        if (ra !== rb) return ra - rb;
+        const da = a.dueDate || '';
+        const dbv = b.dueDate || '';
+        if (!da !== !dbv) return da ? -1 : 1;
+        if (da !== dbv) return da < dbv ? -1 : 1;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      });
+
+    /* 5. 分页返回（与服务端 envelope.paged 同构） */
+    return deepClone({
+      items: rows.slice((page - 1) * pageSize, page * pageSize),
+      total: rows.length,
+      page,
+      pageSize,
     });
   }
 

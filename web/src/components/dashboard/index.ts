@@ -7,6 +7,7 @@
  * B13 · T01：逾期/临期任务下探抽屉 `OverdueTaskDrawer`
  * B14 · T04：任务优先级分布环 `PriorityDonut`
  * B17 · T02：通用横向条形 `CategoryBarChart`、健康分布环 `HealthDonut`
+ * B18 · T03：分布图点档下钻任务明细抽屉 `DistributionTaskDrawer`
  */
 
 export { ChartCard, ChartLegend, CHART_BODY_HEIGHT } from './ChartCard';
@@ -33,3 +34,5 @@ export { CategoryBarChart } from './CategoryBarChart';
 export type { CategoryBarChartProps, CategoryBarRow } from './CategoryBarChart';
 export { HealthDonut } from './HealthDonut';
 export type { HealthDonutProps } from './HealthDonut';
+export { DistributionTaskDrawer } from './DistributionTaskDrawer';
+export type { DistributionTaskDrawerProps } from './DistributionTaskDrawer';
