@@ -61,6 +61,8 @@ module.exports = {
   SESSION_SECRET: SESSION_SECRET,
   // SQLite 数据库文件路径
   DB_PATH: process.env.DB_PATH || './pm.db',
+  // 任务附件磁盘根目录（C01）：上传文件按 projectId 分目录落盘，UUID 重命名防冲突
+  ATTACHMENT_ROOT: process.env.ATTACHMENT_ROOT || './attachments',
   // 逗号分隔的 open_id 列表，这些用户首次登录即被授予管理员角色
   ADMIN_OPEN_IDS: (process.env.ADMIN_OPEN_IDS || '')
     .split(',').map(function (s) { return s.trim(); }).filter(Boolean),

@@ -251,57 +251,7 @@ export function createRisks(users: User[]): Risk[] {
   ];
 }
 
-/** P1 文档清单种子（占位页展示用） */
-export function createDocuments(users: User[]): ProjectDocument[] {
-  const owner = nameOf(users, OPEN_IDS.xuwenbin);
-  return [
-    {
-      id: 'DC001',
-      projectId: 'P0012',
-      milestoneId: 'P0012-M1',
-      templateKey: 'charter',
-      name: '项目章程 v1.0',
-      status: '已基线',
-      version: '1.0',
-      baselineFlag: true,
-      url: '',
-      owner,
-    },
-    {
-      id: 'DC002',
-      projectId: 'P0012',
-      milestoneId: 'P0012-M2',
-      templateKey: 'srs',
-      name: '需求规格说明书 SRS v1.2',
-      status: '已基线',
-      version: '1.2',
-      baselineFlag: true,
-      url: '',
-      owner: nameOf(users, OPEN_IDS.sunyue),
-    },
-    {
-      id: 'DC003',
-      projectId: 'P0012',
-      milestoneId: 'P0012-M3',
-      templateKey: 'hld',
-      name: '概要设计说明书 v1.0',
-      status: '评审中',
-      version: '1.0',
-      baselineFlag: false,
-      url: '',
-      owner: nameOf(users, OPEN_IDS.wangqiang),
-    },
-    {
-      id: 'DC004',
-      projectId: 'P0012',
-      milestoneId: 'P0012-M5',
-      templateKey: 'test_plan',
-      name: '集成测试计划 v0.9',
-      status: '草稿',
-      version: '0.9',
-      baselineFlag: false,
-      url: '',
-      owner: nameOf(users, OPEN_IDS.chenjing),
-    },
-  ];
+/** 任务附件种子（C01）：附件由用户上传产生，初始为空 */
+export function createDocuments(_users: User[]): ProjectDocument[] {
+  return [];
 }

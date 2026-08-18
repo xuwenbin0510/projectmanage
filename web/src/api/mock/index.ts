@@ -24,7 +24,7 @@ import type { Report, ReportTaskRow, ReportRisk } from '@/types/report';
 import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem } from '@/types/effort';
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
-import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument } from '@/types/audit';
+import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, ReportReminder, Session } from '@/types/workbench';
 import type {
   DashboardOverview,
@@ -2966,11 +2966,78 @@ export class MockApiClient implements ApiClient {
     return deepClone(db.risks.filter((r) => r.projectId === projectId));
   }
 
-  async listDocuments(projectId: string): Promise<ProjectDocument[]> {
+  async listDocuments(projectId: string, opts?: { nodeId?: string; milestoneId?: string }): Promise<ProjectDocument[]> {
     await delay(80);
     const db = getDb();
     currentUser(db);
-    return deepClone(db.documents.filter((d) => d.projectId === projectId));
+    let list = db.documents.filter((d) => d.projectId === projectId);
+    if (opts?.nodeId) list = list.filter((d) => d.nodeId === opts.nodeId);
+    if (opts?.milestoneId) list = list.filter((d) => d.milestoneId === opts.milestoneId);
+    return deepClone(list);
+  }
+
+  /* C01 任务附件：mock 仅在内存建记录，不落真实文件 */
+  async uploadDocument(projectId: string, payload: UploadDocumentPayload): Promise<ProjectDocument> {
+    await delay(200);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'document.upload', projectId);
+
+    const f = payload.file;
+    const nodeId = payload.nodeId ?? '';
+    const milestoneId = payload.milestoneId ?? '';
+    if (nodeId) {
+      const node = db.wbsNodes.find((n) => n.id === nodeId && n.projectId === projectId);
+      if (!node) throw new ApiError(ErrorCode.E_VALIDATION, '关联任务不存在', undefined, 400);
+    }
+    if (milestoneId) {
+      const ms = db.milestones.find((m) => m.id === milestoneId && m.projectId === projectId);
+      if (!ms) throw new ApiError(ErrorCode.E_VALIDATION, '关联里程碑不存在', undefined, 400);
+    }
+
+    const now = nowIso();
+    const id = genId('DOC');
+    const doc: ProjectDocument = {
+      id,
+      projectId,
+      nodeId,
+      milestoneId,
+      name: (f && f.name) || '未命名文件',
+      fileName: (f && f.name) || 'file',
+      fileSize: f && typeof f.size === 'number' ? f.size : 0,
+      mimeType: (f && f.type) || 'application/octet-stream',
+      storagePath: `${projectId}/__mock__${id}`,
+      uploadedBy: me.openId,
+      uploadedAt: now,
+      createdAt: now,
+    };
+    db.documents.push(doc);
+    saveDb();
+    return deepClone(doc);
+  }
+
+  async deleteDocument(projectId: string, id: string): Promise<ProjectDocument> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    assertCan(db, 'document.delete', projectId);
+    const idx = db.documents.findIndex((d) => d.id === id && d.projectId === projectId);
+    if (idx < 0) throw new ApiError(ErrorCode.E_NOT_FOUND, '附件不存在', undefined, 404);
+    const [doc] = db.documents.splice(idx, 1);
+    saveDb();
+    return deepClone(doc);
+  }
+
+  /** mock 合成占位文件（演示用，无真实文件内容） */
+  async downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob> {
+    void opts;
+    await delay(120);
+    const db = getDb();
+    currentUser(db);
+    const doc = db.documents.find((d) => d.id === id && d.projectId === projectId);
+    if (!doc) throw new ApiError(ErrorCode.E_NOT_FOUND, '附件不存在', undefined, 404);
+    const text = `[演示附件] ${doc.name}\n类型：${doc.mimeType}\n大小：${doc.fileSize} 字节\n上传人：${doc.uploadedBy}\n（Mock 模式无真实文件内容）`;
+    return new Blob([text], { type: 'text/plain;charset=utf-8' });
   }
 }
 

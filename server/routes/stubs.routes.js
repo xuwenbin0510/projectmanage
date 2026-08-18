@@ -93,9 +93,8 @@ router.get('/audit', requireAuth, emptyPaged());
 
 /* ── 风险 / 文档 ────────────────────────────────────── */
 
-// TODO(后续批次): 风险台账与项目文档
+// TODO(后续批次): 风险台账
 router.get('/projects/:projectId/risks', requireAuth, emptyList());
-router.get('/projects/:projectId/documents', requireAuth, emptyList());
 
 /* ── 演示数据复位 ───────────────────────────────────── */
 

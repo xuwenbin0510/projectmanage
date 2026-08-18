@@ -48,6 +48,9 @@ export const PERMISSIONS: Record<string, PermRule> = {
   'admin:user:role': { global: ['admin'], project: [] },
   'admin:audit:view': { global: ['admin', 'pmo'], project: [] },
   'admin:template': { global: ['admin', 'pmo'], project: [] },
+  // 任务附件（C01）：上传面向所有项目参与者，删除仅管理员 / 项目负责人
+  'document:upload': { global: ['admin', 'pmo', 'pm', 'tl', 'member', 'qa', 'po', 'cm'], project: [] },
+  'document:delete': { global: ['admin'], project: ['pm'] },
 };
 
 /** 全部 action 列表（自检用） */

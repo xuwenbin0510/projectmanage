@@ -20,7 +20,7 @@ import type { Report } from '@/types/report';
 import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
-import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
+import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
 import type { DashboardOverview, DashboardOverviewQuery, DashboardTasksQuery, DashboardTaskRow } from '@/types/dashboard';
 import type {
@@ -387,8 +387,66 @@ export class HttpApiClient implements ApiClient {
     return get<Risk[]>(`/projects/${projectId}/risks`);
   }
 
-  listDocuments(projectId: string): Promise<ProjectDocument[]> {
-    return get<ProjectDocument[]>(`/projects/${projectId}/documents`);
+  /* C01 任务附件 */
+  listDocuments(projectId: string, opts?: { nodeId?: string; milestoneId?: string }): Promise<ProjectDocument[]> {
+    const q = qs({ nodeId: opts?.nodeId, milestoneId: opts?.milestoneId });
+    return get<ProjectDocument[]>(`/projects/${projectId}/documents${q}`);
+  }
+
+  /**
+   * 上传附件：multipart/form-data，字段名 `file`。
+   * 不走通用 request()（它强制 JSON），这里单独构造 FormData + Bearer 鉴权，
+   * 解析方式与服务端信封一致。
+   */
+  async uploadDocument(projectId: string, payload: UploadDocumentPayload): Promise<ProjectDocument> {
+    const fd = new FormData();
+    fd.append('file', payload.file);
+    if (payload.nodeId) fd.append('nodeId', payload.nodeId);
+    if (payload.milestoneId) fd.append('milestoneId', payload.milestoneId);
+
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}/projects/${projectId}/documents`, {
+        method: 'POST',
+        headers: { ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
+        body: fd,
+      });
+    } catch {
+      throw new ApiError(ErrorCode.E_NETWORK, undefined, undefined, 0);
+    }
+
+    let p: ApiEnvelope<ProjectDocument> | null = null;
+    try {
+      p = (await res.json()) as ApiEnvelope<ProjectDocument>;
+    } catch {
+      p = null;
+    }
+    if (!res.ok || !p || p.code !== 0) {
+      const code = p && p.code !== 0 ? String(p.code) : ErrorCode.E_NETWORK;
+      throw new ApiError(code, p?.message, (p as unknown as { data?: unknown })?.data, res.status);
+    }
+    return p.data;
+  }
+
+  async deleteDocument(projectId: string, id: string): Promise<ProjectDocument> {
+    return del<ProjectDocument>(`/projects/${projectId}/documents/${id}`);
+  }
+
+  /** 取附件二进制流（服务端按 Content-Type 返回，便于预览/下载） */
+  async downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob> {
+    const q = opts?.asDownload ? '?download=1' : '';
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}/projects/${projectId}/documents/${id}/download${q}`, {
+        headers: { ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
+      });
+    } catch {
+      throw new ApiError(ErrorCode.E_NETWORK, undefined, undefined, 0);
+    }
+    if (!res.ok) {
+      throw new ApiError(ErrorCode.E_NOT_FOUND, '文件不存在或无权访问', undefined, res.status);
+    }
+    return res.blob();
   }
 }
 
