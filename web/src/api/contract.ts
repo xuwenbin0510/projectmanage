@@ -351,6 +351,16 @@ export interface ApiClient {
   baselineDocument(projectId: string, docId: string): Promise<ProjectDocument>;
   /** D06：项目内增补门控必交付项（milestone:edit；生成待交付项，自动参与门校验） */
   addRequiredDeliverable(projectId: string, payload: { milestoneId: string; name: string }): Promise<ProjectDocument>;
+  /** D07：给无门里程碑挂质量门（mode=template 模板门库 / blank 空白新建） */
+  setMilestoneGate(
+    projectId: string,
+    milestoneId: string,
+    payload: { mode: 'template' | 'blank'; templateCode?: string; name?: string; ownerRole?: string; items?: { content: string; ownerRole?: string }[] },
+  ): Promise<MilestoneWithGate[]>;
+  /** D07：修改门名称/责任角色 */
+  updateGate(gateId: string, payload: { name?: string; ownerRole?: string }): Promise<MilestoneWithGate[]>;
+  /** D07：删除门（里程碑回无门状态） */
+  deleteGate(gateId: string): Promise<MilestoneWithGate[]>;
   /** 取附件文件流（http 走真实端点，mock 合成占位文件）；asDownload 控制下载/预览 */
   downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob>;
 }
