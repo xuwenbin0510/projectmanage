@@ -1041,6 +1041,39 @@ function migrationV10(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v10 建全量任务快照表 progress_snapshots（D03）');
 }
 
+/* ── 迁移 v11：project_documents 加模板派生/版本/基线列（D04） ── */
+
+/**
+ * v11 = `project_documents` 增加模板派生与版本管控四列。
+ *
+ * D04 起文档域支持「模板派生交付物清单」：
+ *  - `template_key`：模板交付物标识（如 'TPL-A-1'）；'' = 手动上传/链接（非模板项）
+ *  - `status`：模板项 待交付 / 已交付；手动记录恒 '已交付'
+ *  - `version`：交付版本号（替换文件/链接时 +1）
+ *  - `baseline_flag`：0=未纳入基线 1=已纳入（本期仅标记展示，锁定/变更留痕下一期）
+ *
+ * 幂等：`hasColumn` 守卫（沿用 v1 `tasks.name` 追加列范式），重复执行安全。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV11(db, now) { // eslint-disable-line no-unused-vars
+  if (!hasColumn(db, 'project_documents', 'template_key')) {
+    db.exec("ALTER TABLE project_documents ADD COLUMN template_key TEXT NOT NULL DEFAULT ''");
+  }
+  if (!hasColumn(db, 'project_documents', 'status')) {
+    db.exec("ALTER TABLE project_documents ADD COLUMN status TEXT NOT NULL DEFAULT '已交付'");
+  }
+  if (!hasColumn(db, 'project_documents', 'version')) {
+    db.exec('ALTER TABLE project_documents ADD COLUMN version INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!hasColumn(db, 'project_documents', 'baseline_flag')) {
+    db.exec('ALTER TABLE project_documents ADD COLUMN baseline_flag INTEGER NOT NULL DEFAULT 0');
+  }
+  console.log('[migrations] v11 project_documents 加 template_key/status/version/baseline_flag（D04 模板派生）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1058,6 +1091,7 @@ const MIGRATIONS = [
   { version: 8, name: 'connect-v8-documents', up: migrationV8 },
   { version: 9, name: 'connect-v9-doc-link', up: migrationV9 },
   { version: 10, name: 'connect-v10-progress-snapshots', up: migrationV10 },
+  { version: 11, name: 'connect-v11-template-docs', up: migrationV11 },
 ];
 
 /**

@@ -403,6 +403,7 @@ export class HttpApiClient implements ApiClient {
     fd.append('file', payload.file);
     if (payload.nodeId) fd.append('nodeId', payload.nodeId);
     if (payload.milestoneId) fd.append('milestoneId', payload.milestoneId);
+    if (payload.templateKey) fd.append('templateKey', payload.templateKey);
 
     let res: Response;
     try {
@@ -434,6 +435,7 @@ export class HttpApiClient implements ApiClient {
     if (payload.name) body.name = payload.name;
     if (payload.nodeId) body.nodeId = payload.nodeId;
     if (payload.milestoneId) body.milestoneId = payload.milestoneId;
+    if (payload.templateKey) body.templateKey = payload.templateKey;
 
     let res: Response;
     try {

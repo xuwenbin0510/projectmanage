@@ -84,6 +84,7 @@ router.post(
         file: req.file,
         nodeId: body.nodeId || '',
         milestoneId: body.milestoneId || '',
+        templateKey: body.templateKey || '',
         me: req.user,
       });
       return res.json(ok(doc, '上传成功'));
@@ -96,6 +97,7 @@ router.post(
         name: body.name,
         nodeId: body.nodeId,
         milestoneId: body.milestoneId,
+        templateKey: body.templateKey,
         me: req.user,
         title: title,
       });

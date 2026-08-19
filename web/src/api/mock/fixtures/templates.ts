@@ -139,14 +139,14 @@ export function createTemplates(): LifecycleTemplate[] {
         },
       ],
       docs: [
-        '立项申请表',
-        '项目章程',
-        '需求规格说明书',
-        '系统架构设计说明书',
-        '接口控制文档 ICD',
-        '集成测试报告',
-        '客户验收报告',
-        '结项报告',
+        { name: '立项申请表', milestoneCode: 'M1' },
+        { name: '项目章程', milestoneCode: 'M1' },
+        { name: '需求规格说明书', milestoneCode: 'M2' },
+        { name: '系统架构设计说明书', milestoneCode: 'M3' },
+        { name: '接口控制文档 ICD', milestoneCode: 'M4' },
+        { name: '集成测试报告', milestoneCode: 'M5' },
+        { name: '客户验收报告', milestoneCode: 'M6' },
+        { name: '结项报告', milestoneCode: 'M7' },
       ],
       // 三类一致：仅声明 maxDepth / skeleton，childTypes 由 DEFAULT_WBS_RULES 兜底（D-2）
       wbsRules: {
@@ -229,7 +229,12 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
       ],
-      docs: ['产品需求文档 PRD', 'Sprint 计划', '发布说明', 'Sprint 回顾纪要'],
+      docs: [
+        { name: '产品需求文档 PRD', milestoneCode: 'M1' },
+        { name: 'Sprint 计划', milestoneCode: 'M1' },
+        { name: '发布说明', milestoneCode: 'M3' },
+        { name: 'Sprint 回顾纪要', milestoneCode: 'M4' },
+      ],
       wbsRules: {
         maxDepth: 4,
         skeleton: 'per-milestone',
@@ -322,7 +327,13 @@ export function createTemplates(): LifecycleTemplate[] {
           },
         },
       ],
-      docs: ['立项申请表', '施工方案', '设备清单', '验收报告', '运维手册'],
+      docs: [
+        { name: '立项申请表', milestoneCode: 'M1' },
+        { name: '施工方案', milestoneCode: 'M2' },
+        { name: '设备清单', milestoneCode: 'M3' },
+        { name: '验收报告', milestoneCode: 'M5' },
+        { name: '运维手册', milestoneCode: 'M5' },
+      ],
       wbsRules: {
         maxDepth: 4,
         skeleton: 'per-milestone',

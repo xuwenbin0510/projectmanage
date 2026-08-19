@@ -158,6 +158,14 @@ export interface TemplateMilestone {
   gate?: TemplateGate;
 }
 
+/** 模板交付物清单项（D04：结构化，按里程碑挂载） */
+export interface TemplateDocItem {
+  /** 交付物名称（如「需求规格说明书」） */
+  name: string;
+  /** 所属模板里程碑 code（如 'M2'）；派生时按 code 匹配项目里程碑填充 milestone_id */
+  milestoneCode: string;
+}
+
 export interface LifecycleTemplate {
   id: string;
   projectType: ProjectType;
@@ -166,7 +174,8 @@ export interface LifecycleTemplate {
   definition: {
     /** 里程碑骨架（唯一时间轴）；阶段实体已在方案一中彻底删除 */
     milestones: TemplateMilestone[];
-    docs: string[];
+    /** D04 起：交付物清单（结构化，关联里程碑） */
+    docs: TemplateDocItem[];
     /** WBS 层级规则；只写差异项，其余由 `DEFAULT_WBS_RULES` 兜底（决策 D-2 / SK-5） */
     wbsRules?: Partial<WbsRules>;
   };

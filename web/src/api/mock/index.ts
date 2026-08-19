@@ -3151,10 +3151,47 @@ export class MockApiClient implements ApiClient {
     return deepClone(db.risks.filter((r) => r.projectId === projectId));
   }
 
+  /** D04：懒派生（幂等）——项目无模板清单项时按模板 docs 派生（按里程碑 code 挂载） */
+  private ensureTplDerived(db: MockDb, projectId: string): void {
+    if (db.documents.some((d) => d.projectId === projectId && d.templateKey)) return;
+    const proj = db.projects.find((p) => p.id === projectId);
+    if (!proj) return;
+    const tpl = db.templates.find((t) => t.projectType === proj.type && t.isActive);
+    if (!tpl) return;
+    const msMap = new Map(
+      db.milestones.filter((m) => m.projectId === projectId).map((m) => [m.code, m.id] as const),
+    );
+    const now = nowIso();
+    tpl.definition.docs.forEach((doc, i) => {
+      db.documents.push({
+        id: genId('DOC'),
+        projectId,
+        nodeId: '',
+        milestoneId: doc.milestoneCode ? (msMap.get(doc.milestoneCode) ?? '') : '',
+        name: doc.name,
+        fileName: '',
+        fileSize: 0,
+        mimeType: '',
+        storagePath: '',
+        docType: '',
+        url: '',
+        templateKey: `${tpl.id}-${i + 1}`,
+        status: '待交付',
+        version: 1,
+        baselineFlag: 0,
+        uploadedBy: '',
+        uploadedAt: '',
+        createdAt: now,
+      });
+    });
+    saveDb();
+  }
+
   async listDocuments(projectId: string, opts?: { nodeId?: string; milestoneId?: string }): Promise<ProjectDocument[]> {
     await delay(80);
     const db = getDb();
     currentUser(db);
+    this.ensureTplDerived(db, projectId);
     let list = db.documents.filter((d) => d.projectId === projectId);
     if (opts?.nodeId) list = list.filter((d) => d.nodeId === opts.nodeId);
     if (opts?.milestoneId) list = list.filter((d) => d.milestoneId === opts.milestoneId);
@@ -3181,6 +3218,30 @@ export class MockApiClient implements ApiClient {
     }
 
     const now = nowIso();
+
+    /* D04：templateKey 命中模板清单项 → 覆盖升版 */
+    const templateKey = payload.templateKey ?? '';
+    if (templateKey) {
+      const existing = db.documents.find((d) => d.projectId === projectId && d.templateKey === templateKey);
+      if (existing) {
+        existing.nodeId = nodeId || existing.nodeId;
+        existing.milestoneId = milestoneId || existing.milestoneId;
+        existing.name = (f && f.name) || existing.name;
+        existing.fileName = (f && f.name) || 'file';
+        existing.fileSize = f && typeof f.size === 'number' ? f.size : 0;
+        existing.mimeType = (f && f.type) || 'application/octet-stream';
+        existing.storagePath = `${projectId}/__mock__${existing.id}`;
+        existing.docType = 'file';
+        existing.url = '';
+        existing.uploadedBy = me.openId;
+        existing.uploadedAt = now;
+        existing.version = existing.status === '待交付' ? 1 : (existing.version || 1) + 1;
+        existing.status = '已交付';
+        saveDb();
+        return deepClone(existing);
+      }
+    }
+
     const id = genId('DOC');
     const doc: ProjectDocument = {
       id,
@@ -3194,6 +3255,10 @@ export class MockApiClient implements ApiClient {
       storagePath: `${projectId}/__mock__${id}`,
       docType: 'file',
       url: '',
+      templateKey: '',
+      status: '已交付',
+      version: 1,
+      baselineFlag: 0,
       uploadedBy: me.openId,
       uploadedAt: now,
       createdAt: now,
@@ -3226,6 +3291,30 @@ export class MockApiClient implements ApiClient {
     }
 
     const now = nowIso();
+
+    /* D04：templateKey 命中模板清单项 → 覆盖升版（docType='link'） */
+    const templateKey = payload.templateKey ?? '';
+    if (templateKey) {
+      const existing = db.documents.find((d) => d.projectId === projectId && d.templateKey === templateKey);
+      if (existing) {
+        existing.nodeId = nodeId || existing.nodeId;
+        existing.milestoneId = milestoneId || existing.milestoneId;
+        existing.name = (payload.name ?? '').trim() || url;
+        existing.fileName = '';
+        existing.fileSize = 0;
+        existing.mimeType = '';
+        existing.storagePath = '';
+        existing.docType = 'link';
+        existing.url = url;
+        existing.uploadedBy = me.openId;
+        existing.uploadedAt = now;
+        existing.version = existing.status === '待交付' ? 1 : (existing.version || 1) + 1;
+        existing.status = '已交付';
+        saveDb();
+        return deepClone(existing);
+      }
+    }
+
     const id = genId('DOC');
     const doc: ProjectDocument = {
       id,
@@ -3239,6 +3328,10 @@ export class MockApiClient implements ApiClient {
       storagePath: '',
       docType: 'link',
       url,
+      templateKey: '',
+      status: '已交付',
+      version: 1,
+      baselineFlag: 0,
       uploadedBy: me.openId,
       uploadedAt: now,
       createdAt: now,

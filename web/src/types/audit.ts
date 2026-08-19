@@ -60,30 +60,41 @@ export interface Risk {
   reviewDate: string;
 }
 
-/** 文档记录类型：file=本地附件（C01）；link=飞书/外链文档（D02） */
-export type ProjectDocType = 'file' | 'link';
+/** 文档记录类型：file=本地附件（C01）；link=飞书/外链文档（D02）；模板清单项未交付时 docType='' */
+export type ProjectDocType = 'file' | 'link' | '';
 
-/** 任务附件（C01/D02 真实实现）：挂在 WBS 任务或里程碑上的文件或外链文档 */
+/** 文档记录交付状态（D04）：模板项 待交付/已交付；手动记录恒 已交付 */
+export type ProjectDocStatus = '待交付' | '已交付';
+
+/** 任务附件（C01/D02/D04 真实实现）：挂在 WBS 任务或里程碑上的文件或外链文档，或模板派生的待交付清单项 */
 export interface ProjectDocument {
   id: string;
   projectId: string;
   /** 关联 WBS 任务 id；'' = 不关联 */
   nodeId: string;
-  /** 关联里程碑 id；'' = 不关联 */
+  /** 关联里程碑 id；'' = 不关联（模板项派生时按 milestoneCode 挂载） */
   milestoneId: string;
   name: string;
-  /** 落盘文件名（UUID_原名）；link 记录为 '' */
+  /** 落盘文件名（UUID_原名）；link/未交付模板项为 '' */
   fileName: string;
-  /** 字节数；link 记录为 0 */
+  /** 字节数；link/未交付模板项为 0 */
   fileSize: number;
-  /** MIME 类型；link 记录为 '' */
+  /** MIME 类型；link/未交付模板项为 '' */
   mimeType: string;
-  /** 磁盘相对路径（以 ATTACHMENT_ROOT 为根），用于服务端下载；link 记录为 '' */
+  /** 磁盘相对路径（以 ATTACHMENT_ROOT 为根），用于服务端下载；link/未交付模板项为 '' */
   storagePath: string;
-  /** D02：file=本地附件 / link=外链文档 */
+  /** D02：file=本地附件 / link=外链文档 / ''=模板清单项未交付 */
   docType: ProjectDocType;
-  /** D02：外链地址（飞书文档等）；file 记录为 '' */
+  /** D02：外链地址（飞书文档等）；非 link 为 '' */
   url: string;
+  /** D04：模板交付物标识（如 'TPL-A-1'）；'' = 手动上传/链接（非模板项） */
+  templateKey: string;
+  /** D04：交付状态 */
+  status: ProjectDocStatus;
+  /** D04：交付版本号（替换文件/链接时 +1） */
+  version: number;
+  /** D04：是否纳入基线（0/1，本期仅标记展示） */
+  baselineFlag: number;
   /** 上传人 open_id */
   uploadedBy: string;
   uploadedAt: string;
@@ -98,9 +109,11 @@ export interface UploadDocumentPayload {
   nodeId?: string;
   /** 关联里程碑 id（可空） */
   milestoneId?: string;
+  /** D04：模板交付物标识（命中 → 覆盖该清单项并升版） */
+  templateKey?: string;
 }
 
-/** 关联外链文档（飞书等）的入参（D02） */
+/** 关联外链文档（飞书等）的入参（D02/D04） */
 export interface CreateLinkDocumentPayload {
   /** 飞书文档 / 外链 URL（http(s)://） */
   url: string;
@@ -110,4 +123,6 @@ export interface CreateLinkDocumentPayload {
   nodeId?: string;
   /** 关联里程碑 id（可空） */
   milestoneId?: string;
+  /** D04：模板交付物标识（命中 → 覆盖该清单项并升版） */
+  templateKey?: string;
 }
