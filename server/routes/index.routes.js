@@ -35,6 +35,8 @@ const dashboardRoutes = require('./dashboard.routes');
 const reportsRoutes = require('./reports.routes');
 const reviewsRoutes = require('./reviews.routes');
 const documentsRoutes = require('./documents.routes');
+const changeRoutes = require('./change.routes');
+const auditRoutes = require('./audit.routes');
 const stubsRoutes = require('./stubs.routes');
 const legacyRoutes = require('./legacy.routes');
 
@@ -67,6 +69,14 @@ router.use(reviewsRoutes);
 /* ── 新契约（C01：任务附件） ───────────────────────── */
 /* ⚠ 必须先于 stubsRoutes，否则文档请求会被 501 桩抢先命中 */
 router.use(documentsRoutes);
+
+/* ── 新契约（D08：变更流程，替换变更桩） ────────────── */
+/* ⚠ 必须先于 stubsRoutes，否则变更请求会被 501 桩抢先命中 */
+router.use(changeRoutes);
+
+/* ── 新契约（D08.3：审计日志，替换审计桩） ──────────── */
+/* ⚠ 必须先于 stubsRoutes，否则 /audit 会被空分页桩抢先命中 */
+router.use(auditRoutes);
 
 /* ── 降级桩：批次 4 后只兜未实现项（周报 / 评审桩已删） ─ */
 router.use(stubsRoutes);

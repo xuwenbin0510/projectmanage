@@ -44,7 +44,7 @@ export function ProjectAuditPage(): JSX.Element {
 
   return (
     <Stack spacing={2.5}>
-      <PageHeader title="变更历史" subtitle="所有关键操作（创建 / 状态流转 / 门控决议 / 审批 / 变更应用）的不可篡改留痕" />
+      <PageHeader title="审计日志" subtitle="所有关键操作（创建 / 状态流转 / 门控决议 / 审批 / 变更应用）的不可篡改留痕" />
 
       <SectionCard flush>
         {loading ? (

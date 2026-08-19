@@ -508,17 +508,13 @@ function canDecide(review: Review, openId: string): ReviewStep | null {
   return step.assigneeOpenId === openId && step.status === 'current' ? step : null;
 }
 
-/** 评审通过后的联动（门 / 项目状态 / 变更） */
+/** 评审通过后的联动（项目状态 / 变更）。⚠ D08.2：**不再联动门**——门控唯一通道
+ *  是门区决议（检查项勾齐 + 交付物硬校验），评审通过仅留痕，避免绕过校验的旁路。 */
 function onReviewApproved(db: MockDb, review: Review, actor: User): void {
   if (review.refType === 'gate') {
-    const gate = db.gates.find((g) => g.id === review.refId);
-    if (gate && gate.status !== '已通过') {
-      gate.status = '已通过';
-      gate.conclusion = '已通过';
-      gate.decidedBy = actor.openId;
-      gate.decidedAt = today();
-      achieveMilestoneByGate(db, gate, actor);
-    }
+    /* D08.2：评审通过不再置门通过/达成里程碑（只留审计，门控走门区决议） */
+    audit(db, actor, 'review', review.id, 'approve', review.projectId, `评审通过（不联动质量门）：「${review.title}」`);
+    return;
   }
   if (review.refType === 'project') {
     const p = db.projects.find((x) => x.id === review.refId);
@@ -2495,7 +2491,7 @@ export class MockApiClient implements ApiClient {
     const me = assertCan(db, 'change.create', change.projectId);
     if (change.status !== '草稿') throw new ApiError(ErrorCode.E_VALIDATION, '仅草稿状态可提交');
 
-    const reviewType = change.route === 'ccb' ? 'ccb' : 'technical';
+    const reviewType = change.route === 'ccb' ? 'ccb' : 'pm_only';
     const tpl = REVIEW_TEMPLATES[reviewType];
     const rid = genId('RV');
     const ts = nowIso();
