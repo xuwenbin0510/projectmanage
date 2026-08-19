@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
   Stack,
   Typography,
@@ -20,6 +21,7 @@ import {
   ToggleButtonGroup,
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
 import OpenInNewOutlinedIcon from '@mui/icons-material/OpenInNewOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -115,6 +117,26 @@ export function DocumentsPage(): JSX.Element {
   const [linkUrl, setLinkUrl] = useState('');
   /* D04：模板项交付（非空时提交走覆盖升版） */
   const [uploadTemplateKey, setUploadTemplateKey] = useState('');
+  /* D05：替换已基线交付物的变更原因（必填） */
+  const [deliverBaselined, setDeliverBaselined] = useState(false);
+  const [changeNote, setChangeNote] = useState('');
+
+  /** D05：对已交付模板项建立基线 */
+  const doBaseline = async (d: ProjectDocument): Promise<void> => {
+    try {
+      await api.baselineDocument(id, d.id);
+      toast.success(`「${d.name}」已建立基线（v${d.version}）`);
+      const opts =
+        filter.kind === 'node'
+          ? { nodeId: filter.id }
+          : filter.kind === 'milestone'
+            ? { milestoneId: filter.id }
+            : {};
+      setRows(await api.listDocuments(id, opts));
+    } catch (e: unknown) {
+      toast.error(e);
+    }
+  };
 
   const nodeMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -177,6 +199,8 @@ export function DocumentsPage(): JSX.Element {
     setLinkName('');
     setLinkUrl('');
     setUploadTemplateKey('');
+    setDeliverBaselined(false);
+    setChangeNote('');
     setUploadOpen(true);
   };
 
@@ -189,12 +213,20 @@ export function DocumentsPage(): JSX.Element {
     setLinkName('');
     setLinkUrl('');
     setUploadTemplateKey(d.templateKey);
+    setDeliverBaselined(d.baselineFlag === 1);
+    setChangeNote('');
     setUploadOpen(true);
   };
 
   const doSubmit = async () => {
     setUploading(true);
     try {
+      /* D05：替换已基线交付物必须填写变更原因 */
+      const note = deliverBaselined ? changeNote.trim() : '';
+      if (deliverBaselined && !note) {
+        toast.error('该交付物已纳入基线，替换必须填写变更原因');
+        return;
+      }
       if (linkMode) {
         if (!linkUrl.trim()) {
           toast.error('请粘贴飞书文档链接');
@@ -206,6 +238,7 @@ export function DocumentsPage(): JSX.Element {
           nodeId: uploadKind === 'node' ? uploadTarget : '',
           milestoneId: uploadKind === 'milestone' ? uploadTarget : '',
           templateKey: uploadTemplateKey || undefined,
+          changeNote: note || undefined,
         });
         toast.success(uploadTemplateKey ? '已交付' : '已关联文档');
       } else {
@@ -218,6 +251,7 @@ export function DocumentsPage(): JSX.Element {
           nodeId: uploadKind === 'node' ? uploadTarget : '',
           milestoneId: uploadKind === 'milestone' ? uploadTarget : '',
           templateKey: uploadTemplateKey || undefined,
+          changeNote: note || undefined,
         });
         toast.success(uploadTemplateKey ? '已交付' : '上传成功');
       }
@@ -323,7 +357,12 @@ export function DocumentsPage(): JSX.Element {
                 ))}
               {isTpl && <Chip size="small" label="模板" variant="outlined" sx={{ height: 18, fontSize: 11 }} />}
               {d.baselineFlag === 1 && (
-                <Chip size="small" label="基线" variant="outlined" sx={{ height: 18, fontSize: 11, color: 'warning.main', borderColor: 'warning.main' }} />
+                <Chip
+                  size="small"
+                  label={d.baselinedAt ? `基线 v${d.version} · ${new Date(d.baselinedAt).toLocaleDateString('zh-CN')}` : '基线'}
+                  variant="outlined"
+                  sx={{ height: 18, fontSize: 11, color: 'warning.main', borderColor: 'warning.main' }}
+                />
               )}
               {!isTpl && <Chip size="small" label={associationLabel(d)} variant="outlined" sx={{ height: 18, fontSize: 11 }} />}
             </Stack>
@@ -384,6 +423,13 @@ export function DocumentsPage(): JSX.Element {
               <Tooltip title="替换交付物（自动升版）">
                 <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => openDeliver(d)}>
                   替换
+                </Button>
+              </Tooltip>
+            )}
+            {isTpl && !pending && d.baselineFlag === 0 && (
+              <Tooltip title="将当前版本纳入基线（基线后替换需填写变更原因）">
+                <Button size="small" variant="outlined" startIcon={<VerifiedOutlinedIcon fontSize="small" />} onClick={() => void doBaseline(d)}>
+                  基线
                 </Button>
               </Tooltip>
             )}
@@ -500,6 +546,11 @@ export function DocumentsPage(): JSX.Element {
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 0.5 }}>
+            {deliverBaselined && (
+              <Alert severity="warning" variant="outlined">
+                该交付物已纳入基线，替换必须填写变更原因（记录审计留痕）。
+              </Alert>
+            )}
             <ToggleButtonGroup
               size="small"
               exclusive
@@ -606,6 +657,17 @@ export function DocumentsPage(): JSX.Element {
                 ? '链接记录点击「打开文档」跳转飞书；支持 docx / wiki / sheets / slides / 多维表格。'
                 : '允许图片 / PDF / Office / 文本 / 压缩包等常见格式，单文件不超过 20MB。'}
             </Typography>
+            {deliverBaselined && (
+              <TextField
+                size="small"
+                fullWidth
+                required
+                label="变更原因（已基线交付物替换必填）"
+                value={changeNote}
+                onChange={(e) => setChangeNote(e.target.value)}
+                placeholder="说明本次替换的内容 / 原因，将写入审计日志"
+              />
+            )}
           </Stack>
         </DialogContent>
         <DialogActions>

@@ -1053,6 +1053,64 @@ export class MockApiClient implements ApiClient {
     return deepClone(milestonesWithGate(db, gate.projectId));
   }
 
+  /* D05 检查项管理（milestone:edit；custom 可改删，template 只读） */
+  async addGateItem(gateId: string, payload: { content: string; ownerRole?: string }): Promise<MilestoneWithGate[]> {
+    await delay(150);
+    const db = getDb();
+    const gate = db.gates.find((g) => g.id === gateId) ?? nf();
+    assertWritable(db, gate.projectId);
+    const me = assertCan(db, 'milestone.edit', gate.projectId);
+    const content = (payload.content ?? '').trim();
+    if (!content) throw new ApiError(ErrorCode.E_VALIDATION, '检查项内容不能为空', undefined, 400);
+    const seq = Math.max(0, ...db.gateItems.filter((i) => i.gateId === gateId).map((i) => i.seq)) + 1;
+    const item: GateChecklistItem = {
+      id: `${gateId}-C${seq}`,
+      gateId,
+      seq,
+      content,
+      ownerRole: payload.ownerRole ?? '',
+      checked: false,
+      checkedBy: null,
+      checkedAt: null,
+      source: 'custom',
+    };
+    db.gateItems.push(item);
+    audit(db, me, 'gate_item', item.id, 'create', gate.projectId, `新增检查项「${content}」`);
+    saveDb();
+    return deepClone(milestonesWithGate(db, gate.projectId));
+  }
+
+  async updateGateItem(itemId: string, payload: { content: string; ownerRole?: string }): Promise<MilestoneWithGate[]> {
+    await delay(150);
+    const db = getDb();
+    const item = db.gateItems.find((i) => i.id === itemId) ?? nf();
+    if (item.source !== 'custom') throw new ApiError(ErrorCode.E_VALIDATION, '模板检查项不可修改，仅可勾选', undefined, 400);
+    const gate = db.gates.find((g) => g.id === item.gateId) ?? nf();
+    assertWritable(db, gate.projectId);
+    const me = assertCan(db, 'milestone.edit', gate.projectId);
+    const content = payload.content !== undefined ? (payload.content ?? '').trim() : item.content;
+    if (!content) throw new ApiError(ErrorCode.E_VALIDATION, '检查项内容不能为空', undefined, 400);
+    item.content = content;
+    if (payload.ownerRole !== undefined) item.ownerRole = payload.ownerRole;
+    audit(db, me, 'gate_item', itemId, 'update', gate.projectId, `编辑检查项「${content}」`);
+    saveDb();
+    return deepClone(milestonesWithGate(db, gate.projectId));
+  }
+
+  async deleteGateItem(itemId: string): Promise<MilestoneWithGate[]> {
+    await delay(150);
+    const db = getDb();
+    const item = db.gateItems.find((i) => i.id === itemId) ?? nf();
+    if (item.source !== 'custom') throw new ApiError(ErrorCode.E_VALIDATION, '模板检查项不可删除，仅可勾选', undefined, 400);
+    const gate = db.gates.find((g) => g.id === item.gateId) ?? nf();
+    assertWritable(db, gate.projectId);
+    const me = assertCan(db, 'milestone.edit', gate.projectId);
+    db.gateItems.splice(db.gateItems.indexOf(item), 1);
+    audit(db, me, 'gate_item', itemId, 'delete', gate.projectId, `删除检查项「${item.content}」`);
+    saveDb();
+    return deepClone(milestonesWithGate(db, gate.projectId));
+  }
+
   /**
    * @prd P0-03 提交门控结论（检查项未齐备直接拒绝）
    * 通过 / 有条件通过 → 其挂载里程碑自动达成（§4.3），无需单独的推进动作。
@@ -1070,6 +1128,19 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_GATE_ITEM_INCOMPLETE, undefined, {
         unchecked: unchecked.map((u) => ({ id: u.id, content: u.content })),
       });
+    }
+
+    /* D05：门通过（通过/有条件通过）前校验该里程碑模板交付物齐备 */
+    const PASSED = ['已通过', '有条件通过'];
+    if (PASSED.includes(payload.conclusion)) {
+      const missing = db.documents
+        .filter(
+          (d) => d.projectId === projectId && d.milestoneId === gate.milestoneId && d.templateKey && d.status === '待交付',
+        )
+        .map((d) => d.name);
+      if (missing.length) {
+        throw new ApiError(ErrorCode.E_GATE_DELIVERABLE_INCOMPLETE, undefined, { missing });
+      }
     }
 
     const before = gate.status;
@@ -3179,6 +3250,8 @@ export class MockApiClient implements ApiClient {
         status: '待交付',
         version: 1,
         baselineFlag: 0,
+        baselinedAt: "",
+        baselinedBy: "",
         uploadedBy: '',
         uploadedAt: '',
         createdAt: now,
@@ -3224,6 +3297,11 @@ export class MockApiClient implements ApiClient {
     if (templateKey) {
       const existing = db.documents.find((d) => d.projectId === projectId && d.templateKey === templateKey);
       if (existing) {
+        /* D05：已基线交付物替换必须填写变更原因 */
+        const changeNote = (payload.changeNote ?? '').trim();
+        if (existing.baselineFlag && !changeNote) {
+          throw new ApiError(ErrorCode.E_DOC_CHANGE_NOTE_REQUIRED, undefined, undefined, 400);
+        }
         existing.nodeId = nodeId || existing.nodeId;
         existing.milestoneId = milestoneId || existing.milestoneId;
         existing.name = (f && f.name) || existing.name;
@@ -3237,6 +3315,8 @@ export class MockApiClient implements ApiClient {
         existing.uploadedAt = now;
         existing.version = existing.status === '待交付' ? 1 : (existing.version || 1) + 1;
         existing.status = '已交付';
+        if (existing.baselineFlag && changeNote) existing.baselinedAt = now;
+        audit(db, me, 'document', existing.id, 'baseline_change', projectId, `替换已基线交付物「${existing.name}」（v${existing.version}）：${changeNote}`);
         saveDb();
         return deepClone(existing);
       }
@@ -3259,6 +3339,8 @@ export class MockApiClient implements ApiClient {
       status: '已交付',
       version: 1,
       baselineFlag: 0,
+      baselinedAt: "",
+      baselinedBy: "",
       uploadedBy: me.openId,
       uploadedAt: now,
       createdAt: now,
@@ -3297,6 +3379,11 @@ export class MockApiClient implements ApiClient {
     if (templateKey) {
       const existing = db.documents.find((d) => d.projectId === projectId && d.templateKey === templateKey);
       if (existing) {
+        /* D05：已基线交付物替换必须填写变更原因 */
+        const changeNote = (payload.changeNote ?? '').trim();
+        if (existing.baselineFlag && !changeNote) {
+          throw new ApiError(ErrorCode.E_DOC_CHANGE_NOTE_REQUIRED, undefined, undefined, 400);
+        }
         existing.nodeId = nodeId || existing.nodeId;
         existing.milestoneId = milestoneId || existing.milestoneId;
         existing.name = (payload.name ?? '').trim() || url;
@@ -3310,6 +3397,8 @@ export class MockApiClient implements ApiClient {
         existing.uploadedAt = now;
         existing.version = existing.status === '待交付' ? 1 : (existing.version || 1) + 1;
         existing.status = '已交付';
+        if (existing.baselineFlag && changeNote) existing.baselinedAt = now;
+        audit(db, me, 'document', existing.id, 'baseline_change', projectId, `替换已基线交付物「${existing.name}」（v${existing.version}）：${changeNote}`);
         saveDb();
         return deepClone(existing);
       }
@@ -3332,6 +3421,8 @@ export class MockApiClient implements ApiClient {
       status: '已交付',
       version: 1,
       baselineFlag: 0,
+      baselinedAt: "",
+      baselinedBy: "",
       uploadedBy: me.openId,
       uploadedAt: now,
       createdAt: now,
@@ -3349,6 +3440,26 @@ export class MockApiClient implements ApiClient {
     const idx = db.documents.findIndex((d) => d.id === id && d.projectId === projectId);
     if (idx < 0) throw new ApiError(ErrorCode.E_NOT_FOUND, '附件不存在', undefined, 404);
     const [doc] = db.documents.splice(idx, 1);
+    saveDb();
+    return deepClone(doc);
+  }
+
+  /* D05：对已交付模板项建立基线（幂等） */
+  async baselineDocument(projectId: string, docId: string): Promise<ProjectDocument> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'document.upload', projectId);
+    const doc = db.documents.find((d) => d.id === docId && d.projectId === projectId);
+    if (!doc) throw new ApiError(ErrorCode.E_NOT_FOUND, '文档不存在', undefined, 404);
+    if (!doc.templateKey) throw new ApiError(ErrorCode.E_VALIDATION, '仅模板交付物可建立基线', undefined, 400);
+    if (doc.status !== '已交付') throw new ApiError(ErrorCode.E_VALIDATION, '交付物尚未交付，不能建立基线', undefined, 400);
+    if (doc.baselineFlag) return deepClone(doc);
+    const now = nowIso();
+    doc.baselineFlag = 1;
+    doc.baselinedAt = now;
+    doc.baselinedBy = me.openId;
+    audit(db, me, 'document', docId, 'baseline', projectId, `对交付物「${doc.name}」建立基线（v${doc.version}）`);
     saveDb();
     return deepClone(doc);
   }

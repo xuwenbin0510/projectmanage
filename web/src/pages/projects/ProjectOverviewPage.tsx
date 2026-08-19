@@ -23,6 +23,11 @@ import {
 } from '@mui/material';
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import IconButton from '@mui/material/IconButton';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
 
@@ -39,7 +44,7 @@ import {
 } from '@/components/common';
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
-import { useAsync, useToast } from '@/hooks';
+import { useAsync, usePermission, useToast } from '@/hooks';
 import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectStatus } from '@/types/project';
 import {
   GATE_CONCLUSIONS,
@@ -75,6 +80,7 @@ export function ProjectOverviewPage(): JSX.Element {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
+  const { can } = usePermission();
 
   const project = useProjectStore((s) => s.current);
   const members = useProjectStore((s) => s.members);
@@ -103,6 +109,8 @@ export function ProjectOverviewPage(): JSX.Element {
 
   /** D04.2 反查：文档统计（总数/待交付/已交付） */
   const [docStats, setDocStats] = useState<{ total: number; pending: number; done: number } | null>(null);
+  /** D05：按里程碑的交付物进度（门 UI 展示） */
+  const [msDocStats, setMsDocStats] = useState<Record<string, { total: number; done: number }>>({});
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
@@ -115,6 +123,15 @@ export function ProjectOverviewPage(): JSX.Element {
           pending: list.filter((d) => d.status === '待交付').length,
           done: list.filter((d) => d.status !== '待交付').length,
         });
+        const byMs: Record<string, { total: number; done: number }> = {};
+        list.forEach((d) => {
+          if (!d.milestoneId) return;
+          const cur = byMs[d.milestoneId] ?? { total: 0, done: 0 };
+          cur.total += 1;
+          if (d.status === '已交付') cur.done += 1;
+          byMs[d.milestoneId] = cur;
+        });
+        setMsDocStats(byMs);
       } catch {
         // 文档统计失败不影响概览
       }
@@ -123,6 +140,51 @@ export function ProjectOverviewPage(): JSX.Element {
       cancelled = true;
     };
   }, [id]);
+
+  /* D05 检查项管理（milestone:edit；custom 可增/改/删） */
+  const [itemFormOpen, setItemFormOpen] = useState(false);
+  const [itemForm, setItemForm] = useState<{ gateId: string; itemId: string; content: string; ownerRole: string }>({
+    gateId: '',
+    itemId: '',
+    content: '',
+    ownerRole: '',
+  });
+  const openAddItem = (gateId: string): void => {
+    setItemForm({ gateId, itemId: '', content: '', ownerRole: '' });
+    setItemFormOpen(true);
+  };
+  const openEditItem = (item: GateChecklistItem): void => {
+    setItemForm({ gateId: item.gateId, itemId: item.id, content: item.content, ownerRole: item.ownerRole });
+    setItemFormOpen(true);
+  };
+  const submitItemForm = async (): Promise<void> => {
+    if (!itemForm.content.trim()) {
+      toast.error('请填写检查项内容');
+      return;
+    }
+    try {
+      if (itemForm.itemId) {
+        await api.updateGateItem(itemForm.itemId, { content: itemForm.content.trim(), ownerRole: itemForm.ownerRole.trim() });
+        toast.success('检查项已更新');
+      } else {
+        await api.addGateItem(itemForm.gateId, { content: itemForm.content.trim(), ownerRole: itemForm.ownerRole.trim() });
+        toast.success('检查项已添加');
+      }
+      setItemFormOpen(false);
+      await refreshProject(id);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  const handleDeleteItem = async (item: GateChecklistItem): Promise<void> => {
+    try {
+      await api.deleteGateItem(item.id);
+      toast.success('检查项已删除');
+      await refreshProject(id);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
 
   const activeMs: MilestoneWithGate | undefined = useMemo(
     () => milestones.find((m) => m.id === activeMsId),
@@ -133,6 +195,7 @@ export function ProjectOverviewPage(): JSX.Element {
   const uncheckedCount = (activeMs?.gateItems ?? []).filter((i) => !i.checked).length;
   const allowedTransitions: ProjectStatus[] = project ? PROJECT_TRANSITIONS[project.status] ?? [] : [];
   const archived = project?.status === '已结项' || project?.status === '已终止';
+  const canEditGate = can('milestone:edit') && !archived;
 
   if (!project) return <EmptyState title="项目不存在" description="请返回项目列表重新选择" />;
 
@@ -341,17 +404,65 @@ export function ProjectOverviewPage(): JSX.Element {
             />
           ) : (
             <>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5, flexWrap: 'wrap', rowGap: 0.5 }}>
                 <StatusChip status={activeMs.gate.status} />
                 <Typography variant="caption" color="text.secondary">
                   {activeMs.gateItems.filter((i) => i.checked).length} / {activeMs.gateItems.length} 项已确认
                   {activeMs.gate.decidedAt ? ` · 决议于 ${fmtDate(activeMs.gate.decidedAt)}` : ''}
                 </Typography>
+                {/* D05：门→里程碑交付物进度（点击跳文档页筛选该里程碑） */}
+                {(() => {
+                  const s = msDocStats[activeMs.id];
+                  if (!s || s.total === 0) return null;
+                  return (
+                    <Box
+                      component="button"
+                      type="button"
+                      onClick={() => navigate(`${ROUTES.projectDocuments(id)}?milestone=${activeMs.id}`)}
+                      title="查看该里程碑的交付物清单"
+                      sx={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 0.5,
+                        font: 'inherit',
+                        cursor: 'pointer',
+                        bgcolor: 'transparent',
+                        border: 'none',
+                        p: 0,
+                        borderRadius: 1,
+                        color: s.done === s.total ? 'success.main' : 'warning.main',
+                        textAlign: 'left',
+                        '&:hover': { textDecoration: 'underline' },
+                      }}
+                    >
+                      <DescriptionOutlinedIcon sx={{ fontSize: 14 }} />
+                      <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                        交付物 {s.done}/{s.total} 已交付
+                      </Typography>
+                    </Box>
+                  );
+                })()}
               </Stack>
 
               <List dense disablePadding>
                 {activeMs.gateItems.map((item) => (
-                  <ListItem key={item.id} disableGutters sx={{ alignItems: 'flex-start' }}>
+                  <ListItem
+                    key={item.id}
+                    disableGutters
+                    sx={{ alignItems: 'flex-start' }}
+                    secondaryAction={
+                      item.source === 'custom' && canEditGate ? (
+                        <Stack direction="row" spacing={0}>
+                          <IconButton size="small" onClick={() => openEditItem(item)} aria-label="编辑检查项">
+                            <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                          <IconButton size="small" color="error" onClick={() => void handleDeleteItem(item)} aria-label="删除检查项">
+                            <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </Stack>
+                      ) : undefined
+                    }
+                  >
                     <ListItemIcon sx={{ minWidth: 34, mt: 0.25 }}>
                       <Checkbox
                         size="small"
@@ -367,6 +478,7 @@ export function ProjectOverviewPage(): JSX.Element {
                             fontSize: 14,
                             color: item.checked ? 'text.secondary' : 'text.primary',
                             textDecoration: item.checked ? 'line-through' : 'none',
+                            pr: item.source === 'custom' && canEditGate ? 4 : 0,
                           }}
                         >
                           {item.seq}. {item.content}
@@ -382,6 +494,13 @@ export function ProjectOverviewPage(): JSX.Element {
                     />
                   </ListItem>
                 ))}
+                {canEditGate && activeMs.gate && (
+                  <ListItem disableGutters>
+                    <Button size="small" variant="text" startIcon={<AddIcon />} onClick={() => openAddItem(activeMs.gate!.id)}>
+                      添加检查项
+                    </Button>
+                  </ListItem>
+                )}
               </List>
 
               {activeMs.gate.comment && (
@@ -552,6 +671,35 @@ export function ProjectOverviewPage(): JSX.Element {
         <Divider />
         <Typography variant="caption" color="text.secondary">
           通过 / 有条件通过后，系统会自动将该里程碑标记为已达成，同时写入审计日志。
+        </Typography>
+      </FormDialog>
+
+      {/* D05：检查项新增/编辑表单（custom） */}
+      <FormDialog
+        open={itemFormOpen}
+        title={itemForm.itemId ? '编辑检查项' : '添加检查项'}
+        submitText="保存"
+        onClose={() => setItemFormOpen(false)}
+        onSubmit={() => void submitItemForm()}
+      >
+        <TextField
+          label="检查项内容"
+          value={itemForm.content}
+          onChange={(e) => setItemForm((f) => ({ ...f, content: e.target.value }))}
+          fullWidth
+          multiline
+          minRows={2}
+          placeholder="例如：接口文档(ICD)已冻结"
+        />
+        <TextField
+          label="责任角色"
+          value={itemForm.ownerRole}
+          onChange={(e) => setItemForm((f) => ({ ...f, ownerRole: e.target.value }))}
+          fullWidth
+          placeholder="如 qa / tl / pm / cm / pmo"
+        />
+        <Typography variant="caption" color="text.secondary">
+          项目自定义检查项（可编辑/删除）；模板检查项保持只读。
         </Typography>
       </FormDialog>
 

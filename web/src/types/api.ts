@@ -29,6 +29,9 @@ export const ErrorCode = {
   E_ROLE_CARDINALITY: 'E_ROLE_CARDINALITY',
   E_GATE_NOT_PASSED: 'E_GATE_NOT_PASSED',
   E_GATE_ITEM_INCOMPLETE: 'E_GATE_ITEM_INCOMPLETE',
+  /* D05：门通过时交付物未齐备 / 基线项变更缺原因 */
+  E_GATE_DELIVERABLE_INCOMPLETE: 'E_GATE_DELIVERABLE_INCOMPLETE',
+  E_DOC_CHANGE_NOTE_REQUIRED: 'E_DOC_CHANGE_NOTE_REQUIRED',
   E_MS_NEED_CHANGE: 'E_MS_NEED_CHANGE',
   /** 模板必备里程碑锁删（Q-2 / C-G5） */
   E_MS_REQUIRED_LOCKED: 'E_MS_REQUIRED_LOCKED',
@@ -78,6 +81,8 @@ export const ERROR_MESSAGE_ZH: Record<string, string> = {
   E_ROLE_CARDINALITY: '每个项目 PM / TL 有且仅有 1 人',
   E_GATE_NOT_PASSED: '质量门未通过，里程碑不能标记达成',
   E_GATE_ITEM_INCOMPLETE: '存在未确认的检查项，不能提交门控结论',
+  E_GATE_DELIVERABLE_INCOMPLETE: '该里程碑尚有未交付的模板交付物，不能通过质量门',
+  E_DOC_CHANGE_NOTE_REQUIRED: '替换已纳入基线的交付物必须填写变更原因',
   E_MS_NEED_CHANGE: '里程碑日期延后须走变更申请',
   E_MS_REQUIRED_LOCKED: '模板必备里程碑不可删除，仅可改期',
   E_WBS_LEAF_INCOMPLETE: '子任务必须填写负责人与工时估算',

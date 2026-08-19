@@ -64,7 +64,36 @@ router.patch(
   }),
 );
 
-/** 质量门决议（通过 / 有条件通过 → 自动达成里程碑） */
+/* D05 检查项管理（milestone:edit；custom 可改删，template 只读） */
+
+/** 新增 custom 检查项 */
+router.post(
+  '/gates/:gateId/items',
+  requireAuth,
+  asyncHandler(async function addGateItem(req, res) {
+    res.json(ok(gateService.addGateItem(db, req, req.params.gateId, req.body || {}), '检查项已添加'));
+  }),
+);
+
+/** 编辑 custom 检查项（内容 / 负责人） */
+router.patch(
+  '/gate-items/:itemId/update',
+  requireAuth,
+  asyncHandler(async function updateGateItem(req, res) {
+    res.json(ok(gateService.updateGateItem(db, req, req.params.itemId, req.body || {}), '检查项已更新'));
+  }),
+);
+
+/** 删除 custom 检查项 */
+router.delete(
+  '/gate-items/:itemId',
+  requireAuth,
+  asyncHandler(async function deleteGateItem(req, res) {
+    res.json(ok(gateService.deleteGateItem(db, req, req.params.itemId), '检查项已删除'));
+  }),
+);
+
+/** 质量门决议（通过 / 有条件通过 → 自动达成里程碑；D05 起校验交付物齐备） */
 router.post(
   '/projects/:projectId/gates/:gateId/decide',
   requireAuth,

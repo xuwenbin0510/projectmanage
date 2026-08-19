@@ -9,7 +9,8 @@ export type AuditEntityType =
   | 'report'
   | 'review'
   | 'change'
-  | 'user';
+  | 'user'
+  | 'document';
 
 export type AuditAction =
   | 'create'
@@ -19,7 +20,10 @@ export type AuditAction =
   | 'decide'
   | 'approve'
   | 'reject'
-  | 'apply';
+  | 'apply'
+  /* D05：文档基线 */
+  | 'baseline'
+  | 'baseline_change';
 
 export interface AuditDiffEntry {
   field: string;
@@ -95,6 +99,10 @@ export interface ProjectDocument {
   version: number;
   /** D04：是否纳入基线（0/1，本期仅标记展示） */
   baselineFlag: number;
+  /** D05：建立基线时间（ISO；未基线为 ''） */
+  baselinedAt: string;
+  /** D05：建立基线操作人 open_id（未基线为 ''） */
+  baselinedBy: string;
   /** 上传人 open_id */
   uploadedBy: string;
   uploadedAt: string;
@@ -111,6 +119,8 @@ export interface UploadDocumentPayload {
   milestoneId?: string;
   /** D04：模板交付物标识（命中 → 覆盖该清单项并升版） */
   templateKey?: string;
+  /** D05：替换已基线交付物的变更原因（必填条件由服务端校验） */
+  changeNote?: string;
 }
 
 /** 关联外链文档（飞书等）的入参（D02/D04） */
@@ -125,4 +135,6 @@ export interface CreateLinkDocumentPayload {
   milestoneId?: string;
   /** D04：模板交付物标识（命中 → 覆盖该清单项并升版） */
   templateKey?: string;
+  /** D05：替换已基线交付物的变更原因（必填条件由服务端校验） */
+  changeNote?: string;
 }
