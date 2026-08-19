@@ -199,6 +199,19 @@ export class HttpApiClient implements ApiClient {
     return post<MilestoneWithGate[]>(`/projects/${projectId}/gates/${payload.gateId}/decide`, payload);
   }
 
+  /* D05 检查项管理 */
+  addGateItem(gateId: string, payload: { content: string; ownerRole?: string }): Promise<MilestoneWithGate[]> {
+    return post<MilestoneWithGate[]>(`/gates/${gateId}/items`, payload);
+  }
+
+  updateGateItem(itemId: string, payload: { content: string; ownerRole?: string }): Promise<MilestoneWithGate[]> {
+    return patch<MilestoneWithGate[]>(`/gate-items/${itemId}/update`, payload);
+  }
+
+  deleteGateItem(itemId: string): Promise<MilestoneWithGate[]> {
+    return del<MilestoneWithGate[]>(`/gate-items/${itemId}`);
+  }
+
   /* 里程碑 */
   listMilestones(projectId: string): Promise<MilestoneWithGate[]> {
     return get<MilestoneWithGate[]>(`/projects/${projectId}/milestones`);
@@ -466,6 +479,11 @@ export class HttpApiClient implements ApiClient {
 
   async deleteDocument(projectId: string, id: string): Promise<ProjectDocument> {
     return del<ProjectDocument>(`/projects/${projectId}/documents/${id}`);
+  }
+
+  /** D05：对已交付模板项建立基线 */
+  baselineDocument(projectId: string, docId: string): Promise<ProjectDocument> {
+    return post<ProjectDocument>(`/projects/${projectId}/documents/${docId}/baseline`, {});
   }
 
   /** 取附件二进制流（服务端按 Content-Type 返回，便于预览/下载） */

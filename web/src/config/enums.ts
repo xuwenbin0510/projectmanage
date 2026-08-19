@@ -348,6 +348,8 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   approve: '审批通过',
   reject: '审批否决',
   apply: '变更应用',
+  baseline: '建立基线',
+  baseline_change: '基线变更',
 };
 
 export const AUDIT_ENTITY_LABEL: Record<AuditEntityType, string> = {
@@ -360,6 +362,7 @@ export const AUDIT_ENTITY_LABEL: Record<AuditEntityType, string> = {
   review: '评审',
   change: '变更',
   user: '用户',
+  document: '文档',
 };
 
 /* ── 周报 ─────────────────────────────────────────── */

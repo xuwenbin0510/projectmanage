@@ -85,6 +85,7 @@ router.post(
         nodeId: body.nodeId || '',
         milestoneId: body.milestoneId || '',
         templateKey: body.templateKey || '',
+        changeNote: body.changeNote || '',
         me: req.user,
       });
       return res.json(ok(doc, '上传成功'));
@@ -98,6 +99,7 @@ router.post(
         nodeId: body.nodeId,
         milestoneId: body.milestoneId,
         templateKey: body.templateKey,
+        changeNote: body.changeNote,
         me: req.user,
         title: title,
       });
@@ -105,6 +107,18 @@ router.post(
     }
 
     throw new AppError(ErrorCode.E_VALIDATION, '请提供文件或链接');
+  }),
+);
+
+/** D05：对已交付模板项建立基线（document:upload 权限，幂等） */
+router.post(
+  '/projects/:projectId/documents/:docId/baseline',
+  requireAuth,
+  asyncHandler(async function baselineDocument(req, res) {
+    const projectId = req.params.projectId;
+    rbac.assertWritable(db, projectId);
+    rbac.assertCan(db, req, 'document:upload', projectId);
+    res.json(ok(documentSvc.baselineDocument(db, req, projectId, req.params.docId), '已建立基线'));
   }),
 );
 

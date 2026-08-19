@@ -42,6 +42,9 @@ const ErrorCode = {
   E_CHANGE_ROUTE: 'E_CHANGE_ROUTE',
   E_PROJECT_ARCHIVED: 'E_PROJECT_ARCHIVED',
   E_CLOSE_BLOCKED: 'E_CLOSE_BLOCKED',
+  /* D05：门通过时交付物未齐备 / 基线项变更缺原因 */
+  E_GATE_DELIVERABLE_INCOMPLETE: 'E_GATE_DELIVERABLE_INCOMPLETE',
+  E_DOC_CHANGE_NOTE_REQUIRED: 'E_DOC_CHANGE_NOTE_REQUIRED',
   E_NETWORK: 'E_NETWORK',
 
   /* ── 后端专有（前端 ERROR_MESSAGE_ZH 无对应项，靠 message 兜底展示） ── */
@@ -96,6 +99,9 @@ const CODE_HTTP = {
   [ErrorCode.E_PROJECT_ARCHIVED]: 403,
   [ErrorCode.E_CLOSE_BLOCKED]: 409,
 
+  [ErrorCode.E_GATE_DELIVERABLE_INCOMPLETE]: 409,
+  [ErrorCode.E_DOC_CHANGE_NOTE_REQUIRED]: 400,
+
   [ErrorCode.E_NOT_IMPLEMENTED]: 501,
   [ErrorCode.E_INTERNAL]: 500,
 
@@ -140,6 +146,8 @@ const ERROR_MESSAGE_ZH = {
   E_CHANGE_ROUTE: '变更审批路径不匹配',
   E_PROJECT_ARCHIVED: '项目已结项，处于只读归档状态',
   E_CLOSE_BLOCKED: '结项被阻塞，请先处理阻塞项',
+  E_GATE_DELIVERABLE_INCOMPLETE: '该里程碑尚有未交付的模板交付物，不能通过质量门',
+  E_DOC_CHANGE_NOTE_REQUIRED: '替换已纳入基线的交付物必须填写变更原因',
   E_NETWORK: '网络异常，请稍后重试',
   E_NOT_IMPLEMENTED: '该功能尚未上线',
   E_INTERNAL: '服务器内部错误',

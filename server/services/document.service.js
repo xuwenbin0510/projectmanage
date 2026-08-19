@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const cfg = require('../../config');
 const { AppError, ErrorCode } = require('../lib/errors');
+const { writeAudit } = require('../lib/audit');
 
 /**
  * 任务附件 / 文档模块（C01/D02/D04）服务层。
@@ -51,6 +52,8 @@ function mapRow(r) {
     status: r.status || '已交付',
     version: r.version || 1,
     baselineFlag: r.baseline_flag ? 1 : 0,
+    baselinedAt: r.baselined_at || '',
+    baselinedBy: r.baselined_by || '',
     uploadedBy: r.uploaded_by || '',
     uploadedAt: r.uploaded_at,
     createdAt: r.created_at,
@@ -210,6 +213,11 @@ function uploadDocument(db, projectId, payload) {
       .prepare('SELECT * FROM project_documents WHERE project_id = ? AND template_key = ?')
       .get(projectId, templateKey);
     if (existing) {
+      /* D05：已基线交付物替换必须填写变更原因（写审计留痕，baseline_flag 保留、baselined_at 更新） */
+      const changeNote = String((payload && payload.changeNote) || '').trim();
+      if (existing.baseline_flag && !changeNote) {
+        throw new AppError(ErrorCode.E_DOC_CHANGE_NOTE_REQUIRED);
+      }
       try {
         if (existing.storage_path && fs.existsSync(path.join(root(), existing.storage_path))) {
           fs.unlinkSync(path.join(root(), existing.storage_path));
@@ -227,7 +235,7 @@ function uploadDocument(db, projectId, payload) {
           node_id = @nodeId, milestone_id = @milestoneId, name = @name, file_name = @fileName,
           file_size = @fileSize, mime_type = @mimeType, storage_path = @storagePath,
           doc_type = 'file', url = '', uploaded_by = @uploadedBy, uploaded_at = @uploadedAt,
-          status = '已交付', version = @version
+          status = '已交付', version = @version${existing.baseline_flag ? ', baselined_at = @baselinedAt' : ''}
          WHERE id = @id`,
       ).run({
         id: existing.id,
@@ -241,7 +249,15 @@ function uploadDocument(db, projectId, payload) {
         uploadedBy: (payload.me && payload.me.open_id) || '',
         uploadedAt: now,
         version: nextVersion,
+        baselinedAt: now,
       });
+      if (existing.baseline_flag && changeNote) {
+        writeAudit(
+          db, payload.me, 'document', existing.id, 'baseline_change', projectId,
+          '替换已基线交付物「' + existing.name + '」：v' + (Number(existing.version) || 1) + ' → v' + nextVersion + '（' + changeNote + '）',
+          [{ field: 'version', label: '版本', before: 'v' + (Number(existing.version) || 1), after: 'v' + nextVersion }],
+        );
+      }
       return getDocument(db, existing.id);
     }
   }
@@ -286,6 +302,46 @@ function deleteDocument(db, id) {
 }
 
 /**
+ * 对已交付模板项建立基线（D05 · 幂等：已基线直接返回）。
+ *
+ * - 仅 `template_key != ''` 且 `status = '已交付'` 的记录可建基线；
+ * - baseline_flag=1 + baselined_at/by（操作人）；
+ * - 写审计（action='baseline'）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} req express req（用于取操作人）
+ * @param {string} projectId
+ * @param {string} docId
+ * @returns {object} ProjectDocument
+ * @throws {AppError} E_NOT_FOUND / E_VALIDATION
+ */
+function baselineDocument(db, req, projectId, docId) {
+  const doc = getDocument(db, docId);
+  if (doc.projectId !== String(projectId)) {
+    throw new AppError(ErrorCode.E_NOT_FOUND, '文档不存在', { docId: String(docId) });
+  }
+  if (!doc.templateKey) {
+    throw new AppError(ErrorCode.E_VALIDATION, '仅模板交付物可建立基线');
+  }
+  if (doc.status !== '已交付') {
+    throw new AppError(ErrorCode.E_VALIDATION, '交付物尚未交付，不能建立基线');
+  }
+  if (doc.baselineFlag) return doc;
+
+  const me = req.user || {};
+  const now = new Date().toISOString();
+  const openId = me.open_id !== undefined ? me.open_id : me.openId;
+  db.prepare('UPDATE project_documents SET baseline_flag = 1, baselined_at = ?, baselined_by = ? WHERE id = ?')
+    .run(now, String(openId || ''), String(docId));
+  writeAudit(
+    db, me, 'document', String(docId), 'baseline', String(projectId),
+    '对交付物「' + doc.name + '」建立基线（v' + (doc.version || 1) + '）',
+    [{ field: 'baseline_flag', label: '基线', before: '未纳入', after: '已纳入' }],
+  );
+  return getDocument(db, docId);
+}
+
+/**
  * 创建外链文档记录（D02 · 飞书文档关联）。
  *
  * - `url` 必须为 http(s) 链接（飞书/外链均可），存 url 列，doc_type='link'，storage_path=''；
@@ -319,6 +375,11 @@ function createLinkDocument(db, projectId, payload) {
       .prepare('SELECT * FROM project_documents WHERE project_id = ? AND template_key = ?')
       .get(projectId, templateKey);
     if (existing) {
+      /* D05：已基线交付物替换必须填写变更原因 */
+      const changeNote = String((payload && payload.changeNote) || '').trim();
+      if (existing.baseline_flag && !changeNote) {
+        throw new AppError(ErrorCode.E_DOC_CHANGE_NOTE_REQUIRED);
+      }
       const keepNode = nodeId || existing.node_id || '';
       const keepMs = milestoneId || existing.milestone_id || '';
       const nextVersion = existing.status === '待交付' ? 1 : (Number(existing.version) || 1) + 1;
@@ -327,7 +388,7 @@ function createLinkDocument(db, projectId, payload) {
           node_id = @nodeId, milestone_id = @milestoneId, name = @name, file_name = '',
           file_size = 0, mime_type = '', storage_path = '',
           doc_type = 'link', url = @url, uploaded_by = @uploadedBy, uploaded_at = @uploadedAt,
-          status = '已交付', version = @version
+          status = '已交付', version = @version${existing.baseline_flag ? ', baselined_at = @baselinedAt' : ''}
          WHERE id = @id`,
       ).run({
         id: existing.id,
@@ -338,7 +399,15 @@ function createLinkDocument(db, projectId, payload) {
         uploadedBy: (payload.me && payload.me.open_id) || '',
         uploadedAt: now,
         version: nextVersion,
+        baselinedAt: now,
       });
+      if (existing.baseline_flag && changeNote) {
+        writeAudit(
+          db, payload.me, 'document', existing.id, 'baseline_change', projectId,
+          '替换已基线交付物「' + existing.name + '」：v' + (Number(existing.version) || 1) + ' → v' + nextVersion + '（' + changeNote + '）',
+          [{ field: 'version', label: '版本', before: 'v' + (Number(existing.version) || 1), after: 'v' + nextVersion }],
+        );
+      }
       return getDocument(db, existing.id);
     }
   }
@@ -373,6 +442,7 @@ module.exports = {
   uploadDocument,
   createLinkDocument,
   deleteDocument,
+  baselineDocument,
   deriveTemplateDocs,
   ensureTemplateDerived,
 };

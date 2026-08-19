@@ -250,6 +250,10 @@ export interface ApiClient {
   /* 质量门 P0-05 P0-06（挂在里程碑上 · 决策 D-A） */
   toggleGateItem(itemId: string, checked: boolean): Promise<MilestoneWithGate[]>;
   decideGate(projectId: string, payload: GateDecisionPayload): Promise<MilestoneWithGate[]>;
+  /** D05：检查项管理（milestone:edit；custom 可改删，template 只读） */
+  addGateItem(gateId: string, payload: { content: string; ownerRole?: string }): Promise<MilestoneWithGate[]>;
+  updateGateItem(itemId: string, payload: { content: string; ownerRole?: string }): Promise<MilestoneWithGate[]>;
+  deleteGateItem(itemId: string): Promise<MilestoneWithGate[]>;
 
   /* 里程碑 P0-07（唯一时间轴：一次带出门 + 检查项 + 关联任务统计） */
   listMilestones(projectId: string): Promise<MilestoneWithGate[]>;
@@ -343,6 +347,8 @@ export interface ApiClient {
   /** D02：关联飞书/外链文档（粘贴链接，服务端自动抓标题） */
   createLinkDocument(projectId: string, payload: CreateLinkDocumentPayload): Promise<ProjectDocument>;
   deleteDocument(projectId: string, id: string): Promise<ProjectDocument>;
+  /** D05：对已交付模板项建立基线（幂等） */
+  baselineDocument(projectId: string, docId: string): Promise<ProjectDocument>;
   /** 取附件文件流（http 走真实端点，mock 合成占位文件）；asDownload 控制下载/预览 */
   downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob>;
 }

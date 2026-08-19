@@ -1074,6 +1074,30 @@ function migrationV11(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v11 project_documents 加 template_key/status/version/baseline_flag（D04 模板派生）');
 }
 
+/* ── 迁移 v12：交付物基线时间/操作人（D05） ── */
+
+/**
+ * v12 = `project_documents` 加基线建立时间与操作人（配合 baseline_flag）。
+ *
+ * D05 起已交付模板项可「建立基线」（baseline_flag=1 + baselined_at/by）；
+ * 替换已基线项时强制填写变更原因并写审计（baseline_flag 保留，baselined_at 更新）。
+ *
+ * 幂等：`hasColumn` 守卫。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ * @returns {void}
+ */
+function migrationV12(db, now) { // eslint-disable-line no-unused-vars
+  if (!hasColumn(db, 'project_documents', 'baselined_at')) {
+    db.exec('ALTER TABLE project_documents ADD COLUMN baselined_at TEXT');
+  }
+  if (!hasColumn(db, 'project_documents', 'baselined_by')) {
+    db.exec('ALTER TABLE project_documents ADD COLUMN baselined_by TEXT');
+  }
+  console.log('[migrations] v12 project_documents 加 baselined_at/baselined_by（D05 基线）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1092,6 +1116,7 @@ const MIGRATIONS = [
   { version: 9, name: 'connect-v9-doc-link', up: migrationV9 },
   { version: 10, name: 'connect-v10-progress-snapshots', up: migrationV10 },
   { version: 11, name: 'connect-v11-template-docs', up: migrationV11 },
+  { version: 12, name: 'connect-v12-doc-baseline', up: migrationV12 },
 ];
 
 /**
