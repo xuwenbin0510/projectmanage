@@ -19,6 +19,7 @@ const mappers = require('../lib/mappers');
 const enums = require('../config/enums');
 const classifyService = require('./classify.service');
 const milestoneService = require('./milestone.service');
+const documentService = require('./document.service');
 
 /** 无 PM 时列表页展示的占位（与前端 Mock `toListItem` 一致） */
 const NO_PM_PLACEHOLDER = '—';
@@ -658,6 +659,13 @@ function createProject(db, payload, me) {
   });
 
   tx();
+
+  /* D04：按模板派生「待交付物清单」（事务外 + try/catch：派生失败不阻塞建项，列表懒派生兜底） */
+  try {
+    documentService.deriveTemplateDocs(db, projectId, tplRow);
+  } catch (e) {
+    // 忽略：文档列表接口的懒派生会重试
+  }
 
   /* 落库后统一重排 code（向导可能改过日期 / 加过碑，模板 code 顺序已失效 · P0-M1） */
   listMilestones(db, projectId);

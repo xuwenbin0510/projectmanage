@@ -18,6 +18,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { useNavigate, useParams } from 'react-router-dom';
 
@@ -88,6 +89,8 @@ export function MilestonesPage(): JSX.Element {
   const [drill, setDrill] = useState<{ ms: MilestoneWithGate; detail: MilestoneTaskDetail } | null>(null);
   /** 编辑：名称 / 目标 / 计划日期 资料编辑（P0-M6） */
   const [edit, setEdit] = useState<EditState | null>(null);
+  /** D04.2 反查：里程碑关联文档计数（按 milestoneId 分组） */
+  const [docCountByMs, setDocCountByMs] = useState<Record<string, number>>({});
 
   const archived = project?.status === '已结项' || project?.status === '已终止';
   const editable = can('milestone:edit') && !archived;
@@ -96,6 +99,28 @@ export function MilestonesPage(): JSX.Element {
   useEffect(() => {
     if (id) void refreshMilestones(id);
   }, [id, refreshMilestones]);
+
+  /* D04.2 反查：拉取项目全部文档，按 milestoneId 统计（跳转文档页 ?milestone= 反查） */
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await api.listDocuments(id);
+        if (cancelled) return;
+        const m: Record<string, number> = {};
+        list.forEach((d) => {
+          if (d.milestoneId) m[d.milestoneId] = (m[d.milestoneId] ?? 0) + 1;
+        });
+        setDocCountByMs(m);
+      } catch {
+        // 文档计数失败不影响里程碑页
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   /* ── 改期 ─────────────────────────────────────────
    * 显式提交：先在对话框里选好日期，点「提交改期」才打接口，
@@ -515,6 +540,41 @@ export function MilestonesPage(): JSX.Element {
             )}
           </Box>
         ),
+    },
+    {
+      /* D04.2 反查：里程碑关联文档入口（跳文档页并筛选该里程碑） */
+      key: 'docs',
+      label: '文档',
+      width: 90,
+      render: (m) => {
+        const n = docCountByMs[m.id] ?? 0;
+        return (
+          <Box
+            component="button"
+            type="button"
+            onClick={() => navigate(`${ROUTES.projectDocuments(id)}?milestone=${m.id}`)}
+            title="查看该里程碑关联的文档"
+            sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 0.5,
+              font: 'inherit',
+              cursor: 'pointer',
+              bgcolor: 'transparent',
+              border: 'none',
+              p: 0.25,
+              borderRadius: 1,
+              color: n ? 'primary.main' : 'text.disabled',
+              '&:hover': { bgcolor: alphaOf(tokens.brand.primary, 0.08) },
+            }}
+          >
+            <DescriptionOutlinedIcon sx={{ fontSize: 15 }} />
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+              {n}
+            </Typography>
+          </Box>
+        );
+      },
     },
     {
       key: 'actions',

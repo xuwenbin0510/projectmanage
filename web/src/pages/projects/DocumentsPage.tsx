@@ -30,17 +30,15 @@ import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 
 import {
-  DataTable,
-  PageHeader,
-  SectionCard,
   EmptyState,
   LoadingState,
+  PageHeader,
+  SectionCard,
 } from '@/components/common';
-import type { Column } from '@/components/common';
 import type { ProjectDocument } from '@/types/audit';
 import type { WbsNode } from '@/types/wbs';
 import type { MilestoneWithGate, User } from '@/types/project';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
 import { useAuthStore } from '@/stores/authStore';
@@ -96,7 +94,15 @@ export function DocumentsPage(): JSX.Element {
   const [wbsNodes, setWbsNodes] = useState<WbsNode[]>([]);
   const [milestones, setMilestones] = useState<MilestoneWithGate[]>([]);
   const [usersMap, setUsersMap] = useState<Record<string, string>>({});
-  const [filter, setFilter] = useState<DocFilter>({ kind: 'all', id: '' });
+  /* D04.2 反查：URL ?milestone=<id> / ?node=<id> 初始化筛选（里程碑页/WBS 页跳转进入） */
+  const [searchParams] = useSearchParams();
+  const [filter, setFilter] = useState<DocFilter>(() => {
+    const ms = searchParams.get('milestone');
+    if (ms) return { kind: 'milestone', id: ms };
+    const nd = searchParams.get('node');
+    if (nd) return { kind: 'node', id: nd };
+    return { kind: 'all', id: '' };
+  });
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -107,6 +113,8 @@ export function DocumentsPage(): JSX.Element {
   const [linkMode, setLinkMode] = useState(false);
   const [linkName, setLinkName] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
+  /* D04：模板项交付（非空时提交走覆盖升版） */
+  const [uploadTemplateKey, setUploadTemplateKey] = useState('');
 
   const nodeMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -168,6 +176,19 @@ export function DocumentsPage(): JSX.Element {
     setLinkMode(false);
     setLinkName('');
     setLinkUrl('');
+    setUploadTemplateKey('');
+    setUploadOpen(true);
+  };
+
+  /** D04：模板清单项「交付/替换」——打开对话框并携带 templateKey（提交时覆盖升版） */
+  const openDeliver = (d: ProjectDocument) => {
+    setUploadFile(null);
+    setUploadKind('none' as FilterKind);
+    setUploadTarget('');
+    setLinkMode(false);
+    setLinkName('');
+    setLinkUrl('');
+    setUploadTemplateKey(d.templateKey);
     setUploadOpen(true);
   };
 
@@ -184,8 +205,9 @@ export function DocumentsPage(): JSX.Element {
           name: linkName.trim() || undefined,
           nodeId: uploadKind === 'node' ? uploadTarget : '',
           milestoneId: uploadKind === 'milestone' ? uploadTarget : '',
+          templateKey: uploadTemplateKey || undefined,
         });
-        toast.success('已关联文档');
+        toast.success(uploadTemplateKey ? '已交付' : '已关联文档');
       } else {
         if (!uploadFile) {
           toast.error('请先选择文件');
@@ -195,8 +217,9 @@ export function DocumentsPage(): JSX.Element {
           file: uploadFile,
           nodeId: uploadKind === 'node' ? uploadTarget : '',
           milestoneId: uploadKind === 'milestone' ? uploadTarget : '',
+          templateKey: uploadTemplateKey || undefined,
         });
-        toast.success('上传成功');
+        toast.success(uploadTemplateKey ? '已交付' : '上传成功');
       }
       setUploadOpen(false);
       const opts =
@@ -253,119 +276,154 @@ export function DocumentsPage(): JSX.Element {
     }
   };
 
-  const columns: Array<Column<ProjectDocument>> = [
-    {
-      key: 'name',
-      label: '文档',
-      render: (d) => (
+  /* D04：单行渲染（模板交付物 / 手动记录统一卡片行） */
+  const renderRow = (d: ProjectDocument): JSX.Element => {
+    const isTpl = !!d.templateKey;
+    const isLink = d.docType === 'link';
+    const pending = isTpl && d.status === '待交付';
+    /* 已交付可查看（手动记录恒已交付）：link→打开，file→预览/下载 */
+    const delivered = d.status === '已交付' && (isLink || !!d.fileName);
+    return (
+      <Box
+        key={d.id}
+        sx={{
+          p: 1.25,
+          borderRadius: 1.5,
+          border: '1px solid',
+          borderColor: pending ? 'warning.main' : 'divider',
+          bgcolor: pending ? 'action.hover' : 'transparent',
+        }}
+      >
         <Stack direction="row" spacing={1} alignItems="center">
-          <Box sx={{ color: 'text.secondary', display: 'flex' }}>{iconFor(d)}</Box>
-          <Box>
-            {d.docType === 'link' ? (
-              /* D02.1：链接记录的名称与 URL 均可点击，新标签页快速跳转飞书 */
-              <Box
-                onClick={() => window.open(d.url, '_blank', 'noopener')}
-                role="link"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') window.open(d.url, '_blank', 'noopener');
-                }}
-                sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}
-              >
+          <Box sx={{ color: 'text.secondary', display: 'flex', flexShrink: 0 }}>{iconFor(d)}</Box>
+          <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
+            <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+              {isLink ? (
+                /* D03.1：链接记录名称可点击，新标签页快速跳转飞书 */
+                <Box
+                  onClick={() => window.open(d.url, '_blank', 'noopener')}
+                  role="link"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') window.open(d.url, '_blank', 'noopener');
+                  }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}
+                >
+                  <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{d.name}</Typography>
+                  <OpenInNewOutlinedIcon sx={{ fontSize: 13 }} />
+                </Box>
+              ) : (
                 <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{d.name}</Typography>
-                <OpenInNewOutlinedIcon sx={{ fontSize: 13 }} />
-              </Box>
-            ) : (
-              <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{d.name}</Typography>
-            )}
+              )}
+              {isTpl &&
+                (pending ? (
+                  <Chip size="small" label="待交付" sx={{ height: 18, fontSize: 11, bgcolor: 'warning.main', color: '#fff' }} />
+                ) : (
+                  <Chip size="small" label={`已交付 · v${d.version}`} sx={{ height: 18, fontSize: 11, bgcolor: 'primary.main', color: '#fff' }} />
+                ))}
+              {isTpl && <Chip size="small" label="模板" variant="outlined" sx={{ height: 18, fontSize: 11 }} />}
+              {d.baselineFlag === 1 && (
+                <Chip size="small" label="基线" variant="outlined" sx={{ height: 18, fontSize: 11, color: 'warning.main', borderColor: 'warning.main' }} />
+              )}
+              {!isTpl && <Chip size="small" label={associationLabel(d)} variant="outlined" sx={{ height: 18, fontSize: 11 }} />}
+            </Stack>
             <Typography
               variant="caption"
-              color={d.docType === 'link' ? 'primary.main' : 'text.secondary'}
+              color={isLink ? 'primary.main' : 'text.secondary'}
               sx={{
-                maxWidth: 380,
+                maxWidth: 420,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
                 display: 'block',
-                cursor: d.docType === 'link' ? 'pointer' : 'default',
+                cursor: isLink ? 'pointer' : 'default',
               }}
-              onClick={
-                d.docType === 'link'
-                  ? () => window.open(d.url, '_blank', 'noopener')
-                  : undefined
-              }
+              onClick={isLink ? () => window.open(d.url, '_blank', 'noopener') : undefined}
             >
-              {d.docType === 'link'
-                ? d.url
-                : `${formatSize(d.fileSize)} · ${d.mimeType || '未知类型'}`}
+              {isLink ? d.url : d.fileName ? `${formatSize(d.fileSize)} · ${d.mimeType || '未知类型'}` : isTpl ? '未交付' : ''}
             </Typography>
+            {d.uploadedBy && (
+              <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>
+                交付 {usersMap[d.uploadedBy] || d.uploadedBy}
+                {d.uploadedAt ? ` · ${new Date(d.uploadedAt).toLocaleString('zh-CN')}` : ''}
+              </Typography>
+            )}
           </Box>
-        </Stack>
-      ),
-    },
-    {
-      key: 'assoc',
-      label: '关联',
-      width: 200,
-      render: (d) => <Chip size="small" variant="outlined" label={associationLabel(d)} />,
-    },
-    { key: 'uploader', label: '上传人', width: 120, render: (d) => usersMap[d.uploadedBy] || d.uploadedBy || '—' },
-    {
-      key: 'uploadedAt',
-      label: '上传时间',
-      width: 160,
-      render: (d) => (d.uploadedAt ? new Date(d.uploadedAt).toLocaleString('zh-CN') : '—'),
-    },
-    {
-      key: 'ops',
-      label: '操作',
-      width: 150,
-      align: 'center',
-      render: (d) => (
-        <Stack direction="row" spacing={0.5} justifyContent="center">
-          {d.docType === 'link' ? (
-            <Tooltip title="打开文档">
-              <IconButton size="small" onClick={() => window.open(d.url, '_blank', 'noopener')}>
-                <OpenInNewOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          ) : (
-            <>
-              {isPreviewable(d.mimeType) && (
-                <Tooltip title="预览">
-                  <IconButton size="small" onClick={() => doPreview(d)}>
-                    <VisibilityOutlinedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              )}
-              <Tooltip title="下载">
-                <IconButton size="small" onClick={() => doDownload(d)}>
-                  <DownloadOutlinedIcon fontSize="small" />
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+            {isTpl && pending && (
+              <Tooltip title="上传文件或粘贴链接完成交付">
+                <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => openDeliver(d)}>
+                  交付
+                </Button>
+              </Tooltip>
+            )}
+            {delivered && isLink && (
+              <Tooltip title="打开文档">
+                <IconButton size="small" onClick={() => window.open(d.url, '_blank', 'noopener')}>
+                  <OpenInNewOutlinedIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-            </>
-          )}
-          {can('document:delete') && (
-            <Tooltip title="删除">
-              <IconButton size="small" color="error" onClick={() => doDelete(d)}>
-                <DeleteOutlineIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
+            )}
+            {delivered && !isLink && (
+              <>
+                {isPreviewable(d.mimeType) && (
+                  <Tooltip title="预览">
+                    <IconButton size="small" onClick={() => doPreview(d)}>
+                      <VisibilityOutlinedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                <Tooltip title="下载">
+                  <IconButton size="small" onClick={() => doDownload(d)}>
+                    <DownloadOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+            {isTpl && !pending && (
+              <Tooltip title="替换交付物（自动升版）">
+                <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => openDeliver(d)}>
+                  替换
+                </Button>
+              </Tooltip>
+            )}
+            {can('document:delete') && (
+              <Tooltip title="删除">
+                <IconButton size="small" color="error" onClick={() => doDelete(d)}>
+                  <DeleteOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Stack>
         </Stack>
-      ),
-    },
-  ];
+      </Box>
+    );
+  };
+
+  /* D04：分组视图 —— 模板交付物按里程碑分组（项目级置后），手动记录最后 */
+  const groups: Array<{ key: string; title: string; items: ProjectDocument[] }> = (() => {
+    const templateRows = rows.filter((r) => r.templateKey);
+    const manualRows = rows.filter((r) => !r.templateKey);
+    const g: Array<{ key: string; title: string; items: ProjectDocument[] }> = [];
+    milestones.forEach((ms) => {
+      const items = templateRows.filter((r) => r.milestoneId === ms.id);
+      if (items.length) g.push({ key: 'ms-' + ms.id, title: ms.name, items });
+    });
+    const projItems = templateRows.filter((r) => !r.milestoneId);
+    if (projItems.length) g.push({ key: 'proj', title: '项目级交付物', items: projItems });
+    if (manualRows.length) g.push({ key: 'manual', title: '手动记录（任务附件 / 飞书链接）', items: manualRows });
+    return g;
+  })();
 
   return (
     <Stack spacing={2.5}>
       <PageHeader
-        title="任务附件"
-        subtitle="C01/D02：在 WBS 任务或里程碑上挂载交付文件（上传 ≤ 20MB）或关联飞书文档（粘贴链接自动抓标题）"
+        title="项目文档"
+        subtitle="D04：模板交付物清单（按里程碑派生，交付/替换自动升版）+ 上传附件（≤20MB）/ 关联飞书文档（粘贴链接自动抓标题）"
         actions={
           can('document:upload') ? (
             <Button variant="contained" startIcon={<UploadFileIcon />} onClick={openUpload}>
-              上传附件
+              添加文档
             </Button>
           ) : null
         }
@@ -399,16 +457,47 @@ export function DocumentsPage(): JSX.Element {
             </FormControl>
 
             {rows.length === 0 ? (
-              <EmptyState title="暂无附件" description="点击右上角「上传附件」在任务或里程碑上挂载文件" />
+              <EmptyState title="暂无文档" description="点击右上角「上传附件」上传文件或「粘贴链接」关联飞书文档" />
             ) : (
-              <DataTable<ProjectDocument> columns={columns} rows={rows} rowKey={(d) => d.id} />
+              <Stack spacing={2}>
+                {groups.map((g) => {
+                  const pending = g.items.filter((r) => r.status === '待交付').length;
+                  const done = g.items.length - pending;
+                  return (
+                    <Box key={g.key}>
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
+                        <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{g.title}</Typography>
+                        <Chip
+                          size="small"
+                          label={`待交付 ${pending}`}
+                          sx={{ height: 20, fontSize: 11, bgcolor: pending ? 'warning.main' : 'action.hover', color: pending ? '#fff' : 'text.disabled' }}
+                        />
+                        <Chip
+                          size="small"
+                          label={`已交付 ${done}`}
+                          sx={{ height: 20, fontSize: 11, bgcolor: done ? 'primary.main' : 'action.hover', color: done ? '#fff' : 'text.disabled' }}
+                        />
+                      </Stack>
+                      <Stack spacing={1}>{g.items.map(renderRow)}</Stack>
+                    </Box>
+                  );
+                })}
+              </Stack>
             )}
           </Box>
         )}
       </SectionCard>
 
       <Dialog open={uploadOpen} onClose={() => !uploading && setUploadOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>{linkMode ? '关联飞书文档' : '上传附件'}</DialogTitle>
+        <DialogTitle>
+          {uploadTemplateKey
+            ? linkMode
+              ? '交付模板交付物（链接）'
+              : '交付模板交付物（文件）'
+            : linkMode
+              ? '关联飞书文档'
+              : '上传附件'}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 0.5 }}>
             <ToggleButtonGroup

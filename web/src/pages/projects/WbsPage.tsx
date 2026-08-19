@@ -17,7 +17,8 @@ import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { SimpleTreeView, TreeItem } from '@mui/x-tree-view';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ROUTES } from '@/config/routes';
 
 import {
   ConfirmDialog,
@@ -88,6 +89,7 @@ const EMPTY_FORM: NodeForm = {
  */
 export function WbsPage(): JSX.Element {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const toast = useToast();
   const { can } = usePermission();
 
@@ -115,6 +117,8 @@ export function WbsPage(): JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<WbsTreeNode | null>(null);
   /** R3-5：日志详情弹窗的目标节点 */
   const [logDetailNode, setLogDetailNode] = useState<WbsTreeNode | null>(null);
+  /** D04.2 反查：任务附件计数（按 nodeId） */
+  const [docCountByNode, setDocCountByNode] = useState<Record<string, number>>({});
   /** R4-P0-4：页内写日志 Modal 开关 + 预关联锁定节点 id（不再跳转 ReportsPage） */
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportLockNodeId, setReportLockNodeId] = useState<string | null>(null);
@@ -132,6 +136,19 @@ export function WbsPage(): JSX.Element {
       void refreshMilestones(id);
       // ★ R3-5：挂载拉取工作日志（徽标计数与详情聚合数据源）
       void fetchReports(id).catch((e: unknown) => toast.error(e));
+      // ★ D04.2 反查：拉取项目文档，按任务 nodeId 统计附件数（跳转文档页 ?node= 反查）
+      void api
+        .listDocuments(id)
+        .then((list) => {
+          const m: Record<string, number> = {};
+          list.forEach((d) => {
+            if (d.nodeId) m[d.nodeId] = (m[d.nodeId] ?? 0) + 1;
+          });
+          setDocCountByNode(m);
+        })
+        .catch(() => {
+          // 附件计数失败不影响 WBS
+        });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, projectType]);
@@ -382,6 +399,18 @@ export function WbsPage(): JSX.Element {
               onClick={(e) => {
                 e.stopPropagation();
                 setLogDetailNode(node);
+              }}
+            />
+            {/* D04.2 反查：任务附件徽标（点击跳文档页并筛选该任务） */}
+            <Chip
+              size="small"
+              label={`附件 ${docCountByNode[node.id] ?? 0}`}
+              variant={(docCountByNode[node.id] ?? 0) > 0 ? 'filled' : 'outlined'}
+              color={(docCountByNode[node.id] ?? 0) > 0 ? 'secondary' : 'default'}
+              sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`${ROUTES.projectDocuments(id)}?node=${node.id}`);
               }}
             />
             {/* R4-P0-4：写日志入口（页内开 ReportFormModal，不再跳转工作日志页）
