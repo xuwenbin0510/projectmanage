@@ -488,6 +488,11 @@ export class HttpApiClient implements ApiClient {
     return post<ProjectDocument>(`/projects/${projectId}/documents/${docId}/baseline`, {});
   }
 
+  /** D06：项目内增补门控必交付项 */
+  addRequiredDeliverable(projectId: string, payload: { milestoneId: string; name: string }): Promise<ProjectDocument> {
+    return post<ProjectDocument>(`/projects/${projectId}/documents/required`, payload);
+  }
+
   /** 取附件二进制流（服务端按 Content-Type 返回，便于预览/下载） */
   async downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob> {
     const q = opts?.asDownload ? '?download=1' : '';
