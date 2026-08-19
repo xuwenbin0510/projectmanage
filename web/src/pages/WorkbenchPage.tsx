@@ -82,6 +82,9 @@ export function WorkbenchPage(): JSX.Element {
   /* B11：仪表盘聚合。必须在任何早退之前调用，保证 Hooks 顺序稳定 */
   const dashboard = useMemo(() => buildDashboard(data), [data]);
 
+  /* D10：门控待办（我有决议权限的未决议门） */
+  const gateTodos = data?.gateTodos ?? [];
+
   /**
    * B14-块1：「我的任务」按**优先级升序（P0 置顶）**、同级按截止日升序。
    * 排序口径唯一实现 `dashboardAgg#comparePriority`（`sortByPriority` 不改原数组），
@@ -314,6 +317,40 @@ export function WorkbenchPage(): JSX.Element {
                   还有 {missing.length} 个项目本周未提交周报。
                 </Typography>
               )}
+            </Stack>
+          )}
+        </SectionCard>
+
+        {/* ── 门控待办（D10：我有决议权限的未决议门，点击跳项目概览门区） ── */}
+        <SectionCard title="门控待办" subtitle={`${gateTodos.length} 道门待决议`}>
+          {gateTodos.length === 0 ? (
+            <EmptyState title="没有待决议的质量门" description="有门里程碑到达决议时机时会出现在这里" dense />
+          ) : (
+            <Stack spacing={1}>
+              {gateTodos.slice(0, 5).map((g) => (
+                <Paper
+                  key={g.gateId}
+                  variant="outlined"
+                  onClick={() => navigate(ROUTES.projectOverview(g.projectId))}
+                  sx={{
+                    p: 1.5,
+                    cursor: 'pointer',
+                    '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) },
+                  }}
+                >
+                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
+                        {g.gateCode} {g.gateName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {g.projectName} · {g.milestoneCode} {g.milestoneName}
+                      </Typography>
+                    </Box>
+                    <Chip size="small" label={`责任 ${g.ownerRole.toUpperCase()}`} variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+                  </Stack>
+                </Paper>
+              ))}
             </Stack>
           )}
         </SectionCard>

@@ -36,6 +36,7 @@ router.get(
     const myTasks = workbenchService.listMyTasks(db, req.user);
     const myApprovals = workbenchService.listMyApprovals(db, req.user);
     const reportReminders = workbenchService.listReportReminders(db, req.user);
+    const gateTodos = workbenchService.listGateTodos(db, req.user);
 
     res.json(
       ok({
@@ -43,11 +44,14 @@ router.get(
           pendingApprovals: myApprovals.length,
           overdueTasks: workbenchService.countOverdue(myTasks),
           missingReports: reportReminders.filter(function (r) { return !r.filled; }).length,
+          /* D10：门控待办数（= gateTodos.length，同一 listGateTodos 口径） */
+          pendingGates: gateTodos.length,
         },
         myProjects: myProjects,
         myTasks: myTasks,
         myApprovals: myApprovals,
         reportReminders: reportReminders,
+        gateTodos: gateTodos,
       }),
     );
   }),
