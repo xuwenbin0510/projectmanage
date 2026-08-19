@@ -50,6 +50,7 @@ import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectStatus,
 import {
   GATE_CONCLUSIONS,
   GATE_ICON,
+  PROJECT_ROLES,
   PROJECT_ROLE_LABEL,
   PROJECT_TRANSITIONS,
   PROJECT_TYPE_LABEL,
@@ -843,12 +844,18 @@ export function ProjectOverviewPage(): JSX.Element {
           placeholder="例如：接口文档(ICD)已冻结"
         />
         <TextField
+          select
           label="责任角色"
           value={itemForm.ownerRole}
           onChange={(e) => setItemForm((f) => ({ ...f, ownerRole: e.target.value }))}
           fullWidth
-          placeholder="如 qa / tl / pm / cm / pmo"
-        />
+        >
+          {PROJECT_ROLES.map((r) => (
+            <MenuItem key={r} value={r}>
+              {r.toUpperCase()}（{PROJECT_ROLE_LABEL[r]}）
+            </MenuItem>
+          ))}
+        </TextField>
         <Typography variant="caption" color="text.secondary">
           项目自定义检查项（可编辑/删除）；模板检查项保持只读。
         </Typography>
@@ -917,12 +924,18 @@ export function ProjectOverviewPage(): JSX.Element {
               placeholder="例如：采购验收门"
             />
             <TextField
+              select
               label="责任角色"
               value={gateForm.ownerRole}
               onChange={(e) => setGateForm((f) => ({ ...f, ownerRole: e.target.value }))}
               fullWidth
-              placeholder="如 qa / tl / pm / cm / pmo"
-            />
+            >
+              {PROJECT_ROLES.map((r) => (
+                <MenuItem key={r} value={r}>
+                  {r.toUpperCase()}（{PROJECT_ROLE_LABEL[r]}）
+                </MenuItem>
+              ))}
+            </TextField>
             <Stack spacing={1}>
               <Typography variant="caption" color="text.secondary">
                 检查项（可选，留空门仅靠交付物校验）
@@ -939,14 +952,20 @@ export function ProjectOverviewPage(): JSX.Element {
                     placeholder="检查项内容"
                   />
                   <TextField
+                    select
                     size="small"
-                    sx={{ width: 110 }}
+                    sx={{ width: 130 }}
                     value={it.ownerRole}
                     onChange={(e) =>
                       setGateItems((arr) => arr.map((x, j) => (j === i ? { ...x, ownerRole: e.target.value } : x)))
                     }
-                    placeholder="角色"
-                  />
+                  >
+                    {PROJECT_ROLES.map((r) => (
+                      <MenuItem key={r} value={r}>
+                        {r.toUpperCase()}
+                      </MenuItem>
+                    ))}
+                  </TextField>
                   <IconButton size="small" color="error" onClick={() => setGateItems((arr) => arr.filter((_, j) => j !== i))}>
                     <DeleteOutlineIcon sx={{ fontSize: 16 }} />
                   </IconButton>
@@ -956,7 +975,7 @@ export function ProjectOverviewPage(): JSX.Element {
                 size="small"
                 variant="text"
                 startIcon={<AddIcon />}
-                onClick={() => setGateItems((arr) => [...arr, { content: '', ownerRole: '' }])}
+                onClick={() => setGateItems((arr) => [...arr, { content: '', ownerRole: 'pm' }])}
               >
                 添加检查项
               </Button>
@@ -983,12 +1002,18 @@ export function ProjectOverviewPage(): JSX.Element {
           fullWidth
         />
         <TextField
+          select
           label="责任角色"
           value={editGateForm.ownerRole}
           onChange={(e) => setEditGateForm((f) => ({ ...f, ownerRole: e.target.value }))}
           fullWidth
-          placeholder="如 qa / tl / pm / cm / pmo"
-        />
+        >
+          {PROJECT_ROLES.map((r) => (
+            <MenuItem key={r} value={r}>
+              {r.toUpperCase()}（{PROJECT_ROLE_LABEL[r]}）
+            </MenuItem>
+          ))}
+        </TextField>
         <Typography variant="caption" color="text.secondary">
           项目内修改仅影响本项目，不影响其他项目与模板定义。
         </Typography>
