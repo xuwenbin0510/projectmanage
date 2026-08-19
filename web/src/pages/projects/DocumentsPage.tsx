@@ -273,6 +273,8 @@ export function DocumentsPage(): JSX.Element {
     const isTpl = !!d.templateKey;
     const isLink = d.docType === 'link';
     const pending = isTpl && d.status === '待交付';
+    /* 已交付可查看（手动记录恒已交付）：link→打开，file→预览/下载 */
+    const delivered = d.status === '已交付' && (isLink || !!d.fileName);
     return (
       <Box
         key={d.id}
@@ -288,7 +290,23 @@ export function DocumentsPage(): JSX.Element {
           <Box sx={{ color: 'text.secondary', display: 'flex', flexShrink: 0 }}>{iconFor(d)}</Box>
           <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
             <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{d.name}</Typography>
+              {isLink ? (
+                /* D03.1：链接记录名称可点击，新标签页快速跳转飞书 */
+                <Box
+                  onClick={() => window.open(d.url, '_blank', 'noopener')}
+                  role="link"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') window.open(d.url, '_blank', 'noopener');
+                  }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}
+                >
+                  <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{d.name}</Typography>
+                  <OpenInNewOutlinedIcon sx={{ fontSize: 13 }} />
+                </Box>
+              ) : (
+                <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{d.name}</Typography>
+              )}
               {isTpl &&
                 (pending ? (
                   <Chip size="small" label="待交付" sx={{ height: 18, fontSize: 11, bgcolor: 'warning.main', color: '#fff' }} />
@@ -304,7 +322,15 @@ export function DocumentsPage(): JSX.Element {
             <Typography
               variant="caption"
               color={isLink ? 'primary.main' : 'text.secondary'}
-              sx={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
+              sx={{
+                maxWidth: 420,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                display: 'block',
+                cursor: isLink ? 'pointer' : 'default',
+              }}
+              onClick={isLink ? () => window.open(d.url, '_blank', 'noopener') : undefined}
             >
               {isLink ? d.url : d.fileName ? `${formatSize(d.fileSize)} · ${d.mimeType || '未知类型'}` : isTpl ? '未交付' : ''}
             </Typography>
@@ -316,21 +342,21 @@ export function DocumentsPage(): JSX.Element {
             )}
           </Box>
           <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
-            {isTpl && (
-              <Tooltip title={pending ? '上传文件或粘贴链接完成交付' : '替换交付物（自动升版）'}>
+            {isTpl && pending && (
+              <Tooltip title="上传文件或粘贴链接完成交付">
                 <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => openDeliver(d)}>
-                  {pending ? '交付' : '替换'}
+                  交付
                 </Button>
               </Tooltip>
             )}
-            {!isTpl && isLink && (
+            {delivered && isLink && (
               <Tooltip title="打开文档">
                 <IconButton size="small" onClick={() => window.open(d.url, '_blank', 'noopener')}>
                   <OpenInNewOutlinedIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
-            {!isTpl && !isLink && (
+            {delivered && !isLink && (
               <>
                 {isPreviewable(d.mimeType) && (
                   <Tooltip title="预览">
@@ -345,6 +371,13 @@ export function DocumentsPage(): JSX.Element {
                   </IconButton>
                 </Tooltip>
               </>
+            )}
+            {isTpl && !pending && (
+              <Tooltip title="替换交付物（自动升版）">
+                <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => openDeliver(d)}>
+                  替换
+                </Button>
+              </Tooltip>
             )}
             {can('document:delete') && (
               <Tooltip title="删除">
