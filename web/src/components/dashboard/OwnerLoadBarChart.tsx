@@ -71,7 +71,7 @@ export function OwnerLoadBarChart({
 
   return (
     <ChartCard
-      title="负责人负荷"
+      title="任务负责人负荷"
       subtitle={
         empty
           ? ''

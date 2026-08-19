@@ -77,5 +77,5 @@ export const PROJECT_TABS: ProjectTabItem[] = [
   { key: 'changes', label: '变更', segment: 'changes' },
   { key: 'audit', label: '变更历史', segment: 'audit' },
   { key: 'risks', label: '风险', segment: 'risks', phase: 'P1' },
-  { key: 'documents', label: '文档', segment: 'documents', phase: 'P1' },
+  { key: 'documents', label: '文档', segment: 'documents' },
 ];

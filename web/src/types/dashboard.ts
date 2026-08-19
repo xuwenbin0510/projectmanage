@@ -85,6 +85,8 @@ export interface DashboardOverviewQuery {
   status?: ProjectStatus | '';
   health?: Health | '';
   keyword?: string;
+  /** 任务负责人（openId）：只保留「项目内含该负责人真叶子任务」的项目；空串 = 不过滤 */
+  ownerOpenId?: string;
   /** scope=mine 时：false=我参与的，true=我负责的（我是 PM） */
   onlyMine?: boolean;
   /** 本期不做时间筛选，保留字段占位（后端忽略） */
@@ -163,6 +165,14 @@ export interface ReportMissingRow {
   pmName: string;
 }
 
+/** 任务负责人选项（D01.5 · 全局总览「负责人」下拉数据源，服务端按姓名升序） */
+export interface OwnerOption {
+  /** 负责人 openId（wbs 叶子任务 owner；传给 query.ownerOpenId） */
+  openId: string;
+  /** 负责人姓名；用户已移除回落「(已移除)」 */
+  name: string;
+}
+
 /**
  * 任务状态分布（B17 · P0-3 · 横向条形）
  * 档序恒按 TASK_STATUSES（待办 / 进行中 / 待评审 / 完成 / 阻塞）；
@@ -192,6 +202,76 @@ export interface OverdueDurationDistribution {
   total: number;
 }
 
+/* ==========================================================================
+ * D01 · 本周工作进展面板（全局总览新增）
+ * 对应 `DashboardOverview.weeklyProgress`，服务端 `computeWeeklyProgress` 聚合返回。
+ * 口径：本周（ISO 周 · 周一~周日）。
+ * ========================================================================== */
+
+/** 周报动态单行：本周（week = weekCode）范围内项目的周报 */
+export interface WeeklyReportItem {
+  /** 周报 id（work_reports.id） */
+  id: string;
+  projectId: string;
+  projectName: string;
+  /** 报告人姓名（author_name） */
+  authorName: string;
+  /** 周报状态：草稿 / 已提交 / 已确认 */
+  status: string;
+  /** 提交时间（ISO；草稿为 ''） */
+  submittedAt: string;
+  /** 最后更新时间（ISO） */
+  updatedAt: string;
+  /** 本周完成说明（done_note），未填为 '' */
+  summary: string;
+}
+
+/** 本周任务进展单行：本周 updated_at 落在 ISO 周内的叶子任务（含进度更新与已完成） */
+export interface TaskUpdatedItem {
+  /** 节点 id（wbs_nodes.id） */
+  id: string;
+  projectId: string;
+  projectName: string;
+  /** WBS 编码，如 "1.2.3" */
+  wbsCode: string;
+  /** 任务名 */
+  name: string;
+  /** 负责人姓名；空 → 「未分配」 */
+  ownerName: string;
+  /** 任务状态（看板五态之一） */
+  status: TaskStatus;
+  /** 进度 0~100 */
+  progress: number;
+  /** 最后更新时间（ISO） */
+  updatedAt: string;
+  /** 是否已完成（status === '完成'），用于高亮 */
+  done: boolean;
+}
+
+/** 本周达成里程碑单行：done_at（YYYY-MM-DD）落在 ISO 周内的里程碑 */
+export interface MilestoneAchievedItem {
+  /** 里程碑 id（milestones.id） */
+  id: string;
+  projectId: string;
+  projectName: string;
+  /** 里程碑名 */
+  name: string;
+  /** 达成日期 YYYY-MM-DD */
+  doneAt: string;
+}
+
+/** 本周工作进展聚合（D01 面板数据源） */
+export interface WeeklyProgress {
+  /** 本周周码 'YYYY-Www'，用于面板副标题 */
+  week: string;
+  /** 周报动态列表（提交/更新倒序） */
+  reports: WeeklyReportItem[];
+  /** 本周任务进展列表（updated_at 倒序；完成后置 done=true） */
+  tasks: TaskUpdatedItem[];
+  /** 本周达成里程碑列表（done_at 倒序） */
+  milestones: MilestoneAchievedItem[];
+}
+
 /** 全局总览完整响应 */
 export interface DashboardOverview {
   /** 后端实际生效的范围（非特权角色即使传 all 也会被降为 mine） */
@@ -212,6 +292,10 @@ export interface DashboardOverview {
   /** 按「逾期 ↓ → 在办 ↓ → 姓名 ↑」排序，未分配恒最后 */
   ownerLoad: OwnerLoadRow[];
   reportMissing: ReportMissingRow[];
+  /** D01：上周工作进展（周报动态 / 任务进展 / 达成里程碑） */
+  weeklyProgress?: WeeklyProgress;
+  /** D01.5：任务负责人选项池（「负责人」筛选下拉数据源） */
+  ownerOptions?: OwnerOption[];
   /** 项目明细表（服务端分页），行点击可钻取至 B11 单项目仪表盘 */
   projects: Paged<ProjectListItem>;
 }

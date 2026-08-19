@@ -98,6 +98,8 @@ function normalizeQuery(query) {
     status: MANAGED_STATUSES.indexOf(q.status) >= 0 ? String(q.status) : '',
     health: enums.HEALTHS.indexOf(q.health) >= 0 ? String(q.health) : '',
     keyword: String(q.keyword === undefined || q.keyword === null ? '' : q.keyword).trim(),
+    /* 任务负责人（openId）：按「项目内含该负责人的真叶子任务」过滤项目；空串 = 不过滤 */
+    ownerOpenId: String(q.ownerOpenId === undefined || q.ownerOpenId === null ? '' : q.ownerOpenId).trim(),
     onlyMine: !!onlyMine,
     page: page,
     pageSize: pageSize,
@@ -187,6 +189,15 @@ function listScopedRows(db, q, me, scope) {
     where.push("(LOWER(p.name) LIKE ? OR LOWER(p.code) LIKE ? OR LOWER(IFNULL(p.customer, '')) LIKE ?)");
     const like = '%' + q.keyword.toLowerCase() + '%';
     args.push(like, like, like);
+  }
+  /* D01.5 任务负责人：项目内含该负责人（openId）的**真叶子任务**（无子节点）即命中；
+     相关子查询判叶子，与 D01 任务进展块 / 看板卡片口径一致（node_type 无法排除父节点） */
+  if (q.ownerOpenId) {
+    where.push(
+      'EXISTS (SELECT 1 FROM wbs_nodes w WHERE w.project_id = p.id AND w.owner = ? '
+      + 'AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id))',
+    );
+    args.push(q.ownerOpenId);
   }
 
   if (scope === 'mine') {
@@ -314,6 +325,155 @@ function countReportFill(db, projectIds) {
   return { week: week, due: ids.length, filled: ids.length - missingIds.length, missingIds: missingIds };
 }
 
+/**
+ * 上周工作进展（D01 · 全局总览面板「上周工作进展」）。
+ *
+ * 三个维度，全部基于「**上周**（上一自然 ISO 周 · 周一~周日）」范围——周一开周例会回顾的是
+ * 上一个完整周的主要进展，周报 `week` 字段即按周码存储，天然匹配：
+ *  ① 周报动态：范围内项目上周（`week = 上周周码`）的周报，按提交/更新时间倒序。
+ *  ② 上周任务进展：范围内叶子任务（`node_type='task'`）中 `updated_at` 落在
+ *     [上周一 00:00, 本周一 00:00) 者，含「仅进度更新」与「已完成」两类（完成态置 `done:true` 高亮）。
+ *  ③ 上周达成里程碑：范围内里程碑 `done_at（YYYY-MM-DD）` 落在上周区间者。
+ *
+ * 与全局总览同源同口径：scope / 过滤 / 决策 ⑥ 已通过 `projectIds` 传入（调用方已算好范围），
+ * 本函数**只**在范围内取数，不重新做 scope 判定。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds 范围内项目 id（已在调用方完成 scope/过滤/决策⑥）
+ * @returns {{week: string, reports: Array<object>, tasks: Array<object>, milestones: Array<object>}}
+ */
+function computeWeeklyProgress(db, projectIds) {
+  const ids = (projectIds || []).map(String).filter(Boolean);
+  /* 上周周码：今天减 7 天必落在上一自然周，取该日所在 ISO 周 */
+  const week = dates.weekCode(dates.addDays(dates.today(), -7));
+  const lastRange = dates.weekRange(week);                       // { start, end } ISO
+  const lastStartIso = lastRange.start;                          // 'YYYY-MM-DDT00:00:00Z'（上周一）
+  const lastStart = lastStartIso.slice(0, 10);                   // 'YYYY-MM-DD'（里程碑 done_at 是纯日期）
+  const lastEnd = lastRange.end.slice(0, 10);                    // 'YYYY-MM-DD'（上周日）
+  /* 任务上界：本周一 00:00（上周 [周一, 周一) 半开区间，避免把本周动态混入） */
+  const thisWeekStartIso = dates.weekRange(dates.weekCode()).start;
+
+  if (!ids.length) {
+    return { week: week, reports: [], tasks: [], milestones: [] };
+  }
+
+  /* 项目名查表：id → name（缺失回落未命名项目），一次性 SELECT */
+  const projName = {};
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare('SELECT id, name FROM projects WHERE id IN (' + placeholders(part) + ')')
+      .all(part)
+      .forEach(function (r) { projName[mappers.toStr(r.id)] = mappers.toStr(r.name) || agg.UNNAMED_PROJECT; });
+  });
+
+  /* ① 周报动态：上周（week=上周周码）范围内项目周报，提交优先、提交/更新倒序 */
+  const reports = [];
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      'SELECT id, project_id, author_name, status, submitted_at, done_note, updated_at '
+      + 'FROM work_reports WHERE project_id IN (' + placeholders(part) + ') AND week = ? '
+      + 'ORDER BY (CASE WHEN submitted_at IS NULL THEN 1 ELSE 0 END), submitted_at DESC, updated_at DESC',
+    )
+      .all(part.concat([week]))
+      .forEach(function (r) {
+        reports.push({
+          id: mappers.toStr(r.id),
+          projectId: mappers.toStr(r.project_id),
+          projectName: projName[mappers.toStr(r.project_id)] || agg.UNNAMED_PROJECT,
+          authorName: mappers.toStr(r.author_name),
+          status: mappers.toStr(r.status, '草稿'),
+          submittedAt: mappers.toStr(r.submitted_at),
+          updatedAt: mappers.toStr(r.updated_at),
+          summary: mappers.toStr(r.done_note),
+        });
+      });
+  });
+
+  /* ② 上周任务进展：**真叶子**（leafNodesOf，含已完成）且 updated_at 落在 [上周一, 本周一)。
+     不用 `node_type='task'` 直滤——父节点 node_type 也是 task（实测 9 个有子父任务），会混入汇总行；
+     `collectScopeLeafTasks` 复用总览同款全量拉取 + 项目分组判叶子，口径与看板卡片一致。 */
+  const tasks = collectScopeLeafTasks(db, ids, true)
+    .filter(function (n) { return n.updatedAt >= lastStartIso && n.updatedAt < thisWeekStartIso; })
+    .sort(function (a, b) {
+      return a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0;
+    })
+    .map(function (n) {
+      const st = mappers.toStr(n.status, '待办');
+      return {
+        id: n.id,
+        projectId: n.projectId,
+        projectName: projName[n.projectId] || agg.UNNAMED_PROJECT,
+        wbsCode: n.wbsCode,
+        name: n.name,
+        ownerName: n.ownerName || '',
+        status: st,
+        progress: mappers.toNum(n.progress, 0),
+        updatedAt: n.updatedAt,
+        done: st === '完成',
+      };
+    });
+
+  /* ③ 上周达成里程碑：done_at（YYYY-MM-DD）落在上周区间 [上周一, 上周日] */
+  const milestones = [];
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      'SELECT id, project_id, name, done_at '
+      + 'FROM milestones WHERE project_id IN (' + placeholders(part) + ') '
+      + 'AND done_at IS NOT NULL AND done_at >= ? AND done_at <= ? '
+      + 'ORDER BY done_at DESC',
+    )
+      .all(part.concat([lastStart, lastEnd]))
+      .forEach(function (r) {
+        milestones.push({
+          id: mappers.toStr(r.id),
+          projectId: mappers.toStr(r.project_id),
+          projectName: projName[mappers.toStr(r.project_id)] || agg.UNNAMED_PROJECT,
+          name: mappers.toStr(r.name),
+          doneAt: mappers.toStr(r.done_at),
+        });
+      });
+  });
+
+  return { week: week, reports: reports, tasks: tasks, milestones: milestones };
+}
+
+/**
+ * 任务负责人选项池（D01.5 · 全局总览「负责人」下拉数据源）。
+ *
+ * 选项 = 范围内项目的**真叶子任务**（无子节点）负责人去重，姓名来自 users 表；
+ * 基于「scope + 决策⑥ 在管三态」的项目集计算（调用方传未过滤 ownerOpenId 的项目 id），
+ * 保证选中后下拉选项不随其他筛选漂移。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds 范围内项目 id
+ * @returns {Array<{openId: string, name: string}>} 按姓名升序
+ */
+function computeOwnerOptions(db, projectIds) {
+  const ids = (projectIds || []).map(String).filter(Boolean);
+  if (!ids.length) return [];
+
+  const map = {}; // openId → name（先到先得）
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      'SELECT DISTINCT w.owner AS open_id, u.name AS user_name '
+      + 'FROM wbs_nodes w '
+      + 'LEFT JOIN users u ON u.open_id = w.owner '
+      + 'WHERE w.project_id IN (' + placeholders(part) + ') '
+      + "AND w.owner IS NOT NULL AND w.owner != '' "
+      + 'AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)',
+    )
+      .all(part)
+      .forEach(function (r) {
+        if (map[r.open_id] === undefined) {
+          map[r.open_id] = r.user_name || mappers.REMOVED_USER_NAME;
+        }
+      });
+  });
+
+  return Object.keys(map)
+    .map(function (openId) { return { openId: openId, name: map[openId] }; })
+    .sort(function (a, b) { return agg.compareText(a.name, b.name); });
+}
+
 /* ── 明细表排序 ─────────────────────────────────────── */
 
 /**
@@ -417,6 +577,13 @@ function getDashboardOverview(db, query, me) {
     };
   });
 
+  /* D01：上周工作进展（周报动态 / 任务进展 / 达成里程碑），与全局总览同源同范围 */
+  const weeklyProgress = computeWeeklyProgress(db, projectIds);
+
+  /* D01.5：任务负责人选项池（基于「忽略 ownerOpenId 过滤」的范围项目集，选项不随筛选漂移） */
+  const optionRows = listScopedRows(db, Object.assign({}, q, { ownerOpenId: '' }), me, scope);
+  const ownerOptions = computeOwnerOptions(db, optionRows.map(function (r) { return String(r.id); }));
+
   const overdueByProject = {};
   overdue.forEach(function (r) { overdueByProject[r.projectId] = r.overdue; });
 
@@ -444,6 +611,8 @@ function getDashboardOverview(db, query, me) {
     overdue: overdue,
     ownerLoad: ownerLoad,
     reportMissing: reportMissing,
+    weeklyProgress: weeklyProgress,
+    ownerOptions: ownerOptions,
     projects: paged(sorted.slice(start, start + q.pageSize), items.length, q.page, q.pageSize),
   };
 }
@@ -536,6 +705,8 @@ module.exports = {
   listScopeLeafTasks,
   listScopeAllLeafTasks,
   countReportFill,
+  computeWeeklyProgress,
+  computeOwnerOptions,
   sortItems,
   getDashboardOverview,
   getDashboardTasks,

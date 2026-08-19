@@ -925,6 +925,55 @@ function migrationV7(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v7 任务优先级 priority + 周报确认三列 confirmed_by/at + reject_reason（B14）');
 }
 
+/* ── 迁移 v8：任务附件（C01 · 方案 A） ─────────────────── */
+
+/**
+ * v8 = 任务附件表 `project_documents`（C01 第一个真实实现的文档域）。
+ *
+ * 方案 A：把「任务附件」作为现有文档模块的第一个真正实现——
+ * 在 WBS 任务（node_id）或里程碑（milestone_id）上挂二进制文件，
+ * 上传到自有服务器磁盘（ATTACHMENT_ROOT 按 projectId 分目录），列表 / 预览 / 删除。
+ *
+ * 存储约定（与服务层 `server/services/document.service.js` 对齐）：
+ *  - `storage_path` = `projectId/UUID_原名`，落盘相对 ATTACHMENT_ROOT
+ *  - `file_size` 为字节数（REAL，便于与 20MB 上限比较）
+ *  - `node_id` / `milestone_id` 可空（空串表示挂在项目级，非必填关联）
+ *  - 本项目不引入生命周期模板派生 + 基线管控（后续单独讨论）
+ *
+ * 幂等：全部 `CREATE TABLE IF NOT EXISTS` + 索引 `IF NOT EXISTS`（沿用 v2/v3 范式）。
+ * ⚠ `run()` 已统一开事务并处理 `PRAGMA foreign_keys`，此处**不要**自行 BEGIN。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV8(db, now) { // eslint-disable-line no-unused-vars
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_documents (
+      id            TEXT PRIMARY KEY,
+      project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      node_id       TEXT NOT NULL DEFAULT '',
+      milestone_id  TEXT NOT NULL DEFAULT '',
+      name          TEXT NOT NULL,
+      file_name     TEXT NOT NULL,
+      file_size     REAL NOT NULL DEFAULT 0,
+      mime_type     TEXT NOT NULL DEFAULT '',
+      storage_path  TEXT NOT NULL,
+      uploaded_by   TEXT NOT NULL DEFAULT '',
+      uploaded_at   TEXT,
+      created_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_documents_project
+      ON project_documents(project_id);
+    CREATE INDEX IF NOT EXISTS idx_project_documents_node
+      ON project_documents(project_id, node_id);
+    CREATE INDEX IF NOT EXISTS idx_project_documents_milestone
+      ON project_documents(project_id, milestone_id);
+  `);
+
+  console.log('[migrations] v8 建任务附件表 project_documents（C01）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -939,6 +988,7 @@ const MIGRATIONS = [
   { version: 5, name: 'connect-v5-report-week-actual-days', up: migrationV5 },
   { version: 6, name: 'connect-v6-reviews-transition', up: migrationV6 },
   { version: 7, name: 'connect-v7-priority-report-confirm', up: migrationV7 },
+  { version: 8, name: 'connect-v8-documents', up: migrationV8 },
 ];
 
 /**

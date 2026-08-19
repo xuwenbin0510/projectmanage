@@ -36,3 +36,5 @@ export { HealthDonut } from './HealthDonut';
 export type { HealthDonutProps } from './HealthDonut';
 export { DistributionTaskDrawer } from './DistributionTaskDrawer';
 export type { DistributionTaskDrawerProps } from './DistributionTaskDrawer';
+export { WeeklyProgressPanel } from './WeeklyProgressPanel';
+export type { WeeklyProgressPanelProps } from './WeeklyProgressPanel';
