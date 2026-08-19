@@ -17,6 +17,7 @@ const enums = require('../config/enums');
 const rbac = require('../middleware/rbac');
 const { writeAudit } = require('../lib/audit');
 const milestoneService = require('./milestone.service');
+const projectService = require('./project.service');
 
 /* ═══════════════════════════════════════════════════
  * 一、基础读取
@@ -196,7 +197,6 @@ function decideGate(db, req, projectId, gateId, payload) {
 /* ═══════════════════════════════════════════════════
  * 三、检查项管理（D05 · custom 增/改/删，模板项只读）
  * ═══════════════════════════════════════════════════ */
-
 /**
  * 新增 custom 检查项（milestone:edit；模板检查项保持只读）。
  * @param {import('better-sqlite3').Database} db
@@ -301,6 +301,159 @@ function deleteGateItem(db, req, itemId) {
   return tx();
 }
 
+/* ═══════════════════════════════════════════════════
+ * 四、门本身管理（D07 · 项目内挂门/改门/删门，milestone:edit）
+ * ═══════════════════════════════════════════════════ */
+
+/**
+ * 给无门里程碑挂质量门（D07）。
+ *
+ * - `mode='template'`：从当前项目分类模板的门库复制（code/name/ownerRole + 检查项 source='template'）；
+ * - `mode='blank'`：项目自定义门（name/ownerRole 必填，items[] 可选，检查项 source='custom'，code='CUSG-序号'）；
+ * - 一碑一门：已有门拒绝重复挂；
+ * - 挂门后门控自动生效（检查项勾齐 + 交付物齐备 → 通过 → 达成）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {import('express').Request} req
+ * @param {string} projectId
+ * @param {string} milestoneId
+ * @param {{mode?: string, templateCode?: string, name?: string, ownerRole?: string, items?: Array<{content: string, ownerRole?: string}>}} payload
+ * @returns {Array<object>} MilestoneWithGate[]
+ * @throws {AppError} E_VALIDATION / E_NOT_FOUND
+ */
+function addGateToMilestone(db, req, projectId, milestoneId, payload) {
+  const p = payload || {};
+  const tx = db.transaction(function () {
+    rbac.assertWritable(db, projectId);
+    const me = rbac.assertCan(db, req, 'milestone:edit', projectId);
+
+    const ms = db
+      .prepare('SELECT * FROM milestones WHERE id = ? AND project_id = ?')
+      .get(String(milestoneId), String(projectId));
+    if (!ms) throw new AppError(ErrorCode.E_NOT_FOUND, '里程碑不存在', { milestoneId: String(milestoneId) });
+
+    const exists = db
+      .prepare('SELECT id FROM quality_gates WHERE project_id = ? AND milestone_id = ?')
+      .get(String(projectId), String(milestoneId));
+    if (exists) throw new AppError(ErrorCode.E_VALIDATION, '该里程碑已挂载质量门，如需调整请先删除或修改现有门');
+
+    const mode = mappers.toStr(p.mode) === 'blank' ? 'blank' : 'template';
+    let code = '';
+    let name = '';
+    let ownerRole = '';
+    let items = [];
+
+    if (mode === 'template') {
+      const tplCode = mappers.toStr(p.templateCode);
+      const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(String(projectId));
+      const tpl = projectService.getLifecycleTemplate(db, mappers.toStr((project && project.type) || 'A'));
+      const spec = ((tpl && tpl.definition && tpl.definition.milestones) || [])
+        .map(function (m) { return m.gate; })
+        .find(function (g) { return g && g.code === tplCode; });
+      if (!spec) throw new AppError(ErrorCode.E_VALIDATION, '模板门库中不存在该门：' + tplCode);
+      code = spec.code;
+      name = spec.name;
+      ownerRole = spec.ownerRole;
+      items = (spec.items || []).map(function (it, i) {
+        return { content: mappers.toStr(it.content), ownerRole: mappers.toStr(it.ownerRole), source: 'template', seq: i + 1 };
+      });
+    } else {
+      name = mappers.toStr(p.name).trim();
+      ownerRole = mappers.toStr(p.ownerRole).trim();
+      if (!name) throw new AppError(ErrorCode.E_VALIDATION, '请填写门名称');
+      if (!ownerRole) throw new AppError(ErrorCode.E_VALIDATION, '请填写责任角色');
+      const seq = db
+        .prepare("SELECT COUNT(*) c FROM quality_gates WHERE project_id = ? AND code LIKE 'CUSG-%'")
+        .get(String(projectId)).c + 1;
+      code = 'CUSG-' + String(seq);
+      items = ((p.items || []).filter(function (it) { return it && mappers.toStr(it.content).trim(); }))
+        .map(function (it, i) {
+          return { content: mappers.toStr(it.content).trim(), ownerRole: mappers.toStr(it.ownerRole).trim(), source: 'custom', seq: i + 1 };
+        });
+    }
+
+    const gateId = String(projectId) + '-' + String(milestoneId) + '-G';
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO quality_gates (id, project_id, milestone_id, code, name, owner_role, status, conclusion, comment, decided_by, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)',
+    ).run(gateId, String(projectId), String(milestoneId), code, name, ownerRole, '未开始', now);
+
+    items.forEach(function (it) {
+      db.prepare(
+        'INSERT INTO gate_checklist_items (id, gate_id, seq, content, owner_role, checked, checked_by, checked_at, source) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, ?)',
+      ).run(gateId + '-I' + String(it.seq), gateId, it.seq, it.content, it.ownerRole, it.source);
+    });
+
+    writeAudit(
+      db, me, 'gate', gateId, 'create', String(projectId),
+      '为里程碑设置质量门「' + code + ' ' + name + '」（' + items.length + ' 项检查项）',
+      [],
+    );
+    return milestoneService.listMilestonesWithGate(db, projectId);
+  });
+  return tx();
+}
+
+/**
+ * 项目内修改门的名称 / 责任角色（D07 · 项目级覆盖，不影响其他项目/模板）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {import('express').Request} req
+ * @param {string} gateId
+ * @param {{name?: string, ownerRole?: string}} payload
+ * @returns {Array<object>} MilestoneWithGate[]
+ */
+function updateGate(db, req, gateId, payload) {
+  const p = payload || {};
+  const tx = db.transaction(function () {
+    const gate = requireGateRow(db, gateId);
+    const projectId = mappers.toStr(gate.project_id);
+    rbac.assertWritable(db, projectId);
+    const me = rbac.assertCan(db, req, 'milestone:edit', projectId);
+
+    const name = p.name !== undefined && p.name !== null ? mappers.toStr(p.name).trim() : mappers.toStr(gate.name);
+    const ownerRole = p.ownerRole !== undefined && p.ownerRole !== null ? mappers.toStr(p.ownerRole).trim() : mappers.toStr(gate.owner_role);
+    if (!name) throw new AppError(ErrorCode.E_VALIDATION, '门名称不能为空');
+    if (!ownerRole) throw new AppError(ErrorCode.E_VALIDATION, '责任角色不能为空');
+
+    db.prepare('UPDATE quality_gates SET name = ?, owner_role = ? WHERE id = ?').run(name, ownerRole, String(gateId));
+    writeAudit(
+      db, me, 'gate', String(gateId), 'update', projectId,
+      '修改质量门「' + mappers.toStr(gate.code) + '」设置：' +
+        (name !== mappers.toStr(gate.name) ? '名称 ' + mappers.toStr(gate.name) + ' → ' + name + '；' : '') +
+        (ownerRole !== mappers.toStr(gate.owner_role) ? '责任角色 ' + mappers.toStr(gate.owner_role) + ' → ' + ownerRole : ''),
+      [],
+    );
+    return milestoneService.listMilestonesWithGate(db, projectId);
+  });
+  return tx();
+}
+
+/**
+ * 删除门（D07 · 里程碑回到无门状态，可重新设置；检查项级联清理）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {import('express').Request} req
+ * @param {string} gateId
+ * @returns {Array<object>} MilestoneWithGate[]
+ */
+function deleteGate(db, req, gateId) {
+  const tx = db.transaction(function () {
+    const gate = requireGateRow(db, gateId);
+    const projectId = mappers.toStr(gate.project_id);
+    rbac.assertWritable(db, projectId);
+    const me = rbac.assertCan(db, req, 'milestone:edit', projectId);
+
+    db.prepare('DELETE FROM quality_gates WHERE id = ?').run(String(gateId));
+    writeAudit(
+      db, me, 'gate', String(gateId), 'delete', projectId,
+      '删除质量门「' + mappers.toStr(gate.code) + ' ' + mappers.toStr(gate.name) + '」（里程碑回到无门状态）',
+      [],
+    );
+    milestoneService.refreshMilestoneStatuses(db, projectId);
+    return milestoneService.listMilestonesWithGate(db, projectId);
+  });
+  return tx();
+}
+
 module.exports = {
   requireGateItemRow,
   requireGateRow,
@@ -310,4 +463,7 @@ module.exports = {
   addGateItem,
   updateGateItem,
   deleteGateItem,
+  addGateToMilestone,
+  updateGate,
+  deleteGate,
 };

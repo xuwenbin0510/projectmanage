@@ -27,6 +27,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 import IconButton from '@mui/material/IconButton';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
@@ -45,7 +46,7 @@ import {
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
 import { useAsync, usePermission, useToast } from '@/hooks';
-import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectStatus } from '@/types/project';
+import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectStatus, QualityGate } from '@/types/project';
 import {
   GATE_CONCLUSIONS,
   GATE_ICON,
@@ -111,34 +112,40 @@ export function ProjectOverviewPage(): JSX.Element {
   const [docStats, setDocStats] = useState<{ total: number; pending: number; done: number } | null>(null);
   /** D05：按里程碑的交付物进度（门 UI 展示） */
   const [msDocStats, setMsDocStats] = useState<Record<string, { total: number; done: number }>>({});
+  /** D06：增补必交付项后刷新文档统计 */
+  const refreshDocStats = async (): Promise<void> => {
+    if (!id) return;
+    try {
+      const list = await api.listDocuments(id);
+      setDocStats({
+        total: list.length,
+        pending: list.filter((d) => d.status === '待交付').length,
+        done: list.filter((d) => d.status !== '待交付').length,
+      });
+      const byMs: Record<string, { total: number; done: number }> = {};
+      list.forEach((d) => {
+        if (!d.milestoneId) return;
+        const cur = byMs[d.milestoneId] ?? { total: 0, done: 0 };
+        cur.total += 1;
+        if (d.status === '已交付') cur.done += 1;
+        byMs[d.milestoneId] = cur;
+      });
+      setMsDocStats(byMs);
+    } catch {
+      // 文档统计失败不影响概览
+    }
+  };
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     (async () => {
-      try {
-        const list = await api.listDocuments(id);
-        if (cancelled) return;
-        setDocStats({
-          total: list.length,
-          pending: list.filter((d) => d.status === '待交付').length,
-          done: list.filter((d) => d.status !== '待交付').length,
-        });
-        const byMs: Record<string, { total: number; done: number }> = {};
-        list.forEach((d) => {
-          if (!d.milestoneId) return;
-          const cur = byMs[d.milestoneId] ?? { total: 0, done: 0 };
-          cur.total += 1;
-          if (d.status === '已交付') cur.done += 1;
-          byMs[d.milestoneId] = cur;
-        });
-        setMsDocStats(byMs);
-      } catch {
-        // 文档统计失败不影响概览
-      }
+      await refreshDocStats();
+      if (cancelled) return;
     })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   /* D05 检查项管理（milestone:edit；custom 可增/改/删） */
@@ -180,6 +187,118 @@ export function ProjectOverviewPage(): JSX.Element {
     try {
       await api.deleteGateItem(item.id);
       toast.success('检查项已删除');
+      await refreshProject(id);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+
+  /* D06：项目内增补门控必交付项（生成待交付项，门通过前必须交付） */
+  const [reqOpen, setReqOpen] = useState(false);
+  const [reqName, setReqName] = useState('');
+  const submitRequired = async (): Promise<void> => {
+    if (!reqName.trim()) {
+      toast.error('请填写必交付项名称');
+      return;
+    }
+    if (!activeMs) return;
+    try {
+      await api.addRequiredDeliverable(id, { milestoneId: activeMs.id, name: reqName.trim() });
+      toast.success(`已新增必交付项「${reqName.trim()}」`);
+      setReqOpen(false);
+      setReqName('');
+      await Promise.all([refreshProject(id), refreshDocStats()]);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+
+  /* D07：给无门里程碑设置质量门（模板门库 / 空白新建） */
+  const [gateDialogOpen, setGateDialogOpen] = useState(false);
+  const [gateMode, setGateMode] = useState<'template' | 'blank'>('template');
+  const [gateTemplates, setGateTemplates] = useState<{ code: string; name: string; ownerRole: string; itemCount: number }[]>([]);
+  const [gateTplCode, setGateTplCode] = useState('');
+  const [gateForm, setGateForm] = useState({ name: '', ownerRole: '' });
+  const [gateItems, setGateItems] = useState<{ content: string; ownerRole: string }[]>([]);
+  const openSetGate = async (): Promise<void> => {
+    if (!project) return;
+    try {
+      const tpl = await api.getLifecycleTemplate(project.type);
+      setGateTemplates(
+        (tpl?.definition.milestones ?? [])
+          .map((m) => m.gate)
+          .filter((g): g is NonNullable<typeof g> => Boolean(g))
+          .map((g) => ({ code: g.code, name: g.name, ownerRole: g.ownerRole, itemCount: (g.items ?? []).length })),
+      );
+    } catch {
+      setGateTemplates([]);
+    }
+    setGateMode('template');
+    setGateTplCode('');
+    setGateForm({ name: '', ownerRole: '' });
+    setGateItems([]);
+    setGateDialogOpen(true);
+  };
+  const submitSetGate = async (): Promise<void> => {
+    if (!activeMs) return;
+    try {
+      if (gateMode === 'template') {
+        if (!gateTplCode) {
+          toast.error('请选择模板门');
+          return;
+        }
+        await api.setMilestoneGate(id, activeMs.id, { mode: 'template', templateCode: gateTplCode });
+      } else {
+        if (!gateForm.name.trim() || !gateForm.ownerRole.trim()) {
+          toast.error('请填写门名称与责任角色');
+          return;
+        }
+        await api.setMilestoneGate(id, activeMs.id, {
+          mode: 'blank',
+          name: gateForm.name.trim(),
+          ownerRole: gateForm.ownerRole.trim(),
+          items: gateItems.filter((it) => it.content.trim()).map((it) => ({ content: it.content.trim(), ownerRole: it.ownerRole.trim() })),
+        });
+      }
+      toast.success('质量门已设置');
+      setGateDialogOpen(false);
+      await refreshProject(id);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+
+  /* D07：修改门名称/责任角色 */
+  const [editGateOpen, setEditGateOpen] = useState(false);
+  const [editGateForm, setEditGateForm] = useState({ name: '', ownerRole: '' });
+  const openEditGate = (): void => {
+    if (!activeMs?.gate) return;
+    setEditGateForm({ name: activeMs.gate.name, ownerRole: activeMs.gate.ownerRole });
+    setEditGateOpen(true);
+  };
+  const submitEditGate = async (): Promise<void> => {
+    if (!activeMs?.gate) return;
+    try {
+      await api.updateGate(activeMs.gate.id, {
+        name: editGateForm.name.trim(),
+        ownerRole: editGateForm.ownerRole.trim(),
+      });
+      toast.success('质量门已更新');
+      setEditGateOpen(false);
+      await refreshProject(id);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+
+  /* D07：删除门（里程碑回无门状态，可重新设置） */
+  const [deleteGateTarget, setDeleteGateTarget] = useState<QualityGate | null>(null);
+  const confirmDeleteGate = async (): Promise<void> => {
+    if (!deleteGateTarget) return;
+    try {
+      await api.deleteGate(deleteGateTarget.id);
+      toast.success('质量门已删除，里程碑回到无门状态');
+      setDeleteGateTarget(null);
       await refreshProject(id);
     } catch (e) {
       toast.error(e);
@@ -379,16 +498,42 @@ export function ProjectOverviewPage(): JSX.Element {
           }
           actions={
             activeMs?.gate ? (
-              <PermissionButton
-                action="gate:decide"
-                size="small"
-                variant="contained"
-                disabled={archived}
-                disabledReason={uncheckedCount > 0 ? `还有 ${uncheckedCount} 项未确认（可提交「不通过」）` : ''}
-                onClick={() => setGateOpen(true)}
-              >
-                提交门控结论
-              </PermissionButton>
+              <Stack direction="row" spacing={0.5} alignItems="center">
+                {/* D07：编辑门 / 删除门（milestone:edit） */}
+                {canEditGate && (
+                  <>
+                    <Tooltip title="编辑门名称/责任角色">
+                      <span>
+                        <IconButton size="small" onClick={openEditGate}>
+                          <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="删除门（里程碑回到无门状态）">
+                      <span>
+                        <IconButton size="small" color="error" onClick={() => setDeleteGateTarget(activeMs.gate!)}>
+                          <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </>
+                )}
+                <PermissionButton
+                  action="gate:decide"
+                  size="small"
+                  variant="contained"
+                  disabled={archived}
+                  disabledReason={uncheckedCount > 0 ? `还有 ${uncheckedCount} 项未确认（可提交「不通过」）` : ''}
+                  onClick={() => setGateOpen(true)}
+                >
+                  提交门控结论
+                </PermissionButton>
+              </Stack>
+            ) : canEditGate && activeMs && !activeMs.done ? (
+              /* D07：无门里程碑可设置质量门 */
+              <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={() => void openSetGate()}>
+                设置质量门
+              </Button>
             ) : undefined
           }
         >
@@ -398,7 +543,9 @@ export function ProjectOverviewPage(): JSX.Element {
               description={
                 activeMs?.done
                   ? '里程碑已达成'
-                  : '无门里程碑可直接在里程碑页或上方「标记达成」触发达成，无需门控'
+                  : canEditGate
+                    ? '可点击右上角「设置质量门」，从模板门库选择或空白新建'
+                    : '无门里程碑可直接在里程碑页或上方「标记达成」触发达成，无需门控'
               }
               dense
             />
@@ -498,6 +645,10 @@ export function ProjectOverviewPage(): JSX.Element {
                   <ListItem disableGutters>
                     <Button size="small" variant="text" startIcon={<AddIcon />} onClick={() => openAddItem(activeMs.gate!.id)}>
                       添加检查项
+                    </Button>
+                    {/* D06：项目内增补门控必交付物 */}
+                    <Button size="small" variant="text" startIcon={<VerifiedOutlinedIcon />} onClick={() => setReqOpen(true)}>
+                      添加必交付项
                     </Button>
                   </ListItem>
                 )}
@@ -702,6 +853,157 @@ export function ProjectOverviewPage(): JSX.Element {
           项目自定义检查项（可编辑/删除）；模板检查项保持只读。
         </Typography>
       </FormDialog>
+
+      {/* D06：增补门控必交付项 */}
+      <FormDialog
+        open={reqOpen}
+        title={`添加必交付项 · ${activeMs?.code ?? ''} ${activeMs?.name ?? ''}`}
+        submitText="添加"
+        onClose={() => setReqOpen(false)}
+        onSubmit={() => void submitRequired()}
+      >
+        <TextField
+          label="必交付项名称"
+          value={reqName}
+          onChange={(e) => setReqName(e.target.value)}
+          fullWidth
+          placeholder="例如：竣工图纸、安全评估报告"
+        />
+        <Typography variant="caption" color="text.secondary">
+          将生成为待交付清单项（挂到当前里程碑），该里程碑质量门通过前必须完成交付。
+        </Typography>
+      </FormDialog>
+
+      {/* D07：给无门里程碑设置质量门 */}
+      <FormDialog
+        open={gateDialogOpen}
+        title={`设置质量门 · ${activeMs?.code ?? ''} ${activeMs?.name ?? ''}`}
+        submitText="设置"
+        onClose={() => setGateDialogOpen(false)}
+        onSubmit={() => void submitSetGate()}
+      >
+        <TextField
+          select
+          label="门来源"
+          value={gateMode}
+          onChange={(e) => setGateMode(e.target.value as 'template' | 'blank')}
+          fullWidth
+        >
+          <MenuItem value="template">从模板门库选择</MenuItem>
+          <MenuItem value="blank">空白新建（自定义）</MenuItem>
+        </TextField>
+        {gateMode === 'template' ? (
+          <TextField
+            select
+            label="模板门"
+            value={gateTplCode}
+            onChange={(e) => setGateTplCode(e.target.value)}
+            fullWidth
+            placeholder={gateTemplates.length === 0 ? '当前模板无门（可直接空白新建）' : ''}
+          >
+            {gateTemplates.map((g) => (
+              <MenuItem key={g.code} value={g.code}>
+                {g.code} {g.name}（{g.ownerRole.toUpperCase()} · {g.itemCount} 项检查项）
+              </MenuItem>
+            ))}
+          </TextField>
+        ) : (
+          <>
+            <TextField
+              label="门名称"
+              value={gateForm.name}
+              onChange={(e) => setGateForm((f) => ({ ...f, name: e.target.value }))}
+              fullWidth
+              placeholder="例如：采购验收门"
+            />
+            <TextField
+              label="责任角色"
+              value={gateForm.ownerRole}
+              onChange={(e) => setGateForm((f) => ({ ...f, ownerRole: e.target.value }))}
+              fullWidth
+              placeholder="如 qa / tl / pm / cm / pmo"
+            />
+            <Stack spacing={1}>
+              <Typography variant="caption" color="text.secondary">
+                检查项（可选，留空门仅靠交付物校验）
+              </Typography>
+              {gateItems.map((it, i) => (
+                <Stack key={i} direction="row" spacing={1} alignItems="center">
+                  <TextField
+                    size="small"
+                    fullWidth
+                    value={it.content}
+                    onChange={(e) =>
+                      setGateItems((arr) => arr.map((x, j) => (j === i ? { ...x, content: e.target.value } : x)))
+                    }
+                    placeholder="检查项内容"
+                  />
+                  <TextField
+                    size="small"
+                    sx={{ width: 110 }}
+                    value={it.ownerRole}
+                    onChange={(e) =>
+                      setGateItems((arr) => arr.map((x, j) => (j === i ? { ...x, ownerRole: e.target.value } : x)))
+                    }
+                    placeholder="角色"
+                  />
+                  <IconButton size="small" color="error" onClick={() => setGateItems((arr) => arr.filter((_, j) => j !== i))}>
+                    <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Stack>
+              ))}
+              <Button
+                size="small"
+                variant="text"
+                startIcon={<AddIcon />}
+                onClick={() => setGateItems((arr) => [...arr, { content: '', ownerRole: '' }])}
+              >
+                添加检查项
+              </Button>
+            </Stack>
+          </>
+        )}
+        <Typography variant="caption" color="text.secondary">
+          设置后门控自动生效：检查项勾齐 + 交付物齐备 → 通过 → 里程碑达成。
+        </Typography>
+      </FormDialog>
+
+      {/* D07：编辑门名称/责任角色 */}
+      <FormDialog
+        open={editGateOpen}
+        title={`编辑质量门 · ${activeMs?.gate?.code ?? ''}`}
+        submitText="保存"
+        onClose={() => setEditGateOpen(false)}
+        onSubmit={() => void submitEditGate()}
+      >
+        <TextField
+          label="门名称"
+          value={editGateForm.name}
+          onChange={(e) => setEditGateForm((f) => ({ ...f, name: e.target.value }))}
+          fullWidth
+        />
+        <TextField
+          label="责任角色"
+          value={editGateForm.ownerRole}
+          onChange={(e) => setEditGateForm((f) => ({ ...f, ownerRole: e.target.value }))}
+          fullWidth
+          placeholder="如 qa / tl / pm / cm / pmo"
+        />
+        <Typography variant="caption" color="text.secondary">
+          项目内修改仅影响本项目，不影响其他项目与模板定义。
+        </Typography>
+      </FormDialog>
+
+      {/* D07：删除门确认 */}
+      <ConfirmDialog
+        open={Boolean(deleteGateTarget)}
+        title="删除质量门"
+        content={`确定删除质量门「${deleteGateTarget?.code ?? ''} ${deleteGateTarget?.name ?? ''}」？删除后该里程碑回到无门状态（检查项一并清除），可重新设置。`}
+        confirmText="删除"
+        danger
+        onClose={() => setDeleteGateTarget(null)}
+        onConfirm={() => void confirmDeleteGate()}
+      />
 
       {/* 门控受阻：逐条列出未通过检查项（E_GATE_NOT_PASSED.blockers[]） */}
       <Dialog open={Boolean(gateBlockers)} onClose={() => setGateBlockers(null)} maxWidth="sm" fullWidth>

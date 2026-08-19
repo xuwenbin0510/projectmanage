@@ -488,6 +488,30 @@ export class HttpApiClient implements ApiClient {
     return post<ProjectDocument>(`/projects/${projectId}/documents/${docId}/baseline`, {});
   }
 
+  /** D06：项目内增补门控必交付项 */
+  addRequiredDeliverable(projectId: string, payload: { milestoneId: string; name: string }): Promise<ProjectDocument> {
+    return post<ProjectDocument>(`/projects/${projectId}/documents/required`, payload);
+  }
+
+  /** D07：给无门里程碑挂质量门 */
+  setMilestoneGate(
+    projectId: string,
+    milestoneId: string,
+    payload: { mode: 'template' | 'blank'; templateCode?: string; name?: string; ownerRole?: string; items?: { content: string; ownerRole?: string }[] },
+  ): Promise<MilestoneWithGate[]> {
+    return post<MilestoneWithGate[]>(`/projects/${projectId}/milestones/${milestoneId}/gate`, payload);
+  }
+
+  /** D07：修改门名称/责任角色 */
+  updateGate(gateId: string, payload: { name?: string; ownerRole?: string }): Promise<MilestoneWithGate[]> {
+    return patch<MilestoneWithGate[]>(`/gates/${gateId}`, payload);
+  }
+
+  /** D07：删除门 */
+  deleteGate(gateId: string): Promise<MilestoneWithGate[]> {
+    return del<MilestoneWithGate[]>(`/gates/${gateId}`);
+  }
+
   /** 取附件二进制流（服务端按 Content-Type 返回，便于预览/下载） */
   async downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob> {
     const q = opts?.asDownload ? '?download=1' : '';

@@ -104,4 +104,35 @@ router.post(
   }),
 );
 
+/* D07 门本身管理（milestone:edit；给无门里程碑挂门 / 改门 / 删门重挂） */
+
+/** 给无门里程碑挂质量门（模板门库 / 空白新建） */
+router.post(
+  '/projects/:projectId/milestones/:milestoneId/gate',
+  requireAuth,
+  asyncHandler(async function addGateToMilestone(req, res) {
+    res.json(
+      ok(gateService.addGateToMilestone(db, req, req.params.projectId, req.params.milestoneId, req.body || {}), '质量门已设置'),
+    );
+  }),
+);
+
+/** 修改门名称 / 责任角色 */
+router.patch(
+  '/gates/:gateId',
+  requireAuth,
+  asyncHandler(async function updateGate(req, res) {
+    res.json(ok(gateService.updateGate(db, req, req.params.gateId, req.body || {}), '质量门已更新'));
+  }),
+);
+
+/** 删除门（级联清理检查项，里程碑回无门状态） */
+router.delete(
+  '/gates/:gateId',
+  requireAuth,
+  asyncHandler(async function deleteGate(req, res) {
+    res.json(ok(gateService.deleteGate(db, req, req.params.gateId), '质量门已删除'));
+  }),
+);
+
 module.exports = router;

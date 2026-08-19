@@ -3224,7 +3224,8 @@ export class MockApiClient implements ApiClient {
 
   /** D04：懒派生（幂等）——项目无模板清单项时按模板 docs 派生（按里程碑 code 挂载） */
   private ensureTplDerived(db: MockDb, projectId: string): void {
-    if (db.documents.some((d) => d.projectId === projectId && d.templateKey)) return;
+    /* D06：只对模板项（TPL- 前缀）判重——项目自定义必交付项（CUS-）不干扰 */
+    if (db.documents.some((d) => d.projectId === projectId && d.templateKey.startsWith('TPL-'))) return;
     const proj = db.projects.find((p) => p.id === projectId);
     if (!proj) return;
     const tpl = db.templates.find((t) => t.projectType === proj.type && t.isActive);
@@ -3462,6 +3463,155 @@ export class MockApiClient implements ApiClient {
     audit(db, me, 'document', docId, 'baseline', projectId, `对交付物「${doc.name}」建立基线（v${doc.version}）`);
     saveDb();
     return deepClone(doc);
+  }
+
+  /* D06：项目内增补门控必交付项（milestone:edit；CUS- 前缀待交付项，自动参与门校验） */
+  async addRequiredDeliverable(projectId: string, payload: { milestoneId: string; name: string }): Promise<ProjectDocument> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'milestone.edit', projectId);
+    const msId = (payload.milestoneId ?? '').trim();
+    const name = (payload.name ?? '').trim();
+    if (!msId) throw new ApiError(ErrorCode.E_VALIDATION, '请选择里程碑', undefined, 400);
+    if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '必交付项名称不能为空', undefined, 400);
+    const ms = db.milestones.find((m) => m.id === msId && m.projectId === projectId);
+    if (!ms) throw new ApiError(ErrorCode.E_NOT_FOUND, '里程碑不存在', undefined, 404);
+    const seq = db.documents.filter((d) => d.projectId === projectId && d.templateKey.startsWith('CUS-')).length + 1;
+    const now = nowIso();
+    const doc: ProjectDocument = {
+      id: genId('DOC'),
+      projectId,
+      nodeId: '',
+      milestoneId: msId,
+      name,
+      fileName: '',
+      fileSize: 0,
+      mimeType: '',
+      storagePath: '',
+      docType: '',
+      url: '',
+      templateKey: `CUS-${seq}`,
+      status: '待交付',
+      version: 1,
+      baselineFlag: 0,
+      baselinedAt: '',
+      baselinedBy: '',
+      uploadedBy: '',
+      uploadedAt: '',
+      createdAt: now,
+    };
+    db.documents.push(doc);
+    audit(db, me, 'document', doc.id, 'create', projectId, `新增门控必交付项「${name}」（门通过前须交付）`);
+    saveDb();
+    return deepClone(doc);
+  }
+
+  /* D07：给无门里程碑挂质量门（模板门库 / 空白新建） */
+  async setMilestoneGate(
+    projectId: string,
+    milestoneId: string,
+    payload: { mode: 'template' | 'blank'; templateCode?: string; name?: string; ownerRole?: string; items?: { content: string; ownerRole?: string }[] },
+  ): Promise<MilestoneWithGate[]> {
+    await delay(200);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'milestone.edit', projectId);
+    const ms = db.milestones.find((m) => m.id === milestoneId && m.projectId === projectId) ?? nf();
+    if (db.gates.some((g) => g.projectId === projectId && g.milestoneId === milestoneId)) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '该里程碑已挂载质量门，如需调整请先删除或修改现有门', undefined, 400);
+    }
+    const mode = payload.mode === 'blank' ? 'blank' : 'template';
+    let code = '';
+    let name = '';
+    let ownerRole = '';
+    let items: { content: string; ownerRole: string; source: 'template' | 'custom'; seq: number }[] = [];
+    if (mode === 'template') {
+      const project = db.projects.find((p) => p.id === projectId) ?? nf();
+      const tpl = await this.getLifecycleTemplate(project.type);
+      const spec = (tpl?.definition.milestones ?? [])
+        .map((m) => m.gate)
+        .find((g) => g && g.code === payload.templateCode);
+      if (!spec) throw new ApiError(ErrorCode.E_VALIDATION, '模板门库中不存在该门：' + payload.templateCode, undefined, 400);
+      code = spec.code;
+      name = spec.name;
+      ownerRole = spec.ownerRole;
+      items = (spec.items ?? []).map((it, i) => ({ content: it.content, ownerRole: it.ownerRole, source: 'template' as const, seq: i + 1 }));
+    } else {
+      name = (payload.name ?? '').trim();
+      ownerRole = (payload.ownerRole ?? '').trim();
+      if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '请填写门名称', undefined, 400);
+      if (!ownerRole) throw new ApiError(ErrorCode.E_VALIDATION, '请填写责任角色', undefined, 400);
+      const seq = db.gates.filter((g) => g.projectId === projectId && g.code.startsWith('CUSG-')).length + 1;
+      code = `CUSG-${seq}`;
+      items = (payload.items ?? [])
+        .filter((it) => (it.content ?? '').trim())
+        .map((it, i) => ({ content: it.content.trim(), ownerRole: it.ownerRole ?? '', source: 'custom' as const, seq: i + 1 }));
+    }
+    const now = nowIso();
+    const gate: QualityGate = {
+      id: `${projectId}-${milestoneId}-G`,
+      projectId,
+      milestoneId,
+      code,
+      name,
+      ownerRole,
+      status: '未开始',
+      conclusion: '',
+      comment: '',
+      decidedBy: null,
+      decidedAt: null,
+      createdAt: now,
+    };
+    db.gates.push(gate);
+    items.forEach((it) => {
+      db.gateItems.push({
+        id: gate.id + '-I' + it.seq,
+        gateId: gate.id,
+        seq: it.seq,
+        content: it.content,
+        ownerRole: it.ownerRole,
+        checked: false,
+        checkedBy: null,
+        checkedAt: null,
+        source: it.source,
+      });
+    });
+    audit(db, me, 'gate', gate.id, 'create', projectId, `为里程碑设置质量门「${code} ${name}」（${items.length} 项检查项）`);
+    saveDb();
+    return deepClone(milestonesWithGate(db, projectId));
+  }
+
+  /* D07：修改门名称/责任角色 */
+  async updateGate(gateId: string, payload: { name?: string; ownerRole?: string }): Promise<MilestoneWithGate[]> {
+    await delay(150);
+    const db = getDb();
+    const gate = db.gates.find((g) => g.id === gateId) ?? nf();
+    assertWritable(db, gate.projectId);
+    const me = assertCan(db, 'milestone.edit', gate.projectId);
+    const name = payload.name !== undefined ? (payload.name ?? '').trim() : gate.name;
+    const ownerRole = payload.ownerRole !== undefined ? (payload.ownerRole ?? '').trim() : gate.ownerRole;
+    if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '门名称不能为空', undefined, 400);
+    if (!ownerRole) throw new ApiError(ErrorCode.E_VALIDATION, '责任角色不能为空', undefined, 400);
+    gate.name = name;
+    gate.ownerRole = ownerRole;
+    audit(db, me, 'gate', gateId, 'update', gate.projectId, `修改质量门「${gate.code}」设置`);
+    saveDb();
+    return deepClone(milestonesWithGate(db, gate.projectId));
+  }
+
+  /* D07：删除门（级联清理检查项，里程碑回无门状态） */
+  async deleteGate(gateId: string): Promise<MilestoneWithGate[]> {
+    await delay(150);
+    const db = getDb();
+    const gate = db.gates.find((g) => g.id === gateId) ?? nf();
+    assertWritable(db, gate.projectId);
+    const me = assertCan(db, 'milestone.edit', gate.projectId);
+    db.gates.splice(db.gates.indexOf(gate), 1);
+    db.gateItems = db.gateItems.filter((i) => i.gateId !== gateId);
+    audit(db, me, 'gate', gateId, 'delete', gate.projectId, `删除质量门「${gate.code} ${gate.name}」`);
+    saveDb();
+    return deepClone(milestonesWithGate(db, gate.projectId));
   }
 
   /** mock 合成占位文件（演示用，无真实文件内容） */
