@@ -38,7 +38,7 @@ import {
 import type { ProjectDocument } from '@/types/audit';
 import type { WbsNode } from '@/types/wbs';
 import type { MilestoneWithGate, User } from '@/types/project';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
 import { useAuthStore } from '@/stores/authStore';
@@ -94,7 +94,15 @@ export function DocumentsPage(): JSX.Element {
   const [wbsNodes, setWbsNodes] = useState<WbsNode[]>([]);
   const [milestones, setMilestones] = useState<MilestoneWithGate[]>([]);
   const [usersMap, setUsersMap] = useState<Record<string, string>>({});
-  const [filter, setFilter] = useState<DocFilter>({ kind: 'all', id: '' });
+  /* D04.2 反查：URL ?milestone=<id> / ?node=<id> 初始化筛选（里程碑页/WBS 页跳转进入） */
+  const [searchParams] = useSearchParams();
+  const [filter, setFilter] = useState<DocFilter>(() => {
+    const ms = searchParams.get('milestone');
+    if (ms) return { kind: 'milestone', id: ms };
+    const nd = searchParams.get('node');
+    if (nd) return { kind: 'node', id: nd };
+    return { kind: 'all', id: '' };
+  });
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);

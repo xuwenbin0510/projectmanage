@@ -23,7 +23,8 @@ import {
 } from '@mui/material';
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ROUTES } from '@/config/routes';
 
 import {
   ConfirmDialog,
@@ -72,6 +73,7 @@ interface GateBlocker {
  */
 export function ProjectOverviewPage(): JSX.Element {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const toast = useToast();
 
   const project = useProjectStore((s) => s.current);
@@ -98,6 +100,29 @@ export function ProjectOverviewPage(): JSX.Element {
       milestones.some((m) => m.id === prev) ? prev : (firstUndone ?? milestones[0])?.id ?? '',
     );
   }, [milestones]);
+
+  /** D04.2 反查：文档统计（总数/待交付/已交付） */
+  const [docStats, setDocStats] = useState<{ total: number; pending: number; done: number } | null>(null);
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await api.listDocuments(id);
+        if (cancelled) return;
+        setDocStats({
+          total: list.length,
+          pending: list.filter((d) => d.status === '待交付').length,
+          done: list.filter((d) => d.status !== '待交付').length,
+        });
+      } catch {
+        // 文档统计失败不影响概览
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   const activeMs: MilestoneWithGate | undefined = useMemo(
     () => milestones.find((m) => m.id === activeMsId),
@@ -382,6 +407,34 @@ export function ProjectOverviewPage(): JSX.Element {
               <FieldRow label="质量门">
                 已过 {milestones.filter((m) => m.gate && (m.gate.status === '已通过' || m.gate.status === '有条件通过')).length} /{' '}
                 {milestones.filter((m) => m.gate).length} 道门
+              </FieldRow>
+              {/* D04.2 反查：文档概览（点击进入文档页） */}
+              <FieldRow label="文档">
+                <Box
+                  component="button"
+                  type="button"
+                  onClick={() => navigate(ROUTES.projectDocuments(id))}
+                  title="查看项目文档"
+                  sx={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    font: 'inherit',
+                    cursor: 'pointer',
+                    bgcolor: 'transparent',
+                    border: 'none',
+                    p: 0,
+                    borderRadius: 1,
+                    color: 'primary.main',
+                    textAlign: 'left',
+                    '&:hover': { textDecoration: 'underline' },
+                  }}
+                >
+                  {docStats
+                    ? `${docStats.done}/${docStats.total} 已交付` +
+                      (docStats.pending > 0 ? ` · ${docStats.pending} 待交付` : '')
+                    : '—'}
+                </Box>
               </FieldRow>
               <FieldRow label="客户">{project.customer || '内部项目'}</FieldRow>
               <FieldRow label="合同额">{fmtAmount(project.contractAmount)}</FieldRow>
