@@ -15,8 +15,8 @@
  *        parallel_veto=首个 current step）——与 Mock `canDecide`（仅按 assignee 匹配）
  *        有差异，属预期，见 `canDecide` 注释。
  *  - 终态联动（onReviewApproved）：project → 项目 `审批中→已批准` + 审计；
- *        gate → 门 `已通过` + `milestoneService.achieveMilestoneByGate`；
- *        change → 防御性实现（本期 changes 表为空）。
+ *        gate → **仅留痕（D08.2：评审不再联动门，门控唯一通道=门区决议，避免绕过
+ *        检查项+交付物硬校验）**；change → 变更 `审批中→已批准`（milestone_date 待 apply 实施）。
  *
  * 约定（沿用既有铁律）：
  *  - service 零 Express 依赖；事务在 service；响应体禁 snake_case；审计 `writeAudit` 事务外。
@@ -671,14 +671,11 @@ function withdrawReview(db, id, payload, me) {
 function onReviewApproved(db, review, actor) {
   const actorOpenId = mappers.toStr(actor && (actor.open_id !== undefined ? actor.open_id : actor.openId));
 
+  /* ⚠ D08.2：评审通过**不再联动质量门**——门控唯一通道是门区决议（检查项勾齐 +
+   * 交付物硬校验，decideGate）。挂门评审通过仅留痕，避免绕过门控校验的旁路。 */
   if (review.refType === 'gate') {
-    const gate = db.prepare('SELECT * FROM quality_gates WHERE id = ?').get(String(review.refId || ''));
-    if (gate && gate.status !== '已通过') {
-      db.prepare(
-        "UPDATE quality_gates SET status = '已通过', conclusion = '已通过', decided_by = ?, decided_at = ? WHERE id = ?"
-      ).run(actorOpenId, dates.today(), gate.id);
-      milestoneService.achieveMilestoneByGate(db, actor, gate);
-    }
+    writeAudit(db, actor, 'review', String(review.id), 'approve', String(review.project_id),
+      '评审通过（不联动质量门）：「' + mappers.toStr(review.title) + '」');
     return;
   }
 
