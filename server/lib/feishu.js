@@ -87,4 +87,71 @@ async function getUserName(accessToken, openId) {
   return openId;
 }
 
-module.exports = { FS_API, getAppAccessToken, code2session, code2sessionV2, getUserName };
+/* ── D02 · 飞书文档链接解析 + 标题抓取（文档关联） ────── */
+
+/** 飞书链接路径段 → drive batch_query 的 doc_type 映射 */
+const FS_DOC_TYPE_BY_SEG = {
+  docx: 'docx',
+  doc: 'doc',
+  sheets: 'sheet',
+  slides: 'slide',
+  base: 'bitable',
+  wiki: 'wiki',
+  mindnotes: 'mindnote',
+};
+
+/**
+ * 解析飞书文档链接 → { docType, token }；非飞书链接返回 null。
+ * 支持 open.feishu.cn / 任意租户域（xxx.feishu.cn / xxx.larksuite.com）下的
+ * docx / doc / sheets / slides / base / wiki / mindnotes。
+ *
+ * @param {string} url
+ * @returns {{docType: string, token: string}|null}
+ */
+function parseFeishuUrl(url) {
+  const s = String(url || '').trim();
+  const m = /^https?:\/\/(?:[a-z0-9-]+\.)?(?:feishu\.cn|larksuite\.com)\/([a-z]+)\/([A-Za-z0-9_-]+)/i.exec(s);
+  if (!m) return null;
+  const docType = FS_DOC_TYPE_BY_SEG[String(m[1]).toLowerCase()];
+  if (!docType) return null;
+  return { docType: docType, token: m[2] };
+}
+
+/**
+ * 抓飞书文档标题（D02 · 文档关联自动填充）。
+ *
+ * 走 `drive/v1/metas/batch_query`（对 docx/sheet/slide/bitable/wiki 等通用）。
+ * 失败静默返回 ''（创建链接不受影响，前端展示用户填的名称或链接本身）。
+ * 未配置 FEISHU_APP_ID / FEISHU_APP_SECRET 时直接返回 ''（本地演示环境降级为纯链接）。
+ *
+ * @param {string} url 飞书文档链接
+ * @returns {Promise<string>} 标题；失败/非飞书链接/未配置凭证返回 ''
+ */
+async function fetchDocTitle(url) {
+  const p = parseFeishuUrl(url);
+  if (!p) return '';
+  if (!cfg.FEISHU_APP_ID || !cfg.FEISHU_APP_SECRET) return '';
+  try {
+    const at = await getAppAccessToken();
+    const r = await fetch(FS_API + '/drive/v1/metas/batch_query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + at },
+      body: JSON.stringify({ request_docs: [{ doc_token: p.token, doc_type: p.docType }] }),
+    });
+    const d = await r.json();
+    const meta = d && d.data && Array.isArray(d.data.metas) ? d.data.metas[0] : null;
+    return (meta && meta.title) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+module.exports = {
+  FS_API,
+  getAppAccessToken,
+  code2session,
+  code2sessionV2,
+  getUserName,
+  parseFeishuUrl,
+  fetchDocTitle,
+};
