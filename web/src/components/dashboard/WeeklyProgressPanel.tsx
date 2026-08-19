@@ -1,26 +1,33 @@
 /**
- * 上周工作进展面板（D01 · 全局总览）
+ * 上周工作进展面板（D01/D02/D03 · 全局总览）
  *
  * 挂载在全局总览（/metrics）图表区之后、项目明细表之前，突出**上周**（上一自然 ISO 周）的项目动态：
- *  ① 周报动态   —— 范围内项目上周（week=上周周码）的周报（含草稿）
- *  ② 上周任务进展 —— 上周 updated_at 落在上周区间内的叶子任务（进度更新 + 已完成均列，完成高亮）
- *  ③ 上周达成里程碑 —— 上周 done_at 落在区间内的里程碑
+ *  ① 周报动态   —— 范围内项目上周（week=上周周码）的周报（含草稿），D02 起展开勾选任务进度明细（before→after）
+ *  ② 上周任务进展 —— 上周 updated_at 落在上周区间内的叶子任务（进度更新 + 已完成均列，完成高亮；点击跳项目 WBS）
+ *  ③ 上周达成里程碑 —— 上周 done_at 落在区间内的里程碑（点击跳项目里程碑页）
+ * D03 新增：任务进度环比区块（上周 vs 前周全量快照，推进/完成/新增/回退）+ 里程碑双周达成对比。
+ * 顶部警示条：D02 上周未提交周报的进行中项目（周例会跟进补交）。
  *
  * 周一开周例会回顾「上周主要进展」：周报表按周码存储，week=上周周码天然匹配。
  * 数据源 `WeeklyProgress` 由 `GET /api/dashboard/overview` 的 `weeklyProgress` 字段一次性返回，
  * 与全局总览同源同范围（scope / 筛选 / 决策 ⑥ 已在服务端算好）。
  *
- * @prd D01
+ * @prd D01 / D02 / D03
  */
 
 import { Box, Chip, CircularProgress, Divider, Stack, Typography } from '@mui/material';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import PlaylistAddCheckOutlinedIcon from '@mui/icons-material/PlaylistAddCheckOutlined';
 import EmojiEventsOutlinedIcon from '@mui/icons-material/EmojiEventsOutlined';
+import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
+import TrendingUpOutlinedIcon from '@mui/icons-material/TrendingUpOutlined';
+import { useNavigate } from 'react-router-dom';
 import { SectionCard, StatusChip } from '@/components/common';
+import { ROUTES } from '@/config/routes';
 import { fmtDate, fmtShort, shiftWeek, weekCode, weekRange } from '@/utils/date';
 import type {
   MilestoneAchievedItem,
+  TaskDeltaItem,
   TaskUpdatedItem,
   WeeklyProgress,
   WeeklyReportItem,
@@ -112,22 +119,62 @@ function ReportRow({ r }: { r: WeeklyReportItem }): JSX.Element {
           {r.summary}
         </Typography>
       )}
+      {/* D02：周报勾选的任务进度明细（before → after） */}
+      {(r.taskRows ?? []).length > 0 && (
+        <Stack spacing={0.5} sx={{ mt: 1 }}>
+          {(r.taskRows ?? []).slice(0, 4).map((t, i) => (
+            <Stack
+              key={`${t.nodeCode}-${i}`}
+              direction="row"
+              spacing={0.75}
+              alignItems="center"
+              sx={{ bgcolor: 'action.hover', borderRadius: 1, px: 1, py: 0.5 }}
+            >
+              <Typography
+                sx={{ fontSize: 11, color: 'text.secondary', fontFamily: 'monospace', flexShrink: 0 }}
+              >
+                {t.nodeCode}
+              </Typography>
+              <Typography sx={{ fontSize: 12, minWidth: 0, flex: 1 }} noWrap>
+                {t.nodeName}
+              </Typography>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, flexShrink: 0, color: 'primary.main' }}>
+                {t.progressBefore}% → {t.progressAfter}%
+              </Typography>
+            </Stack>
+          ))}
+          {(r.taskRows ?? []).length > 4 && (
+            <Typography variant="caption" color="text.disabled" sx={{ pl: 0.5 }}>
+              等 {(r.taskRows ?? []).length} 项任务进度
+            </Typography>
+          )}
+        </Stack>
+      )}
     </Box>
   );
 }
 
-/* ── 本周任务进展行 ─────────────────────────────────── */
+/* ── 上周任务进展行 ─────────────────────────────────── */
 function TaskRow({ t }: { t: TaskUpdatedItem }): JSX.Element {
+  const navigate = useNavigate();
   return (
     <Box
+      onClick={() => navigate(ROUTES.projectWbs(t.projectId))}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') navigate(ROUTES.projectWbs(t.projectId));
+      }}
       sx={{
         p: 1.25,
         borderRadius: 1.5,
         border: '1px solid',
+        cursor: 'pointer',
         // 完成态：绿框 + 左侧绿色强调条，未完成为默认分隔线（占位保持对齐）
         borderColor: t.done ? 'success.main' : 'divider',
         borderLeft: '3px solid',
         borderLeftColor: t.done ? 'success.main' : 'transparent',
+        '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' },
       }}
     >
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
@@ -165,17 +212,26 @@ function TaskRow({ t }: { t: TaskUpdatedItem }): JSX.Element {
   );
 }
 
-/* ── 本周达成里程碑行 ───────────────────────────────── */
+/* ── 上周达成里程碑行 ───────────────────────────────── */
 function MilestoneRow({ m }: { m: MilestoneAchievedItem }): JSX.Element {
+  const navigate = useNavigate();
   return (
     <Box
+      onClick={() => navigate(ROUTES.projectMilestones(m.projectId))}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') navigate(ROUTES.projectMilestones(m.projectId));
+      }}
       sx={{
         p: 1.25,
         borderRadius: 1.5,
         border: '1px solid',
+        cursor: 'pointer',
         borderColor: 'divider',
         borderLeft: '3px solid',
         borderLeftColor: 'warning.main',
+        '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' },
       }}
     >
       <Stack direction="row" spacing={1} alignItems="center">
@@ -187,6 +243,51 @@ function MilestoneRow({ m }: { m: MilestoneAchievedItem }): JSX.Element {
       <Typography variant="caption" color="text.secondary" sx={{ mt: 0.25, display: 'block' }}>
         {m.projectName} · 达成 {fmtDate(m.doneAt)}
       </Typography>
+    </Box>
+  );
+}
+
+/* ── D03 任务进度环比行 ─────────────────────────────── */
+function DeltaRow({ t }: { t: TaskDeltaItem }): JSX.Element {
+  const up = t.delta > 0;
+  const down = t.delta < 0;
+  const accent = t.done ? 'success.main' : up ? 'primary.main' : down ? 'error.main' : 'transparent';
+  return (
+    <Box
+      sx={{
+        p: 1,
+        borderRadius: 1,
+        border: '1px solid',
+        borderColor: t.done ? 'success.main' : 'divider',
+        borderLeft: '3px solid',
+        borderLeftColor: accent,
+        bgcolor: down ? 'action.hover' : 'transparent',
+      }}
+    >
+      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: 11, color: 'text.secondary', fontFamily: 'monospace', flexShrink: 0 }}>
+          {t.wbsCode}
+        </Typography>
+        <Typography sx={{ fontSize: 12.5, fontWeight: 600, minWidth: 0, flex: 1 }} noWrap>
+          {t.name}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, display: { xs: 'none', sm: 'block' } }}>
+          {t.projectName}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+          {t.added ? '—' : `${t.prevProgress}%`} → {t.progress}%
+        </Typography>
+        <Typography
+          sx={{
+            fontSize: 12,
+            fontWeight: 700,
+            flexShrink: 0,
+            color: t.done ? 'success.main' : up ? 'primary.main' : down ? 'error.main' : 'text.secondary',
+          }}
+        >
+          {t.added ? '新增' : `${up ? '+' : ''}${t.delta}%`}
+        </Typography>
+      </Stack>
     </Box>
   );
 }
@@ -213,10 +314,77 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
   const reports = data?.reports ?? [];
   const tasks = data?.tasks ?? [];
   const milestones = data?.milestones ?? [];
+  const missing = data?.missing ?? [];
   const allEmpty = reports.length === 0 && tasks.length === 0 && milestones.length === 0;
 
   return (
     <SectionCard title="上周工作进展" subtitle={weekLabel} sx={{ mb: 2 }}>
+      {/* D02：上周未提交周报的进行中项目警示（周例会跟进补交） */}
+      {missing.length > 0 && (
+        <Box
+          sx={{
+            mb: 2,
+            p: 1.25,
+            borderRadius: 1.5,
+            border: '1px solid',
+            borderColor: 'warning.main',
+          }}
+        >
+          <Stack direction="row" spacing={1} alignItems="flex-start">
+            <ReportProblemOutlinedIcon fontSize="small" sx={{ color: 'warning.main', mt: 0.25, flexShrink: 0 }} />
+            <Box>
+              <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'warning.main' }}>
+                上周有 {missing.length} 个项目未提交周报
+              </Typography>
+              <Typography variant="body2" sx={{ fontSize: 13, color: 'text.secondary', mt: 0.25 }}>
+                {missing.slice(0, 3).map((m) => m.projectName).join('、')}
+                {missing.length > 3 ? ` 等 ${missing.length} 个` : ''} —— 建议周例会跟进补交
+              </Typography>
+            </Box>
+          </Stack>
+        </Box>
+      )}
+      {/* D03：任务进度环比（上周 vs 前周全量快照，周报提交时采集） */}
+      {data?.delta && (
+        <Box sx={{ mb: 2, p: 1.25, borderRadius: 1.5, border: '1px solid', borderColor: 'divider' }}>
+          <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+            <TrendingUpOutlinedIcon fontSize="small" sx={{ color: 'primary.main' }} />
+            <Typography sx={{ fontSize: 14, fontWeight: 600 }}>任务进度环比</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {fmtDate(weekRange(data.delta.prevWeek).start)} ~ {fmtDate(weekRange(data.delta.prevWeek).end)} → 上周
+            </Typography>
+            <Box sx={{ flex: 1 }} />
+            <Chip size="small" label={`推进 ${data.delta.advancedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'primary.main', color: '#fff' }} />
+            <Chip size="small" label={`完成 ${data.delta.completedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'success.main', color: '#fff' }} />
+            <Chip size="small" label={`新增 ${data.delta.addedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'warning.main', color: '#fff' }} />
+            <Chip size="small" label={`净增 ${data.delta.netPoints}%`} variant="outlined" sx={{ height: 22, fontWeight: 700 }} />
+            {data.milestoneCompare && (
+              <Chip
+                size="small"
+                label={`里程碑 ${data.milestoneCompare.prevDone} → ${data.milestoneCompare.lastDone}`}
+                variant="outlined"
+                sx={{ height: 22, fontWeight: 600, color: 'warning.main', borderColor: 'warning.main' }}
+              />
+            )}
+          </Stack>
+          {data.delta.tasks.length === 0 ? (
+            <Typography variant="body2" sx={{ color: 'text.disabled', py: 1.5, textAlign: 'center', fontSize: 13 }}>
+              快照数据积累中——需连续两周提交周报后生成环比
+            </Typography>
+          ) : (
+            <Stack spacing={1}>
+              {data.delta.tasks.slice(0, MAX_ITEMS).map((t) => (
+                <DeltaRow key={t.nodeId} t={t} />
+              ))}
+              {data.delta.tasks.length > MAX_ITEMS && (
+                <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
+                  共 {data.delta.tasks.length} 条变化，仅显示前 {MAX_ITEMS} 条
+                </Typography>
+              )}
+            </Stack>
+          )}
+        </Box>
+      )}
       {allEmpty ? (
         <Typography variant="body2" sx={{ color: 'text.disabled', py: 2, textAlign: 'center' }}>
           上周暂无周报提交、任务更新或里程碑达成记录

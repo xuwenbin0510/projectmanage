@@ -24,7 +24,7 @@ import type { Report, ReportTaskRow, ReportRisk } from '@/types/report';
 import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem } from '@/types/effort';
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
-import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload } from '@/types/audit';
+import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, ReportReminder, Session } from '@/types/workbench';
 import type {
   DashboardOverview,
@@ -1829,6 +1829,25 @@ export class MockApiClient implements ApiClient {
       audit(db, me, 'report', report.id, isNew ? 'create' : 'update', payload.projectId, `提交 ${payload.week} 周报，冻结 ${report.tasks.length} 条任务进度快照`, [
         { field: 'status', label: '周报状态', before: '草稿', after: '已提交' },
       ]);
+      /* D03：提交 → 全量真叶子任务快照（同周覆盖，供任务进度环比；与后端 snapshot.service 同构） */
+      const leafIds = new Set(
+        leafNodesOf(db.wbsNodes.filter((n) => n.projectId === payload.projectId)).map((n) => n.id),
+      );
+      db.progressSnapshots = db.progressSnapshots.filter(
+        (s) => !(s.projectId === payload.projectId && s.week === payload.week && leafIds.has(s.objectId)),
+      );
+      db.wbsNodes
+        .filter((n) => n.projectId === payload.projectId && leafIds.has(n.id))
+        .forEach((n) => {
+          db.progressSnapshots.push({
+            id: genId('SNAP'),
+            projectId: payload.projectId,
+            objectId: n.id,
+            week: payload.week,
+            progress: n.progress,
+            status: n.status,
+          });
+        });
     }
 
     saveDb();
@@ -2766,8 +2785,8 @@ export class MockApiClient implements ApiClient {
         .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
     })();
 
-    /* 5.6 D01：上周工作进展（口径与服务端 computeWeeklyProgress 对齐：周报=上周周码、
-       任务=真叶子且 updatedAt 落在上周区间、里程碑=doneAt 落在上周区间） */
+    /* 5.6 D01/D02：上周工作进展（口径与服务端 computeWeeklyProgress 对齐：周报=上周周码、
+       任务=真叶子且 updatedAt 落在上周区间、里程碑=doneAt 落在上周区间；D02 加 taskRows/missing） */
     const lastWeek = weekCode(addDays(today(), -7));
     const lastStart = weekRange(lastWeek).start;
     const lastEnd = weekRange(lastWeek).end;
@@ -2782,7 +2801,24 @@ export class MockApiClient implements ApiClient {
         submittedAt: r.submittedAt ?? '',
         updatedAt: r.updatedAt,
         summary: r.doneNote,
+        /* D02：周报勾选（selected=true）的关键任务进度 before→after（mock Report.tasks） */
+        taskRows: (r.tasks ?? [])
+          .filter((t) => t.selected === true)
+          .map((t) => ({
+            nodeCode: t.nodeCode,
+            nodeName: t.nodeName,
+            progressBefore: t.progressBefore,
+            progressAfter: t.progressAfter,
+          })),
       }));
+    /* D02：上周未提交周报的进行中项目（应填口径=进行中，与后端一致；基于过滤后 items） */
+    const weeklyMissing = items
+      .filter((p) => p.status === '进行中')
+      .filter(
+        (p) => !db.reports.some((r) => r.projectId === p.id && r.week === lastWeek && r.status === '已提交'),
+      )
+      .map((p) => ({ projectId: p.id, projectName: p.name }))
+      .sort((a, b) => a.projectName.localeCompare(b.projectName, 'zh-CN'));
     const weeklyTasks = leafNodesOf(db.wbsNodes)
       .filter((n) => scopeIds.has(n.projectId))
       .filter((n) => {
@@ -2814,11 +2850,73 @@ export class MockApiClient implements ApiClient {
         doneAt: m.doneAt as string,
       }))
       .sort((a, b) => (a.doneAt < b.doneAt ? 1 : a.doneAt > b.doneAt ? -1 : 0));
+
+    /* 5.7 D03：任务进度环比（上周 vs 前周全量快照）+ 里程碑双周对比（口径与服务端对齐） */
+    const prevWeek = weekCode(addDays(today(), -14));
+    const snapOf = (wk: string) => {
+      const map = new Map<string, { progress: number; status: string }>();
+      db.progressSnapshots
+        .filter((s) => s.week === wk && scopeIds.has(s.projectId))
+        .forEach((s) => map.set(s.objectId, { progress: s.progress, status: s.status }));
+      return map;
+    };
+    const prevSnap = snapOf(prevWeek);
+    const lastSnap = snapOf(lastWeek);
+    const deltaTasks: Array<{
+      nodeId: string;
+      wbsCode: string;
+      name: string;
+      projectId: string;
+      projectName: string;
+      prevProgress: number;
+      progress: number;
+      delta: number;
+      done: boolean;
+      added: boolean;
+    }> = [];
+    for (const [objectId, ls] of lastSnap) {
+      const ps = prevSnap.get(objectId);
+      const added = !ps;
+      const prevProgress = added ? -1 : ps.progress;
+      const delta = added ? 0 : ls.progress - prevProgress;
+      if (!added && delta === 0) continue;
+      const node = db.wbsNodes.find((n) => n.id === objectId);
+      deltaTasks.push({
+        nodeId: objectId,
+        wbsCode: node?.wbsCode ?? '',
+        name: node?.name ?? '',
+        projectId: node?.projectId ?? '',
+        projectName: projectNameById.get(node?.projectId ?? '') ?? DASHBOARD_UNNAMED_PROJECT,
+        prevProgress,
+        progress: ls.progress,
+        delta,
+        done: ls.status === '完成' || ls.progress >= 100,
+        added,
+      });
+    }
+    deltaTasks.sort((a, b) => b.delta - a.delta);
+    const delta = {
+      prevWeek,
+      tasks: deltaTasks.slice(0, 50),
+      advancedCount: deltaTasks.filter((t) => t.delta > 0).length,
+      completedCount: deltaTasks.filter((t) => t.done).length,
+      addedCount: deltaTasks.filter((t) => t.added).length,
+      netPoints: deltaTasks.reduce((s, t) => s + (t.delta > 0 ? t.delta : 0), 0),
+    };
+    const prevRange = weekRange(prevWeek);
+    const prevDone = db.milestones.filter(
+      (m) => scopeIds.has(m.projectId) && !!m.doneAt && m.doneAt >= prevRange.start && m.doneAt <= prevRange.end,
+    ).length;
+    const milestoneCompare = { prevWeek, prevDone, lastDone: weeklyMilestones.length };
+
     const weeklyProgress = {
       week: lastWeek,
       reports: weeklyReports,
       tasks: weeklyTasks,
       milestones: weeklyMilestones,
+      missing: weeklyMissing,
+      delta,
+      milestoneCompare,
     };
 
     /* 6. 明细表排序 + 分页（决策 ④） */
@@ -3094,6 +3192,53 @@ export class MockApiClient implements ApiClient {
       fileSize: f && typeof f.size === 'number' ? f.size : 0,
       mimeType: (f && f.type) || 'application/octet-stream',
       storagePath: `${projectId}/__mock__${id}`,
+      docType: 'file',
+      url: '',
+      uploadedBy: me.openId,
+      uploadedAt: now,
+      createdAt: now,
+    };
+    db.documents.push(doc);
+    saveDb();
+    return deepClone(doc);
+  }
+
+  /* D02：关联飞书/外链文档（mock 仅内存建 link 记录，不调飞书 API） */
+  async createLinkDocument(projectId: string, payload: CreateLinkDocumentPayload): Promise<ProjectDocument> {
+    await delay(200);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'document.upload', projectId);
+
+    const url = (payload.url ?? '').trim();
+    if (!/^https?:\/\//i.test(url)) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '链接必须以 http:// 或 https:// 开头', undefined, 400);
+    }
+    const nodeId = payload.nodeId ?? '';
+    const milestoneId = payload.milestoneId ?? '';
+    if (nodeId) {
+      const node = db.wbsNodes.find((n) => n.id === nodeId && n.projectId === projectId);
+      if (!node) throw new ApiError(ErrorCode.E_VALIDATION, '关联任务不存在', undefined, 400);
+    }
+    if (milestoneId) {
+      const ms = db.milestones.find((m) => m.id === milestoneId && m.projectId === projectId);
+      if (!ms) throw new ApiError(ErrorCode.E_VALIDATION, '关联里程碑不存在', undefined, 400);
+    }
+
+    const now = nowIso();
+    const id = genId('DOC');
+    const doc: ProjectDocument = {
+      id,
+      projectId,
+      nodeId,
+      milestoneId,
+      name: (payload.name ?? '').trim() || url,
+      fileName: '',
+      fileSize: 0,
+      mimeType: '',
+      storagePath: '',
+      docType: 'link',
+      url,
       uploadedBy: me.openId,
       uploadedAt: now,
       createdAt: now,

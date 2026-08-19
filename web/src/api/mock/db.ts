@@ -14,6 +14,16 @@ import type { Change } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import { createSeedDb } from './fixtures';
 
+/** D03：全量任务快照（mock 内存版，周报提交时采集，UNIQUE 语义由 mock 逻辑保证） */
+export interface ProgressSnapshotMock {
+  id: string;
+  projectId: string;
+  objectId: string;
+  week: string;
+  progress: number;
+  status: string;
+}
+
 /**
  * 内存 Mock 数据库（S1 静态原型唯一数据源）
  * @prd 全局
@@ -36,6 +46,8 @@ export interface MockDb {
   auditLogs: AuditLog[];
   risks: Risk[];
   documents: ProjectDocument[];
+  /** D03：全量任务快照（周报提交时采集，供任务进度环比） */
+  progressSnapshots: ProgressSnapshotMock[];
   /** 当前登录用户 openId（devlogin 写入） */
   sessionOpenId: string | null;
 }

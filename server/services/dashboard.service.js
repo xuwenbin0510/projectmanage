@@ -354,15 +354,19 @@ function computeWeeklyProgress(db, projectIds) {
   const thisWeekStartIso = dates.weekRange(dates.weekCode()).start;
 
   if (!ids.length) {
-    return { week: week, reports: [], tasks: [], milestones: [] };
+    return { week: week, reports: [], tasks: [], milestones: [], missing: [] };
   }
 
-  /* 项目名查表：id → name（缺失回落未命名项目），一次性 SELECT */
+  /* 项目名/状态查表：id → name（缺失回落未命名项目）+ status（用于未提交周报口径），一次性 SELECT */
   const projName = {};
+  const projStatus = {};
   chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
-    db.prepare('SELECT id, name FROM projects WHERE id IN (' + placeholders(part) + ')')
+    db.prepare('SELECT id, name, status FROM projects WHERE id IN (' + placeholders(part) + ')')
       .all(part)
-      .forEach(function (r) { projName[mappers.toStr(r.id)] = mappers.toStr(r.name) || agg.UNNAMED_PROJECT; });
+      .forEach(function (r) {
+        projName[mappers.toStr(r.id)] = mappers.toStr(r.name) || agg.UNNAMED_PROJECT;
+        projStatus[mappers.toStr(r.id)] = mappers.toStr(r.status);
+      });
   });
 
   /* ① 周报动态：上周（week=上周周码）范围内项目周报，提交优先、提交/更新倒序 */
@@ -387,6 +391,49 @@ function computeWeeklyProgress(db, projectIds) {
         });
       });
   });
+
+  /* ①.5 周报任务进度明细：work_report_tasks 中 selected=1（周报勾选的关键任务）逐条补齐到周报上 */
+  const reportIds = reports.map(function (r) { return r.id; });
+  if (reportIds.length) {
+    const rowsByReport = {};
+    chunk(reportIds, SQL_IN_CHUNK).forEach(function (part) {
+      db.prepare(
+        'SELECT report_id, node_code, node_name, progress_before, progress_after '
+        + 'FROM work_report_tasks WHERE report_id IN (' + placeholders(part) + ') AND selected = 1',
+      )
+        .all(part)
+        .forEach(function (r) {
+          if (!rowsByReport[r.report_id]) rowsByReport[r.report_id] = [];
+          rowsByReport[r.report_id].push({
+            nodeCode: mappers.toStr(r.node_code),
+            nodeName: mappers.toStr(r.node_name),
+            progressBefore: mappers.toNum(r.progress_before, 0),
+            progressAfter: mappers.toNum(r.progress_after, 0),
+          });
+        });
+    });
+    reports.forEach(function (r) { r.taskRows = rowsByReport[r.id] || []; });
+  } else {
+    reports.forEach(function (r) { r.taskRows = []; });
+  }
+
+  /* ①.6 上周未提交周报的项目（应填口径=进行中，与 countReportFill 一致；week=上周周码） */
+  const activeIds = ids.filter(function (id) { return projStatus[id] === '进行中'; });
+  const filledLastWeek = {};
+  chunk(activeIds, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      'SELECT DISTINCT project_id FROM work_reports WHERE project_id IN ('
+      + placeholders(part) + ') AND week = ? AND status = ?',
+    )
+      .all(part.concat([week, '已提交']))
+      .forEach(function (r) { filledLastWeek[mappers.toStr(r.project_id)] = true; });
+  });
+  const missing = activeIds
+    .filter(function (id) { return !filledLastWeek[id]; })
+    .map(function (id) {
+      return { projectId: id, projectName: projName[id] || agg.UNNAMED_PROJECT };
+    })
+    .sort(function (a, b) { return agg.compareText(a.projectName, b.projectName); });
 
   /* ② 上周任务进展：**真叶子**（leafNodesOf，含已完成）且 updated_at 落在 [上周一, 本周一)。
      不用 `node_type='task'` 直滤——父节点 node_type 也是 task（实测 9 个有子父任务），会混入汇总行；
@@ -433,7 +480,88 @@ function computeWeeklyProgress(db, projectIds) {
       });
   });
 
-  return { week: week, reports: reports, tasks: tasks, milestones: milestones };
+  /* ④ D03 任务进度环比：上周 vs 前周全量快照（progress_snapshots，周报提交时采集） */
+  const prevWeek = dates.weekCode(dates.addDays(dates.today(), -14));
+  const snapByWeek = function (wk) {
+    const map = {}; // objectId -> {progress, status, wbsCode, name, projectId}
+    chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+      db.prepare(
+        'SELECT s.object_id, s.progress, s.status, n.wbs_code, n.name, n.project_id '
+        + 'FROM progress_snapshots s JOIN wbs_nodes n ON n.id = s.object_id '
+        + 'WHERE s.project_id IN (' + placeholders(part) + ") AND s.object_type = 'task' AND s.week = ?",
+      )
+        .all(part.concat([wk]))
+        .forEach(function (r) {
+          map[mappers.toStr(r.object_id)] = {
+            progress: mappers.toNum(r.progress, 0),
+            status: mappers.toStr(r.status),
+            wbsCode: mappers.toStr(r.wbs_code),
+            name: mappers.toStr(r.name),
+            projectId: mappers.toStr(r.project_id),
+          };
+        });
+    });
+    return map;
+  };
+  const prevSnap = snapByWeek(prevWeek);
+  const lastSnap = snapByWeek(week);
+
+  const deltaTasks = [];
+  Object.keys(lastSnap).forEach(function (objectId) {
+    const ls = lastSnap[objectId];
+    const ps = prevSnap[objectId];
+    const added = !ps;
+    const prevProgress = added ? -1 : ps.progress;
+    const progress = ls.progress;
+    const delta = added ? 0 : progress - prevProgress;
+    if (!added && delta === 0) return; // 只看有实质变化的（新增 / 推进 / 回退 / 完成）
+    deltaTasks.push({
+      nodeId: objectId,
+      wbsCode: ls.wbsCode,
+      name: ls.name,
+      projectId: ls.projectId,
+      projectName: projName[ls.projectId] || agg.UNNAMED_PROJECT,
+      prevProgress: prevProgress, // -1 = 前周无快照（新增任务）
+      progress: progress,
+      delta: delta,
+      done: ls.status === '完成' || progress >= 100,
+      added: added,
+    });
+  });
+  deltaTasks.sort(function (a, b) { return b.delta - a.delta; });
+  const delta = {
+    prevWeek: prevWeek,
+    tasks: deltaTasks.slice(0, 50),
+    advancedCount: deltaTasks.filter(function (t) { return t.delta > 0; }).length,
+    completedCount: deltaTasks.filter(function (t) { return t.done; }).length,
+    addedCount: deltaTasks.filter(function (t) { return t.added; }).length,
+    netPoints: deltaTasks.reduce(function (s, t) { return s + (t.delta > 0 ? t.delta : 0); }, 0),
+  };
+
+  /* ⑤ D03 里程碑双周对比：done_at 落在 [前周一, 前周日] 的达成数（上周达成 = milestones.length） */
+  const prevRange = dates.weekRange(prevWeek);
+  const prevStart = prevRange.start.slice(0, 10);
+  const prevEnd = prevRange.end.slice(0, 10);
+  let prevDone = 0;
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    prevDone += db
+      .prepare(
+        'SELECT COUNT(*) c FROM milestones WHERE project_id IN (' + placeholders(part) + ') '
+        + 'AND done_at IS NOT NULL AND done_at >= ? AND done_at <= ?',
+      )
+      .get(part.concat([prevStart, prevEnd])).c;
+  });
+  const milestoneCompare = { prevWeek: prevWeek, prevDone: prevDone, lastDone: milestones.length };
+
+  return {
+    week: week,
+    reports: reports,
+    tasks: tasks,
+    milestones: milestones,
+    missing: missing,
+    delta: delta,
+    milestoneCompare: milestoneCompare,
+  };
 }
 
 /**

@@ -974,6 +974,73 @@ function migrationV8(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v8 建任务附件表 project_documents（C01）');
 }
 
+/* ── 迁移 v9：project_documents 加 doc_type（D02 · 飞书文档关联） ── */
+
+/**
+ * v9 = `project_documents` 增加 `doc_type`（'file' | 'link'）与 `url`（外链文档地址）。
+ *
+ * D02 起文档域支持两类记录：
+ *  - `file`：C01 的二进制附件（storage_path 落盘，默认值保持兼容）
+ *  - `link`：粘贴的飞书/外链文档（storage_path=''，url 存飞书链接，点击新标签页打开）
+ *
+ * 幂等：`hasColumn` 守卫（沿用 v1 `tasks.name` 追加列范式），重复执行安全。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV9(db, now) { // eslint-disable-line no-unused-vars
+  if (!hasColumn(db, 'project_documents', 'doc_type')) {
+    db.exec("ALTER TABLE project_documents ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'file'");
+  }
+  if (!hasColumn(db, 'project_documents', 'url')) {
+    db.exec("ALTER TABLE project_documents ADD COLUMN url TEXT NOT NULL DEFAULT ''");
+  }
+  console.log('[migrations] v9 project_documents 加 doc_type + url（file/link，D02 飞书文档关联）');
+}
+
+/* ── 迁移 v10：全量任务快照表（D03 · 周报全量快照环比） ── */
+
+/**
+ * v10 = `progress_snapshots` 全量任务快照表。
+ *
+ * D03 目标：精确环比不能只看周报勾选任务（work_report_tasks 覆盖不全），
+ * 需要「每项目每周一次**全量真叶子任务快照**」——周报提交时采集，环比 = 上周快照 vs 前周快照。
+ *
+ * 设计约定（与服务层 `server/services/snapshot.service.js` 对齐）：
+ *  - `object_type` 本期仅 'task'（里程碑用既有 done_at 双周对比，无需快照，避免过度设计）；
+ *  - `UNIQUE(object_type, object_id, week)`：每周每对象一条，同周重提 → ON CONFLICT 覆盖为最新；
+ *  - `report_id` 记录触发快照的周报，可追溯；
+ *  - 不做历史回填：快照从启用周开始积累（口径纯净，不混入勾选数据）。
+ *
+ * 幂等：`CREATE TABLE IF NOT EXISTS` + 索引 `IF NOT EXISTS`（沿用 v2/v3 范式）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV10(db, now) { // eslint-disable-line no-unused-vars
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS progress_snapshots (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      object_type TEXT NOT NULL DEFAULT 'task',
+      object_id   TEXT NOT NULL,
+      week        TEXT NOT NULL,
+      progress    INTEGER NOT NULL DEFAULT 0,
+      status      TEXT NOT NULL DEFAULT '',
+      captured_at TEXT NOT NULL,
+      report_id   TEXT,
+      UNIQUE(object_type, object_id, week)
+    );
+    CREATE INDEX IF NOT EXISTS idx_progress_snapshots_project_week
+      ON progress_snapshots(project_id, week);
+    CREATE INDEX IF NOT EXISTS idx_progress_snapshots_object
+      ON progress_snapshots(object_type, object_id);
+  `);
+  console.log('[migrations] v10 建全量任务快照表 progress_snapshots（D03）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -989,6 +1056,8 @@ const MIGRATIONS = [
   { version: 6, name: 'connect-v6-reviews-transition', up: migrationV6 },
   { version: 7, name: 'connect-v7-priority-report-confirm', up: migrationV7 },
   { version: 8, name: 'connect-v8-documents', up: migrationV8 },
+  { version: 9, name: 'connect-v9-doc-link', up: migrationV9 },
+  { version: 10, name: 'connect-v10-progress-snapshots', up: migrationV10 },
 ];
 
 /**
