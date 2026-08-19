@@ -6,6 +6,9 @@
  *  - `countPendingApprovals`  = listMyApprovals().length
  *  - `listReportReminders`  我参与且进行中项目，每项目一行（本周是否已提交周报）
  *  - `countMissingReports`   = 未填周报行数
+ * D10 补齐「门控待办」：
+ *  - `listGateTodos`       我有决议权限（global admin/pmo/qa/tl，或项目成员 qa/tl/pmo）的
+ *                          未决议门（status 未开始/待检查），含项目/里程碑上下文
  *
  * ⚠ 口径（docs/B10-任务分解.md D8 / §A3.4）：
  *  - `reportReminders` 仅「我参与（project_members 含我）且 status='进行中'」的项目；
@@ -168,6 +171,70 @@ function countMissingReports(db, me) {
   return listReportReminders(db, me).filter(function (r) { return !r.filled; }).length;
 }
 
+/**
+ * 门控待办（D10）：我有决议权限的未决议质量门。
+ *
+ * 权限口径（与 config/permissions.js `gate:decide` 一致）：
+ *  - 全局角色 admin/pmo/qa/tl → 全部未结项项目的未决议门；
+ *  - 否则 → 我以项目成员身份持有 qa/tl/pmo 角色的项目。
+ *
+ * 门状态口径：`status IN ('未开始','待检查')`（已通过/有条件通过/不通过为终态，不计）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me users 行
+ * @returns {Array<{gateId: string, projectId: string, projectName: string,
+ *   milestoneCode: string, milestoneName: string, gateCode: string, gateName: string,
+ *   ownerRole: string}>} GateTodo[]
+ */
+function listGateTodos(db, me) {
+  const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
+  if (!openId) return [];
+  const globalRole = String((me && me.global_role) || '');
+  const gateRoles = ['admin', 'pmo', 'qa', 'tl'];
+
+  let projectIds = [];
+  if (gateRoles.indexOf(globalRole) >= 0) {
+    projectIds = db
+      .prepare("SELECT id FROM projects WHERE deleted_at IS NULL AND status NOT IN ('已结项', '已终止')")
+      .all()
+      .map(function (r) { return mappers.toStr(r.id); });
+  } else {
+    projectIds = db
+      .prepare(
+        "SELECT DISTINCT pm.project_id AS pid FROM project_members pm WHERE pm.user_open_id = ? AND pm.project_role IN ('qa', 'tl', 'pmo')",
+      )
+      .all(openId)
+      .map(function (r) { return mappers.toStr(r.pid); });
+  }
+  if (projectIds.length === 0) return [];
+
+  const ph = projectIds.map(function () { return '?'; }).join(',');
+  const rows = db
+    .prepare(
+      `SELECT g.id AS gate_id, g.project_id, g.code AS gate_code, g.name AS gate_name, g.owner_role,
+              m.code AS ms_code, m.name AS ms_name, p.name AS project_name
+         FROM quality_gates g
+         JOIN milestones m ON m.id = g.milestone_id
+         JOIN projects p ON p.id = g.project_id
+        WHERE g.project_id IN (${ph})
+          AND g.status IN ('未开始', '待检查')
+        ORDER BY m.planned_date ASC, g.code ASC`,
+    )
+    .all(...projectIds);
+  return rows.map(function (r) {
+    return {
+      gateId: mappers.toStr(r.gate_id),
+      projectId: mappers.toStr(r.project_id),
+      projectName: mappers.toStr(r.project_name),
+      milestoneCode: mappers.toStr(r.ms_code),
+      milestoneName: mappers.toStr(r.ms_name),
+      gateCode: mappers.toStr(r.gate_code),
+      gateName: mappers.toStr(r.gate_name),
+      ownerRole: mappers.toStr(r.owner_role),
+    };
+  });
+}
+
 module.exports = {
   listMyTasks,
   countOverdue,
@@ -175,4 +242,5 @@ module.exports = {
   countPendingApprovals,
   listReportReminders,
   countMissingReports,
+  listGateTodos,
 };

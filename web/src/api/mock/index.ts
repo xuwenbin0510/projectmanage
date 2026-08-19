@@ -25,7 +25,7 @@ import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem 
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
-import type { WorkbenchData, ReportReminder, Session } from '@/types/workbench';
+import type { WorkbenchData, ReportReminder, GateTodo, Session } from '@/types/workbench';
 import type {
   DashboardOverview,
   DashboardOverviewQuery,
@@ -2640,16 +2640,43 @@ export class MockApiClient implements ApiClient {
 
     const overdueTasks = myTasks.filter((t) => diffDays(today(), t.dueDate) < 0).length;
 
+    /* D10：门控待办 = 我有决议权限（global admin/pmo/qa/tl 或项目成员 qa/tl/pmo）的未决议门 */
+    const gateRoles = ['admin', 'pmo', 'qa', 'tl'];
+    const projectRoleOk = new Set(
+      db.members.filter((m) => m.userOpenId === me.openId && ['qa', 'tl', 'pmo'].includes(m.projectRole)).map((m) => m.projectId),
+    );
+    const gateScopeProjects = gateRoles.includes(me.globalRole)
+      ? new Set(db.projects.filter((p) => p.status !== '已结项' && p.status !== '已终止').map((p) => p.id))
+      : projectRoleOk;
+    const gateTodos: GateTodo[] = db.gates
+      .filter((g) => gateScopeProjects.has(g.projectId) && (g.status === '未开始' || g.status === '待检查'))
+      .map((g) => {
+        const p = db.projects.find((x) => x.id === g.projectId);
+        const ms = db.milestones.find((m) => m.id === g.milestoneId);
+        return {
+          gateId: g.id,
+          projectId: g.projectId,
+          projectName: p?.name ?? '',
+          milestoneCode: ms?.code ?? '',
+          milestoneName: ms?.name ?? '',
+          gateCode: g.code,
+          gateName: g.name,
+          ownerRole: g.ownerRole,
+        };
+      });
+
     return deepClone({
       stats: {
         pendingApprovals: myApprovals.length,
         overdueTasks,
         missingReports: reportReminders.filter((r) => !r.filled).length,
+        pendingGates: gateTodos.length,
       },
       myProjects,
       myTasks,
       myApprovals,
       reportReminders,
+      gateTodos,
     });
   }
 
