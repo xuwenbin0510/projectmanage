@@ -3224,7 +3224,8 @@ export class MockApiClient implements ApiClient {
 
   /** D04：懒派生（幂等）——项目无模板清单项时按模板 docs 派生（按里程碑 code 挂载） */
   private ensureTplDerived(db: MockDb, projectId: string): void {
-    if (db.documents.some((d) => d.projectId === projectId && d.templateKey)) return;
+    /* D06：只对模板项（TPL- 前缀）判重——项目自定义必交付项（CUS-）不干扰 */
+    if (db.documents.some((d) => d.projectId === projectId && d.templateKey.startsWith('TPL-'))) return;
     const proj = db.projects.find((p) => p.id === projectId);
     if (!proj) return;
     const tpl = db.templates.find((t) => t.projectType === proj.type && t.isActive);
@@ -3460,6 +3461,48 @@ export class MockApiClient implements ApiClient {
     doc.baselinedAt = now;
     doc.baselinedBy = me.openId;
     audit(db, me, 'document', docId, 'baseline', projectId, `对交付物「${doc.name}」建立基线（v${doc.version}）`);
+    saveDb();
+    return deepClone(doc);
+  }
+
+  /* D06：项目内增补门控必交付项（milestone:edit；CUS- 前缀待交付项，自动参与门校验） */
+  async addRequiredDeliverable(projectId: string, payload: { milestoneId: string; name: string }): Promise<ProjectDocument> {
+    await delay(150);
+    const db = getDb();
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'milestone.edit', projectId);
+    const msId = (payload.milestoneId ?? '').trim();
+    const name = (payload.name ?? '').trim();
+    if (!msId) throw new ApiError(ErrorCode.E_VALIDATION, '请选择里程碑', undefined, 400);
+    if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '必交付项名称不能为空', undefined, 400);
+    const ms = db.milestones.find((m) => m.id === msId && m.projectId === projectId);
+    if (!ms) throw new ApiError(ErrorCode.E_NOT_FOUND, '里程碑不存在', undefined, 404);
+    const seq = db.documents.filter((d) => d.projectId === projectId && d.templateKey.startsWith('CUS-')).length + 1;
+    const now = nowIso();
+    const doc: ProjectDocument = {
+      id: genId('DOC'),
+      projectId,
+      nodeId: '',
+      milestoneId: msId,
+      name,
+      fileName: '',
+      fileSize: 0,
+      mimeType: '',
+      storagePath: '',
+      docType: '',
+      url: '',
+      templateKey: `CUS-${seq}`,
+      status: '待交付',
+      version: 1,
+      baselineFlag: 0,
+      baselinedAt: '',
+      baselinedBy: '',
+      uploadedBy: '',
+      uploadedAt: '',
+      createdAt: now,
+    };
+    db.documents.push(doc);
+    audit(db, me, 'document', doc.id, 'create', projectId, `新增门控必交付项「${name}」（门通过前须交付）`);
     saveDb();
     return deepClone(doc);
   }

@@ -122,6 +122,18 @@ router.post(
   }),
 );
 
+/** D06：项目内增补门控必交付项（milestone:edit 权限；生成待交付项，自动参与门校验） */
+router.post(
+  '/projects/:projectId/documents/required',
+  requireAuth,
+  asyncHandler(async function addRequiredDeliverable(req, res) {
+    const projectId = req.params.projectId;
+    rbac.assertWritable(db, projectId);
+    rbac.assertCan(db, req, 'milestone:edit', projectId);
+    res.json(ok(documentSvc.addRequiredDeliverable(db, req, projectId, req.body || {}), '已新增必交付项'));
+  }),
+);
+
 /** 删除：仅 admin / 项目负责人（document:delete） */
 router.delete(
   '/projects/:projectId/documents/:id',

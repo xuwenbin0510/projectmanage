@@ -143,8 +143,9 @@ function deriveTemplateDocs(db, projectId, tplRow) {
  * @returns {number} 本次派生的条目数（0 = 无需派生）
  */
 function ensureTemplateDerived(db, projectId) {
+  /* D06：只对模板派生项（TPL- 前缀）判重——项目自定义必交付项（CUS-）不干扰模板懒派生 */
   const has = db
-    .prepare("SELECT COUNT(*) c FROM project_documents WHERE project_id = ? AND template_key != ''")
+    .prepare("SELECT COUNT(*) c FROM project_documents WHERE project_id = ? AND template_key LIKE 'TPL-%'")
     .get(projectId).c;
   if (has > 0) return 0;
   const p = db.prepare('SELECT type FROM projects WHERE id = ?').get(projectId);
@@ -342,6 +343,55 @@ function baselineDocument(db, req, projectId, docId) {
 }
 
 /**
+ * 项目内增补「门控必交付项」（D06 · 项目级覆盖，只影响本项目）。
+ *
+ * - 生成待交付清单项：`template_key='CUS-<序号>'`（CUS- 前缀，与模板项 TPL- 区分），
+ *   milestone_id 挂到目标里程碑，status='待交付'；
+ * - **自动参与门控校验**：decideGate 的校验 SQL 是 `template_key != '' AND status='待交付'`，
+ *   CUS 项天然被覆盖——门通过前必须交付；
+ * - 交付方式与模板项一致（上传/链接覆盖升版）；可删除（删除 = 放弃该义务，不再补派生）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} req express req（权限由路由层校验，此处取操作人写审计）
+ * @param {string} projectId
+ * @param {{milestoneId?: string, name?: string}} payload
+ * @returns {object} ProjectDocument
+ * @throws {AppError} E_VALIDATION / E_NOT_FOUND
+ */
+function addRequiredDeliverable(db, req, projectId, payload) {
+  const p = payload || {};
+  const msId = String(p.milestoneId || '').trim();
+  const name = String(p.name || '').trim();
+  if (!msId) throw new AppError(ErrorCode.E_VALIDATION, '请选择里程碑');
+  if (!name) throw new AppError(ErrorCode.E_VALIDATION, '必交付项名称不能为空');
+
+  const ms = db.prepare('SELECT id FROM milestones WHERE id = ? AND project_id = ?').get(msId, projectId);
+  if (!ms) throw new AppError(ErrorCode.E_NOT_FOUND, '里程碑不存在', { milestoneId: msId });
+
+  const seq = db
+    .prepare("SELECT COUNT(*) c FROM project_documents WHERE project_id = ? AND template_key LIKE 'CUS-%'")
+    .get(projectId).c + 1;
+  const key = 'CUS-' + String(seq);
+  const now = new Date().toISOString();
+  const id = newDocId();
+  db.prepare(
+    `INSERT INTO project_documents
+      (id, project_id, node_id, milestone_id, name, file_name, file_size, mime_type,
+       storage_path, doc_type, url, uploaded_by, uploaded_at, created_at,
+       template_key, status, version, baseline_flag)
+     VALUES (?, ?, '', ?, ?, '', 0, '', '', '', '', '', ?, ?, ?, '待交付', 1, 0)`,
+  ).run(id, String(projectId), msId, name, now, now, key);
+
+  const me = req.user || {};
+  writeAudit(
+    db, me, 'document', id, 'create', String(projectId),
+    '新增门控必交付项「' + name + '」（挂里程碑 ' + msId + '，门通过前须交付）',
+    [],
+  );
+  return getDocument(db, id);
+}
+
+/**
  * 创建外链文档记录（D02 · 飞书文档关联）。
  *
  * - `url` 必须为 http(s) 链接（飞书/外链均可），存 url 列，doc_type='link'，storage_path=''；
@@ -443,6 +493,7 @@ module.exports = {
   createLinkDocument,
   deleteDocument,
   baselineDocument,
+  addRequiredDeliverable,
   deriveTemplateDocs,
   ensureTemplateDerived,
 };

@@ -349,6 +349,8 @@ export interface ApiClient {
   deleteDocument(projectId: string, id: string): Promise<ProjectDocument>;
   /** D05：对已交付模板项建立基线（幂等） */
   baselineDocument(projectId: string, docId: string): Promise<ProjectDocument>;
+  /** D06：项目内增补门控必交付项（milestone:edit；生成待交付项，自动参与门校验） */
+  addRequiredDeliverable(projectId: string, payload: { milestoneId: string; name: string }): Promise<ProjectDocument>;
   /** 取附件文件流（http 走真实端点，mock 合成占位文件）；asDownload 控制下载/预览 */
   downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob>;
 }

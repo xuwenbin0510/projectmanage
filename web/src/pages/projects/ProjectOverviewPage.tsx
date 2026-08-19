@@ -27,6 +27,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 import IconButton from '@mui/material/IconButton';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
@@ -111,34 +112,40 @@ export function ProjectOverviewPage(): JSX.Element {
   const [docStats, setDocStats] = useState<{ total: number; pending: number; done: number } | null>(null);
   /** D05：按里程碑的交付物进度（门 UI 展示） */
   const [msDocStats, setMsDocStats] = useState<Record<string, { total: number; done: number }>>({});
+  /** D06：增补必交付项后刷新文档统计 */
+  const refreshDocStats = async (): Promise<void> => {
+    if (!id) return;
+    try {
+      const list = await api.listDocuments(id);
+      setDocStats({
+        total: list.length,
+        pending: list.filter((d) => d.status === '待交付').length,
+        done: list.filter((d) => d.status !== '待交付').length,
+      });
+      const byMs: Record<string, { total: number; done: number }> = {};
+      list.forEach((d) => {
+        if (!d.milestoneId) return;
+        const cur = byMs[d.milestoneId] ?? { total: 0, done: 0 };
+        cur.total += 1;
+        if (d.status === '已交付') cur.done += 1;
+        byMs[d.milestoneId] = cur;
+      });
+      setMsDocStats(byMs);
+    } catch {
+      // 文档统计失败不影响概览
+    }
+  };
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     (async () => {
-      try {
-        const list = await api.listDocuments(id);
-        if (cancelled) return;
-        setDocStats({
-          total: list.length,
-          pending: list.filter((d) => d.status === '待交付').length,
-          done: list.filter((d) => d.status !== '待交付').length,
-        });
-        const byMs: Record<string, { total: number; done: number }> = {};
-        list.forEach((d) => {
-          if (!d.milestoneId) return;
-          const cur = byMs[d.milestoneId] ?? { total: 0, done: 0 };
-          cur.total += 1;
-          if (d.status === '已交付') cur.done += 1;
-          byMs[d.milestoneId] = cur;
-        });
-        setMsDocStats(byMs);
-      } catch {
-        // 文档统计失败不影响概览
-      }
+      await refreshDocStats();
+      if (cancelled) return;
     })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   /* D05 检查项管理（milestone:edit；custom 可增/改/删） */
@@ -181,6 +188,26 @@ export function ProjectOverviewPage(): JSX.Element {
       await api.deleteGateItem(item.id);
       toast.success('检查项已删除');
       await refreshProject(id);
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+
+  /* D06：项目内增补门控必交付项（生成待交付项，门通过前必须交付） */
+  const [reqOpen, setReqOpen] = useState(false);
+  const [reqName, setReqName] = useState('');
+  const submitRequired = async (): Promise<void> => {
+    if (!reqName.trim()) {
+      toast.error('请填写必交付项名称');
+      return;
+    }
+    if (!activeMs) return;
+    try {
+      await api.addRequiredDeliverable(id, { milestoneId: activeMs.id, name: reqName.trim() });
+      toast.success(`已新增必交付项「${reqName.trim()}」`);
+      setReqOpen(false);
+      setReqName('');
+      await Promise.all([refreshProject(id), refreshDocStats()]);
     } catch (e) {
       toast.error(e);
     }
@@ -499,6 +526,10 @@ export function ProjectOverviewPage(): JSX.Element {
                     <Button size="small" variant="text" startIcon={<AddIcon />} onClick={() => openAddItem(activeMs.gate!.id)}>
                       添加检查项
                     </Button>
+                    {/* D06：项目内增补门控必交付物 */}
+                    <Button size="small" variant="text" startIcon={<VerifiedOutlinedIcon />} onClick={() => setReqOpen(true)}>
+                      添加必交付项
+                    </Button>
                   </ListItem>
                 )}
               </List>
@@ -700,6 +731,26 @@ export function ProjectOverviewPage(): JSX.Element {
         />
         <Typography variant="caption" color="text.secondary">
           项目自定义检查项（可编辑/删除）；模板检查项保持只读。
+        </Typography>
+      </FormDialog>
+
+      {/* D06：增补门控必交付项 */}
+      <FormDialog
+        open={reqOpen}
+        title={`添加必交付项 · ${activeMs?.code ?? ''} ${activeMs?.name ?? ''}`}
+        submitText="添加"
+        onClose={() => setReqOpen(false)}
+        onSubmit={() => void submitRequired()}
+      >
+        <TextField
+          label="必交付项名称"
+          value={reqName}
+          onChange={(e) => setReqName(e.target.value)}
+          fullWidth
+          placeholder="例如：竣工图纸、安全评估报告"
+        />
+        <Typography variant="caption" color="text.secondary">
+          将生成为待交付清单项（挂到当前里程碑），该里程碑质量门通过前必须完成交付。
         </Typography>
       </FormDialog>
 
