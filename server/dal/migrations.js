@@ -1098,6 +1098,37 @@ function migrationV12(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v12 project_documents 加 baselined_at/baselined_by（D05 基线）');
 }
 
+/* ── 迁移 v13：变更单流程补全（D08） ── */
+
+/**
+ * v13 = `changes` 加变更单流程所需列：
+ *   - code        变更单编号（CHG-xxx）
+ *   - review_id   关联评审 id（ccb/pm 审批链复用 reviews 引擎）
+ *   - applied_at  实施时间
+ *   - payload     结构化变更载荷 JSON（milestone_date: {fromDate,toDate} 等）
+ *
+ * 幂等：`hasColumn` 守卫。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ * @returns {void}
+ */
+function migrationV13(db, now) { // eslint-disable-line no-unused-vars
+  if (!hasColumn(db, 'changes', 'code')) {
+    db.exec("ALTER TABLE changes ADD COLUMN code TEXT NOT NULL DEFAULT ''");
+  }
+  if (!hasColumn(db, 'changes', 'review_id')) {
+    db.exec('ALTER TABLE changes ADD COLUMN review_id TEXT');
+  }
+  if (!hasColumn(db, 'changes', 'applied_at')) {
+    db.exec('ALTER TABLE changes ADD COLUMN applied_at TEXT');
+  }
+  if (!hasColumn(db, 'changes', 'payload')) {
+    db.exec('ALTER TABLE changes ADD COLUMN payload TEXT');
+  }
+  console.log('[migrations] v13 changes 加 code/review_id/applied_at/payload（D08 变更流程）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1117,6 +1148,7 @@ const MIGRATIONS = [
   { version: 10, name: 'connect-v10-progress-snapshots', up: migrationV10 },
   { version: 11, name: 'connect-v11-template-docs', up: migrationV11 },
   { version: 12, name: 'connect-v12-doc-baseline', up: migrationV12 },
+  { version: 13, name: 'connect-v13-change-flow', up: migrationV13 },
 ];
 
 /**

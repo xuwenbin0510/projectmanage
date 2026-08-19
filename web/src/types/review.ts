@@ -1,6 +1,7 @@
 /** 评审引擎（P0-09） */
 
-export type ReviewType = 'formal' | 'technical' | 'code' | 'ccb' | 'project';
+/* D08：pm_only 变更路由 → PM 单人审批 */
+export type ReviewType = 'formal' | 'technical' | 'code' | 'ccb' | 'pm_only' | 'project';
 
 export type ReviewMode = 'serial' | 'parallel_veto' | 'single';
 

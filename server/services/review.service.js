@@ -731,6 +731,17 @@ function onReviewRejected(db, review, actor) {
       ]);
     }
   }
+
+  /* D08：变更单审批驳回 → 变更单「已驳回」（幂等：仅审批中翻转） */
+  if (review.refType === 'change') {
+    const c = db.prepare('SELECT * FROM changes WHERE id = ?').get(String(review.refId || ''));
+    if (c && mappers.toStr(c.status) === '审批中') {
+      db.prepare("UPDATE changes SET status = '已驳回', updated_at = ? WHERE id = ?").run(dates.nowIso(), String(c.id));
+      writeAudit(db, actor, 'change', String(c.id), 'reject', mappers.toStr(c.project_id),
+        '变更单 ' + mappers.toStr(c.code) + ' 审批驳回',
+        [diffEntry('status', '变更状态', '审批中', '已驳回')]);
+    }
+  }
 }
 
 module.exports = {

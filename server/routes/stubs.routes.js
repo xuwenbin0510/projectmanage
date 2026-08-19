@@ -76,15 +76,7 @@ function notImplemented(route) {
 
 /* ── 评审：桩已于 B10 移除，真实实现见 server/routes/reviews.routes.js ── */
 
-/* ── 变更（静态段 route 必须早于 :id） ────────────────── */
-
-// TODO(批次4): 变更路由判定 / 列表 / 详情 / 创建 / 提交 / 生效
-router.post('/changes/route', requireAuth, notImplemented('POST /api/changes/route'));
-router.get('/projects/:projectId/changes', requireAuth, emptyList());
-router.get('/changes/:id', requireAuth, notImplemented('GET /api/changes/:id'));
-router.post('/projects/:projectId/changes', requireAuth, notImplemented('POST /api/projects/:projectId/changes'));
-router.post('/changes/:id/submit', requireAuth, notImplemented('POST /api/changes/:id/submit'));
-router.post('/changes/:id/apply', requireAuth, notImplemented('POST /api/changes/:id/apply'));
+/* ── 变更：桩已于 D08 移除，真实实现见 server/routes/change.routes.js ── */
 
 /* ── 审计 ───────────────────────────────────────────── */
 

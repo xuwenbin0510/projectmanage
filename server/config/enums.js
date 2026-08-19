@@ -159,7 +159,8 @@ const DEFAULT_WIP_LIMIT = 5;
 
 /* ── 评审 ─────────────────────────────────────────── */
 
-const REVIEW_TYPES = ['formal', 'technical', 'code', 'ccb', 'project'];
+/* D08：pm_only 变更路由 → PM 单人审批（single） */
+const REVIEW_TYPES = ['formal', 'technical', 'code', 'ccb', 'pm_only', 'project'];
 
 const REVIEW_MODES = ['serial', 'parallel_veto', 'single'];
 
@@ -203,6 +204,13 @@ const REVIEW_TEMPLATES = {
     mode: 'serial',
     chain: ['pm', 'tl', 'po', 'customer_rep'],
     description: '基线变更 → PM → TL → PO → 客户代表 串行逐级',
+  },
+  pm_only: {
+    key: 'pm_only',
+    label: 'PM 审批',
+    mode: 'single',
+    chain: ['pm'],
+    description: '非基线小变更 → PM 单人决议并留痕',
   },
   project: {
     key: 'project',

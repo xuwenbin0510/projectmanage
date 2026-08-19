@@ -254,6 +254,7 @@ export const REVIEW_TYPE_LABEL: Record<ReviewType, string> = {
   technical: '技术评审',
   code: '代码评审',
   ccb: 'CCB 变更评审',
+  pm_only: 'PM 审批',
   project: '立项审批',
 };
 
@@ -305,6 +306,13 @@ export const REVIEW_TEMPLATES: Record<
     mode: 'serial',
     chain: ['pm', 'tl', 'po', 'customer_rep'],
     description: '基线变更 → PM → TL → PO → 客户代表 串行逐级',
+  },
+  pm_only: {
+    key: 'pm_only',
+    label: 'PM 审批',
+    mode: 'single',
+    chain: ['pm'],
+    description: '非基线小变更 → PM 单人决议并留痕',
   },
   project: {
     key: 'project',

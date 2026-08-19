@@ -2495,7 +2495,7 @@ export class MockApiClient implements ApiClient {
     const me = assertCan(db, 'change.create', change.projectId);
     if (change.status !== '草稿') throw new ApiError(ErrorCode.E_VALIDATION, '仅草稿状态可提交');
 
-    const reviewType = change.route === 'ccb' ? 'ccb' : 'technical';
+    const reviewType = change.route === 'ccb' ? 'ccb' : 'pm_only';
     const tpl = REVIEW_TEMPLATES[reviewType];
     const rid = genId('RV');
     const ts = nowIso();
