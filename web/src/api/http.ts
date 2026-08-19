@@ -417,6 +417,7 @@ export class HttpApiClient implements ApiClient {
     if (payload.nodeId) fd.append('nodeId', payload.nodeId);
     if (payload.milestoneId) fd.append('milestoneId', payload.milestoneId);
     if (payload.templateKey) fd.append('templateKey', payload.templateKey);
+    if (payload.changeNote) fd.append('changeNote', payload.changeNote);
 
     let res: Response;
     try {
@@ -449,6 +450,7 @@ export class HttpApiClient implements ApiClient {
     if (payload.nodeId) body.nodeId = payload.nodeId;
     if (payload.milestoneId) body.milestoneId = payload.milestoneId;
     if (payload.templateKey) body.templateKey = payload.templateKey;
+    if (payload.changeNote) body.changeNote = payload.changeNote;
 
     let res: Response;
     try {
