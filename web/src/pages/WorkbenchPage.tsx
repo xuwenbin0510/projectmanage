@@ -454,6 +454,8 @@ export function WorkbenchPage(): JSX.Element {
         projectName={ovDrawer.projectName}
         projects={dashboard.overdue}
         currentUserId={me?.openId}
+        /* D09：工作台入口固定「我的叶子任务」口径（与逾期 StatCard 数字一致） */
+        scopeMineOnly
         onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
       />
       <MyTasksDrawer

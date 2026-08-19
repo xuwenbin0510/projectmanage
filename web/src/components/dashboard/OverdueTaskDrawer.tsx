@@ -84,6 +84,9 @@ export interface OverdueTaskDrawerProps {
   mode?: 'project' | 'all';
   /** B15 新增：all 模式项目清单（WorkbenchPage 传 dashboard.overdue）；project 模式忽略 */
   projects?: Array<{ projectId: string; projectName: string }>;
+  /** D09 新增：固定「只看我负责的叶子任务」（工作台入口口径=StatCard 数字；
+   *  隐藏「仅看我负责」开关；副标题计数同口径） */
+  scopeMineOnly?: boolean;
   /** 关闭抽屉（遮罩 / × / ESC） */
   onClose: () => void;
 }
@@ -109,6 +112,7 @@ export function OverdueTaskDrawer({
   currentUserId,
   mode = 'project',
   projects,
+  scopeMineOnly = false,
   onClose,
 }: OverdueTaskDrawerProps): JSX.Element {
   const navigate = useNavigate();
@@ -200,11 +204,18 @@ export function OverdueTaskDrawer({
     void load();
   }, [open, mode, projectId, projects, initialTab, load]);
 
-  /* 头部副标题计数：本地重算（不依赖来源报表，更稳） */
+  /* 头部副标题计数：本地重算（不依赖来源报表，更稳）；
+     D09：scopeMineOnly 时按「我的叶子任务」同口径计数 */
   const counts = useMemo(() => {
     const { overdue, dueSoon } = splitOverdueByStatus(nodes);
+    if (scopeMineOnly) {
+      const leafIds = new Set(nodes.filter((n) => !nodes.some((c) => c.parentId === n.id)).map((n) => n.id));
+      const mine = (ns: WbsNode[]) =>
+        ns.filter((n) => n.owner === currentUserId && leafIds.has(n.id));
+      return { overdue: mine(overdue).length, dueSoon: mine(dueSoon).length };
+    }
     return { overdue: overdue.length, dueSoon: dueSoon.length };
-  }, [nodes]);
+  }, [nodes, scopeMineOnly, currentUserId]);
 
   /**
    * 当前 Tab 对应的视图模型行（WbsNode → OverdueTaskRow，含里程碑名解析）。
@@ -218,7 +229,13 @@ export function OverdueTaskDrawer({
   const baseRows = useMemo<OverdueTaskRow[]>(() => {
     const { overdue, dueSoon } = splitOverdueByStatus(nodes);
     /* splitOverdueByStatus 只过滤不克隆，元素仍是 ScopedWbsNode（带 __projectId/__projectName） */
-    const source: ScopedWbsNode[] = (tab === 'overdue' ? overdue : dueSoon) as ScopedWbsNode[];
+    let source: ScopedWbsNode[] = (tab === 'overdue' ? overdue : dueSoon) as ScopedWbsNode[];
+    /* D09：工作台入口固定「我的叶子任务」——与 StatCard 数字同口径，
+       排除父任务（父任务为汇总节点，仅全局总览展示） */
+    if (scopeMineOnly) {
+      const leafIds = new Set(nodes.filter((n) => !nodes.some((c) => c.parentId === n.id)).map((n) => n.id));
+      source = source.filter((n) => n.owner === currentUserId && leafIds.has(n.id));
+    }
     return source
       .map<OverdueTaskRow>((n) => ({
         id: n.id,
@@ -238,7 +255,7 @@ export function OverdueTaskDrawer({
         projectName: n.__projectName,
       }))
       .sort(comparePriority);
-  }, [nodes, msMap, tab]);
+  }, [nodes, msMap, tab, scopeMineOnly, currentUserId]);
 
   /* 二次筛选（P2-3 / P2-4 / B14 优先级）：仅看我负责 → 状态 → 优先级 → 关键字 */
   const filteredRows = useMemo<OverdueTaskRow[]>(() => {
@@ -379,7 +396,9 @@ export function OverdueTaskDrawer({
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap>
               {mode === 'all'
-                ? '全部项目 · 逾期 / 临期明细'
+                ? scopeMineOnly
+                  ? '我的逾期 / 临期明细'
+                  : '全部项目 · 逾期 / 临期明细'
                 : `${projectName || '项目'} · 逾期 / 临期明细`}
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -387,7 +406,7 @@ export function OverdueTaskDrawer({
               {mode === 'all' ? ` · 涉及 ${involvedProjects} 个项目` : ''}
               {isFiltering ? ` · 筛选后 ${filteredRows.length}` : ''}
             </Typography>
-            {mode === 'all' && currentUserId ? (
+            {mode === 'all' && !scopeMineOnly && currentUserId ? (
               <Typography
                 variant="caption"
                 color="text.secondary"
@@ -414,9 +433,9 @@ export function OverdueTaskDrawer({
           <Tab label="临期" value="dueSoon" />
         </Tabs>
 
-        {/* P2 工具栏：仅看我负责 / 状态筛选 / 优先级筛选 / 关键字搜索（B15 不改） */}
+        {/* P2 工具栏：仅看我负责 / 状态筛选 / 优先级筛选 / 关键字搜索（B15 不改；D09：scopeMineOnly 时隐藏开关=已固定） */}
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
-          {currentUserId ? (
+          {currentUserId && !scopeMineOnly ? (
             <FormControlLabel
               control={
                 <Switch
