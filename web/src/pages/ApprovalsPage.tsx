@@ -45,7 +45,9 @@ export function ApprovalsPage(): JSX.Element {
 
   const me = data?.todo ?? [];
   const all = data?.all ?? [];
-  const mine = all.filter((r) => r.initiator && me.every((t) => t.id !== r.id) && r.status !== '已撤回');
+  /* BUG 修复：tab 名为「其他进行中」→ 必须限定 status='审批中'（此前漏过滤，
+     把已通过/已驳回的审批完成数据混入） */
+  const mine = all.filter((r) => r.initiator && r.status === '审批中' && me.every((t) => t.id !== r.id));
 
   const rows: Review[] = tab === 'todo' ? me : tab === 'mine' ? mine : all;
 

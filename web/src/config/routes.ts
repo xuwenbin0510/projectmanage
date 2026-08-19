@@ -75,7 +75,8 @@ export const PROJECT_TABS: ProjectTabItem[] = [
   { key: 'effort', label: '工时报表', segment: 'effort' },
   { key: 'reviews', label: '评审审批', segment: 'reviews' },
   { key: 'changes', label: '变更', segment: 'changes' },
-  { key: 'audit', label: '变更历史', segment: 'audit' },
+  /* D08.3：原「变更历史」改名「审计日志」——它是全量操作留痕（不止变更单） */
+  { key: 'audit', label: '审计日志', segment: 'audit' },
   { key: 'risks', label: '风险', segment: 'risks', phase: 'P1' },
   { key: 'documents', label: '文档', segment: 'documents' },
 ];

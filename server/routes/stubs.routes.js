@@ -78,10 +78,7 @@ function notImplemented(route) {
 
 /* ── 变更：桩已于 D08 移除，真实实现见 server/routes/change.routes.js ── */
 
-/* ── 审计 ───────────────────────────────────────────── */
-
-// TODO(批次4): 审计日志（第二个分页接口）
-router.get('/audit', requireAuth, emptyPaged());
+/* ── 审计：桩已于 D08.3 移除，真实实现见 server/routes/audit.routes.js ── */
 
 /* ── 风险 / 文档 ────────────────────────────────────── */
 
