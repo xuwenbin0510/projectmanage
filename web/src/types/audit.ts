@@ -60,7 +60,10 @@ export interface Risk {
   reviewDate: string;
 }
 
-/** 任务附件（C01 真实实现）：挂在 WBS 任务或里程碑上的文件 */
+/** 文档记录类型：file=本地附件（C01）；link=飞书/外链文档（D02） */
+export type ProjectDocType = 'file' | 'link';
+
+/** 任务附件（C01/D02 真实实现）：挂在 WBS 任务或里程碑上的文件或外链文档 */
 export interface ProjectDocument {
   id: string;
   projectId: string;
@@ -69,14 +72,18 @@ export interface ProjectDocument {
   /** 关联里程碑 id；'' = 不关联 */
   milestoneId: string;
   name: string;
-  /** 落盘文件名（UUID_原名） */
+  /** 落盘文件名（UUID_原名）；link 记录为 '' */
   fileName: string;
-  /** 字节数 */
+  /** 字节数；link 记录为 0 */
   fileSize: number;
-  /** MIME 类型 */
+  /** MIME 类型；link 记录为 '' */
   mimeType: string;
-  /** 磁盘相对路径（以 ATTACHMENT_ROOT 为根），用于服务端下载 */
+  /** 磁盘相对路径（以 ATTACHMENT_ROOT 为根），用于服务端下载；link 记录为 '' */
   storagePath: string;
+  /** D02：file=本地附件 / link=外链文档 */
+  docType: ProjectDocType;
+  /** D02：外链地址（飞书文档等）；file 记录为 '' */
+  url: string;
   /** 上传人 open_id */
   uploadedBy: string;
   uploadedAt: string;
@@ -87,6 +94,18 @@ export interface ProjectDocument {
 export interface UploadDocumentPayload {
   /** 浏览器 File 对象（http 走 FormData；mock 仅取 name/size/type） */
   file: File;
+  /** 关联 WBS 任务 id（可空） */
+  nodeId?: string;
+  /** 关联里程碑 id（可空） */
+  milestoneId?: string;
+}
+
+/** 关联外链文档（飞书等）的入参（D02） */
+export interface CreateLinkDocumentPayload {
+  /** 飞书文档 / 外链 URL（http(s)://） */
+  url: string;
+  /** 展示名称（可空；服务端优先级：name > 飞书自动抓取标题 > url） */
+  name?: string;
   /** 关联 WBS 任务 id（可空） */
   nodeId?: string;
   /** 关联里程碑 id（可空） */

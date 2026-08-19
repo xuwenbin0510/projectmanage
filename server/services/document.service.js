@@ -46,6 +46,8 @@ function mapRow(r) {
     fileSize: r.file_size,
     mimeType: r.mime_type || '',
     storagePath: r.storage_path,
+    docType: r.doc_type || 'file',
+    url: r.url || '',
     uploadedBy: r.uploaded_by || '',
     uploadedAt: r.uploaded_at,
     createdAt: r.created_at,
@@ -68,6 +70,25 @@ function getDocument(db, id) {
   return mapRow(r);
 }
 
+/**
+ * 关联校验（nodeId / milestoneId 必须存在且属于当前项目）；非法抛 E_VALIDATION。
+ * 上传与链接创建共用，杜绝两处口径漂移。
+ */
+function assertAssociation(db, projectId, nodeId, milestoneId) {
+  if (nodeId) {
+    const node = db.prepare('SELECT id, project_id FROM wbs_nodes WHERE id = ?').get(nodeId);
+    if (!node || node.project_id !== projectId) {
+      throw new AppError(ErrorCode.E_VALIDATION, '关联任务不存在或不属于当前项目');
+    }
+  }
+  if (milestoneId) {
+    const ms = db.prepare('SELECT id, project_id FROM milestones WHERE id = ?').get(milestoneId);
+    if (!ms || ms.project_id !== projectId) {
+      throw new AppError(ErrorCode.E_VALIDATION, '关联里程碑不存在或不属于当前项目');
+    }
+  }
+}
+
 function uploadDocument(db, projectId, payload) {
   const file = payload.file;
   if (!file || !file.buffer || !file.originalname) {
@@ -83,18 +104,7 @@ function uploadDocument(db, projectId, payload) {
 
   const nodeId = payload.nodeId || '';
   const milestoneId = payload.milestoneId || '';
-  if (nodeId) {
-    const node = db.prepare('SELECT id, project_id FROM wbs_nodes WHERE id = ?').get(nodeId);
-    if (!node || node.project_id !== projectId) {
-      throw new AppError(ErrorCode.E_VALIDATION, '关联任务不存在或不属于当前项目');
-    }
-  }
-  if (milestoneId) {
-    const ms = db.prepare('SELECT id, project_id FROM milestones WHERE id = ?').get(milestoneId);
-    if (!ms || ms.project_id !== projectId) {
-      throw new AppError(ErrorCode.E_VALIDATION, '关联里程碑不存在或不属于当前项目');
-    }
-  }
+  assertAssociation(db, projectId, nodeId, milestoneId);
 
   const safeName = String(file.originalname).replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_').slice(-120) || 'file';
   const storedName = crypto.randomUUID() + '_' + safeName;
@@ -138,4 +148,52 @@ function deleteDocument(db, id) {
   return doc;
 }
 
-module.exports = { listDocuments, getDocument, uploadDocument, deleteDocument };
+/**
+ * 创建外链文档记录（D02 · 飞书文档关联）。
+ *
+ * - `url` 必须为 http(s) 链接（飞书/外链均可），存 url 列，doc_type='link'，storage_path=''；
+ * - 名称优先级：用户填写 name > 飞书自动抓取 title > 链接本身；
+ * - 关联校验与上传共用 `assertAssociation`（RBAC 由路由层保证，本函数只做数据层校验）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} projectId
+ * @param {{url: string, name?: string, nodeId?: string, milestoneId?: string, me?: object, title?: string}} payload
+ *   `title` 由路由层调 feishu.fetchDocTitle 抓取（失败/未配凭证为空串）
+ * @returns {object} ProjectDocument（mapRow 形态）
+ */
+function createLinkDocument(db, projectId, payload) {
+  const url = String(payload.url || '').trim();
+  if (!/^https?:\/\//i.test(url)) {
+    throw new AppError(ErrorCode.E_VALIDATION, '链接必须以 http:// 或 https:// 开头');
+  }
+  const nodeId = payload.nodeId || '';
+  const milestoneId = payload.milestoneId || '';
+  assertAssociation(db, projectId, nodeId, milestoneId);
+
+  const title = String(payload.title || '').trim();
+  const name = String(payload.name || '').trim() || title || url;
+
+  const now = new Date().toISOString();
+  const id = 'DOC_' + crypto.randomUUID().slice(0, 12);
+  db.prepare(
+    `INSERT INTO project_documents
+      (id, project_id, node_id, milestone_id, name, file_name, file_size, mime_type,
+       storage_path, doc_type, url, uploaded_by, uploaded_at, created_at)
+     VALUES (@id, @projectId, @nodeId, @milestoneId, @name, '', 0, '',
+       '', 'link', @url, @uploadedBy, @uploadedAt, @createdAt)`,
+  ).run({
+    id: id,
+    projectId: projectId,
+    nodeId: nodeId,
+    milestoneId: milestoneId,
+    name: name,
+    url: url,
+    uploadedBy: (payload.me && payload.me.open_id) || '',
+    uploadedAt: now,
+    createdAt: now,
+  });
+
+  return getDocument(db, id);
+}
+
+module.exports = { listDocuments, getDocument, uploadDocument, createLinkDocument, deleteDocument };

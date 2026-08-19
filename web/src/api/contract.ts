@@ -20,7 +20,7 @@ import type { Report } from '@/types/report';
 import type { EffortReport } from '@/types/effort';
 import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
-import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload } from '@/types/audit';
+import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
 import type { DashboardOverview, DashboardOverviewQuery, DashboardTasksQuery, DashboardTaskRow } from '@/types/dashboard';
 
@@ -340,6 +340,8 @@ export interface ApiClient {
   /* C01 任务附件 */
   listDocuments(projectId: string, opts?: { nodeId?: string; milestoneId?: string }): Promise<ProjectDocument[]>;
   uploadDocument(projectId: string, payload: UploadDocumentPayload): Promise<ProjectDocument>;
+  /** D02：关联飞书/外链文档（粘贴链接，服务端自动抓标题） */
+  createLinkDocument(projectId: string, payload: CreateLinkDocumentPayload): Promise<ProjectDocument>;
   deleteDocument(projectId: string, id: string): Promise<ProjectDocument>;
   /** 取附件文件流（http 走真实端点，mock 合成占位文件）；asDownload 控制下载/预览 */
   downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob>;

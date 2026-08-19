@@ -974,6 +974,31 @@ function migrationV8(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v8 建任务附件表 project_documents（C01）');
 }
 
+/* ── 迁移 v9：project_documents 加 doc_type（D02 · 飞书文档关联） ── */
+
+/**
+ * v9 = `project_documents` 增加 `doc_type`（'file' | 'link'）与 `url`（外链文档地址）。
+ *
+ * D02 起文档域支持两类记录：
+ *  - `file`：C01 的二进制附件（storage_path 落盘，默认值保持兼容）
+ *  - `link`：粘贴的飞书/外链文档（storage_path=''，url 存飞书链接，点击新标签页打开）
+ *
+ * 幂等：`hasColumn` 守卫（沿用 v1 `tasks.name` 追加列范式），重复执行安全。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要，保持签名一致）
+ * @returns {void}
+ */
+function migrationV9(db, now) { // eslint-disable-line no-unused-vars
+  if (!hasColumn(db, 'project_documents', 'doc_type')) {
+    db.exec("ALTER TABLE project_documents ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'file'");
+  }
+  if (!hasColumn(db, 'project_documents', 'url')) {
+    db.exec("ALTER TABLE project_documents ADD COLUMN url TEXT NOT NULL DEFAULT ''");
+  }
+  console.log('[migrations] v9 project_documents 加 doc_type + url（file/link，D02 飞书文档关联）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -989,6 +1014,7 @@ const MIGRATIONS = [
   { version: 6, name: 'connect-v6-reviews-transition', up: migrationV6 },
   { version: 7, name: 'connect-v7-priority-report-confirm', up: migrationV7 },
   { version: 8, name: 'connect-v8-documents', up: migrationV8 },
+  { version: 9, name: 'connect-v9-doc-link', up: migrationV9 },
 ];
 
 /**

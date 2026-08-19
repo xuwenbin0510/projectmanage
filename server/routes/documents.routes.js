@@ -23,6 +23,7 @@ const { ok, asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
 const { requireAuth } = require('../middleware/auth');
 const rbac = require('../middleware/rbac');
 const documentSvc = require('../services/document.service');
+const feishu = require('../lib/feishu');
 
 const router = express.Router();
 
@@ -65,24 +66,43 @@ router.get(
 
 /* ── 写 ─────────────────────────────────────────────── */
 
-/** 上传：multipart/form-data，字段名 `file`；可选 `nodeId` / `milestoneId` 关联任务或里程碑 */
+/** 上传 / 关联链接（D02）：multipart 带 file → 文件上传；JSON 带 url → 飞书/外链文档记录。
+ *  链接模式：自动抓飞书标题（未配凭证/失败降级为纯链接），名称优先级 name > title > url。 */
 router.post(
   '/projects/:projectId/documents',
   requireAuth,
   uploadSingle('file'),
-  asyncHandler(async function uploadDocument(req, res) {
+  asyncHandler(async function uploadOrCreateLink(req, res) {
     const projectId = req.params.projectId;
     rbac.assertWritable(db, projectId);
     rbac.assertCan(db, req, 'document:upload', projectId);
 
     const body = req.body || {};
-    const doc = documentSvc.uploadDocument(db, projectId, {
-      file: req.file,
-      nodeId: body.nodeId || '',
-      milestoneId: body.milestoneId || '',
-      me: req.user,
-    });
-    res.json(ok(doc, '上传成功'));
+
+    if (req.file) {
+      const doc = documentSvc.uploadDocument(db, projectId, {
+        file: req.file,
+        nodeId: body.nodeId || '',
+        milestoneId: body.milestoneId || '',
+        me: req.user,
+      });
+      return res.json(ok(doc, '上传成功'));
+    }
+
+    if (body.url) {
+      const title = await feishu.fetchDocTitle(body.url);
+      const doc = documentSvc.createLinkDocument(db, projectId, {
+        url: body.url,
+        name: body.name,
+        nodeId: body.nodeId,
+        milestoneId: body.milestoneId,
+        me: req.user,
+        title: title,
+      });
+      return res.json(ok(doc, '已关联文档'));
+    }
+
+    throw new AppError(ErrorCode.E_VALIDATION, '请提供文件或链接');
   }),
 );
 
@@ -114,6 +134,11 @@ router.get(
     const doc = documentSvc.getDocument(db, req.params.id);
     if (doc.projectId !== projectId) {
       throw new AppError(ErrorCode.E_FORBIDDEN, '附件不属于当前项目');
+    }
+
+    /* D02：链接记录无本地文件，直接 302 到外部文档（前端通常用 url 打开，此为防御路径） */
+    if (doc.docType === 'link' && doc.url) {
+      return res.redirect(doc.url);
     }
 
     const root = cfg.ATTACHMENT_ROOT;

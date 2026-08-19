@@ -20,7 +20,7 @@ import type { Report } from '@/types/report';
 import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
-import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload } from '@/types/audit';
+import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
 import type { DashboardOverview, DashboardOverviewQuery, DashboardTasksQuery, DashboardTaskRow } from '@/types/dashboard';
 import type {
@@ -410,6 +410,40 @@ export class HttpApiClient implements ApiClient {
         method: 'POST',
         headers: { ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
         body: fd,
+      });
+    } catch {
+      throw new ApiError(ErrorCode.E_NETWORK, undefined, undefined, 0);
+    }
+
+    let p: ApiEnvelope<ProjectDocument> | null = null;
+    try {
+      p = (await res.json()) as ApiEnvelope<ProjectDocument>;
+    } catch {
+      p = null;
+    }
+    if (!res.ok || !p || p.code !== 0) {
+      const code = p && p.code !== 0 ? String(p.code) : ErrorCode.E_NETWORK;
+      throw new ApiError(code, p?.message, (p as unknown as { data?: unknown })?.data, res.status);
+    }
+    return p.data;
+  }
+
+  /** D02：关联飞书/外链文档（JSON 体，服务端自动抓标题） */
+  async createLinkDocument(projectId: string, payload: CreateLinkDocumentPayload): Promise<ProjectDocument> {
+    const body: Record<string, string> = { url: payload.url };
+    if (payload.name) body.name = payload.name;
+    if (payload.nodeId) body.nodeId = payload.nodeId;
+    if (payload.milestoneId) body.milestoneId = payload.milestoneId;
+
+    let res: Response;
+    try {
+      res = await fetch(`${BASE}/projects/${projectId}/documents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+        },
+        body: JSON.stringify(body),
       });
     } catch {
       throw new ApiError(ErrorCode.E_NETWORK, undefined, undefined, 0);

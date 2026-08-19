@@ -15,8 +15,13 @@ import {
   MenuItem,
   Chip,
   Tooltip,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
+import OpenInNewOutlinedIcon from '@mui/icons-material/OpenInNewOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
@@ -57,7 +62,9 @@ function isPreviewable(mime: string): boolean {
   return mime.startsWith('image/') || mime === 'application/pdf';
 }
 
-function iconFor(mime: string) {
+function iconFor(d: ProjectDocument) {
+  if (d.docType === 'link') return <LinkOutlinedIcon fontSize="small" />;
+  const mime = d.mimeType || '';
   if (mime.startsWith('image/')) return <ImageOutlinedIcon fontSize="small" />;
   if (mime === 'application/pdf') return <PictureAsPdfIcon fontSize="small" />;
   return <InsertDriveFileOutlinedIcon fontSize="small" />;
@@ -96,6 +103,10 @@ export function DocumentsPage(): JSX.Element {
   const [uploadKind, setUploadKind] = useState<FilterKind>('none' as FilterKind);
   const [uploadTarget, setUploadTarget] = useState('');
   const [uploading, setUploading] = useState(false);
+  /* D02：粘贴链接模式（false=上传文件 / true=关联飞书文档） */
+  const [linkMode, setLinkMode] = useState(false);
+  const [linkName, setLinkName] = useState('');
+  const [linkUrl, setLinkUrl] = useState('');
 
   const nodeMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -154,22 +165,39 @@ export function DocumentsPage(): JSX.Element {
     setUploadFile(null);
     setUploadKind('none' as FilterKind);
     setUploadTarget('');
+    setLinkMode(false);
+    setLinkName('');
+    setLinkUrl('');
     setUploadOpen(true);
   };
 
-  const doUpload = async () => {
-    if (!uploadFile) {
-      toast.error('请先选择文件');
-      return;
-    }
+  const doSubmit = async () => {
     setUploading(true);
     try {
-      await api.uploadDocument(id, {
-        file: uploadFile,
-        nodeId: uploadKind === 'node' ? uploadTarget : '',
-        milestoneId: uploadKind === 'milestone' ? uploadTarget : '',
-      });
-      toast.success('上传成功');
+      if (linkMode) {
+        if (!linkUrl.trim()) {
+          toast.error('请粘贴飞书文档链接');
+          return;
+        }
+        await api.createLinkDocument(id, {
+          url: linkUrl.trim(),
+          name: linkName.trim() || undefined,
+          nodeId: uploadKind === 'node' ? uploadTarget : '',
+          milestoneId: uploadKind === 'milestone' ? uploadTarget : '',
+        });
+        toast.success('已关联文档');
+      } else {
+        if (!uploadFile) {
+          toast.error('请先选择文件');
+          return;
+        }
+        await api.uploadDocument(id, {
+          file: uploadFile,
+          nodeId: uploadKind === 'node' ? uploadTarget : '',
+          milestoneId: uploadKind === 'milestone' ? uploadTarget : '',
+        });
+        toast.success('上传成功');
+      }
       setUploadOpen(false);
       const opts =
         filter.kind === 'node'
@@ -228,14 +256,16 @@ export function DocumentsPage(): JSX.Element {
   const columns: Array<Column<ProjectDocument>> = [
     {
       key: 'name',
-      label: '文件',
+      label: '文档',
       render: (d) => (
         <Stack direction="row" spacing={1} alignItems="center">
-          <Box sx={{ color: 'text.secondary', display: 'flex' }}>{iconFor(d.mimeType)}</Box>
+          <Box sx={{ color: 'text.secondary', display: 'flex' }}>{iconFor(d)}</Box>
           <Box>
             <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{d.name}</Typography>
-            <Typography variant="caption" color="text.secondary">
-              {formatSize(d.fileSize)} · {d.mimeType || '未知类型'}
+            <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+              {d.docType === 'link'
+                ? d.url
+                : `${formatSize(d.fileSize)} · ${d.mimeType || '未知类型'}`}
             </Typography>
           </Box>
         </Stack>
@@ -261,18 +291,28 @@ export function DocumentsPage(): JSX.Element {
       align: 'center',
       render: (d) => (
         <Stack direction="row" spacing={0.5} justifyContent="center">
-          {isPreviewable(d.mimeType) && (
-            <Tooltip title="预览">
-              <IconButton size="small" onClick={() => doPreview(d)}>
-                <VisibilityOutlinedIcon fontSize="small" />
+          {d.docType === 'link' ? (
+            <Tooltip title="打开文档">
+              <IconButton size="small" onClick={() => window.open(d.url, '_blank', 'noopener')}>
+                <OpenInNewOutlinedIcon fontSize="small" />
               </IconButton>
             </Tooltip>
+          ) : (
+            <>
+              {isPreviewable(d.mimeType) && (
+                <Tooltip title="预览">
+                  <IconButton size="small" onClick={() => doPreview(d)}>
+                    <VisibilityOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+              <Tooltip title="下载">
+                <IconButton size="small" onClick={() => doDownload(d)}>
+                  <DownloadOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </>
           )}
-          <Tooltip title="下载">
-            <IconButton size="small" onClick={() => doDownload(d)}>
-              <DownloadOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
           {can('document:delete') && (
             <Tooltip title="删除">
               <IconButton size="small" color="error" onClick={() => doDelete(d)}>
@@ -289,7 +329,7 @@ export function DocumentsPage(): JSX.Element {
     <Stack spacing={2.5}>
       <PageHeader
         title="任务附件"
-        subtitle="C01 · 方案 A：在 WBS 任务或里程碑上挂载交付文件，支持上传 / 预览 / 下载 / 删除（单文件 ≤ 20MB）"
+        subtitle="C01/D02：在 WBS 任务或里程碑上挂载交付文件（上传 ≤ 20MB）或关联飞书文档（粘贴链接自动抓标题）"
         actions={
           can('document:upload') ? (
             <Button variant="contained" startIcon={<UploadFileIcon />} onClick={openUpload}>
@@ -336,17 +376,56 @@ export function DocumentsPage(): JSX.Element {
       </SectionCard>
 
       <Dialog open={uploadOpen} onClose={() => !uploading && setUploadOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>上传附件</DialogTitle>
+        <DialogTitle>{linkMode ? '关联飞书文档' : '上传附件'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 0.5 }}>
-            <Button variant="outlined" component="label" startIcon={<UploadFileIcon />}>
-              {uploadFile ? `已选：${uploadFile.name}` : '选择文件'}
-              <input
-                hidden
-                type="file"
-                onChange={(e) => setUploadFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
-              />
-            </Button>
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={linkMode ? 'link' : 'file'}
+              onChange={(_e, v: string | null) => {
+                if (v === 'link' || v === 'file') setLinkMode(v === 'link');
+              }}
+              fullWidth
+            >
+              <ToggleButton value="file" disabled={uploading}>
+                上传文件
+              </ToggleButton>
+              <ToggleButton value="link" disabled={uploading}>
+                粘贴链接
+              </ToggleButton>
+            </ToggleButtonGroup>
+
+            {linkMode ? (
+              <>
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="飞书文档链接"
+                  placeholder="https://xxx.feishu.cn/docx/xxxxxxxx"
+                  value={linkUrl}
+                  onChange={(e) => setLinkUrl(e.target.value)}
+                  helperText="粘贴飞书文档 / 知识库 / 表格链接，自动抓取文档标题（未配置飞书凭证时使用你填写的名称）"
+                />
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="展示名称（可选）"
+                  placeholder="留空则用文档标题 / 链接"
+                  value={linkName}
+                  onChange={(e) => setLinkName(e.target.value)}
+                />
+              </>
+            ) : (
+              <Button variant="outlined" component="label" startIcon={<UploadFileIcon />}>
+                {uploadFile ? `已选：${uploadFile.name}` : '选择文件'}
+                <input
+                  hidden
+                  type="file"
+                  onChange={(e) => setUploadFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+                />
+              </Button>
+            )}
 
             <FormControl size="small" fullWidth>
               <InputLabel id="upload-kind-label">关联对象</InputLabel>
@@ -402,7 +481,9 @@ export function DocumentsPage(): JSX.Element {
             )}
 
             <Typography variant="caption" color="text.secondary">
-              允许图片 / PDF / Office / 文本 / 压缩包等常见格式，单文件不超过 20MB。
+              {linkMode
+                ? '链接记录点击「打开文档」跳转飞书；支持 docx / wiki / sheets / slides / 多维表格。'
+                : '允许图片 / PDF / Office / 文本 / 压缩包等常见格式，单文件不超过 20MB。'}
             </Typography>
           </Stack>
         </DialogContent>
@@ -410,8 +491,12 @@ export function DocumentsPage(): JSX.Element {
           <Button onClick={() => setUploadOpen(false)} disabled={uploading}>
             取消
           </Button>
-          <Button variant="contained" onClick={doUpload} disabled={!uploadFile || uploading}>
-            {uploading ? '上传中…' : '上传'}
+          <Button
+            variant="contained"
+            onClick={doSubmit}
+            disabled={uploading || (linkMode ? !linkUrl.trim() : !uploadFile)}
+          >
+            {uploading ? '处理中…' : linkMode ? '关联' : '上传'}
           </Button>
         </DialogActions>
       </Dialog>

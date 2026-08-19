@@ -208,7 +208,25 @@ export interface OverdueDurationDistribution {
  * 口径：本周（ISO 周 · 周一~周日）。
  * ========================================================================== */
 
-/** 周报动态单行：本周（week = weekCode）范围内项目的周报 */
+/** 周报任务进度行（D02 · 周报勾选的关键任务 before→after） */
+export interface WeeklyTaskRowItem {
+  /** WBS 编码 */
+  nodeCode: string;
+  /** 任务名 */
+  nodeName: string;
+  /** 周报提交前进度 0~100 */
+  progressBefore: number;
+  /** 周报提交后进度 0~100 */
+  progressAfter: number;
+}
+
+/** 上周未提交周报的项目（D02 · 应填口径=进行中） */
+export interface WeeklyMissingItem {
+  projectId: string;
+  projectName: string;
+}
+
+/** 周报动态单行：上周（week=上周周码）范围内项目的周报 */
 export interface WeeklyReportItem {
   /** 周报 id（work_reports.id） */
   id: string;
@@ -222,8 +240,10 @@ export interface WeeklyReportItem {
   submittedAt: string;
   /** 最后更新时间（ISO） */
   updatedAt: string;
-  /** 本周完成说明（done_note），未填为 '' */
+  /** 上周完成说明（done_note），未填为 '' */
   summary: string;
+  /** D02：该周报勾选的任务进度明细（selected=1；无则空数组） */
+  taskRows: WeeklyTaskRowItem[];
 }
 
 /** 本周任务进展单行：本周 updated_at 落在 ISO 周内的叶子任务（含进度更新与已完成） */
@@ -260,16 +280,18 @@ export interface MilestoneAchievedItem {
   doneAt: string;
 }
 
-/** 本周工作进展聚合（D01 面板数据源） */
+/** 上周工作进展聚合（D01/D02 面板数据源） */
 export interface WeeklyProgress {
-  /** 本周周码 'YYYY-Www'，用于面板副标题 */
+  /** 上周周码 'YYYY-Www'，用于面板副标题 */
   week: string;
   /** 周报动态列表（提交/更新倒序） */
   reports: WeeklyReportItem[];
-  /** 本周任务进展列表（updated_at 倒序；完成后置 done=true） */
+  /** 上周任务进展列表（updated_at 倒序；完成后置 done=true） */
   tasks: TaskUpdatedItem[];
-  /** 本周达成里程碑列表（done_at 倒序） */
+  /** 上周达成里程碑列表（done_at 倒序） */
   milestones: MilestoneAchievedItem[];
+  /** D02：上周未提交周报的进行中项目（按项目名升序） */
+  missing: WeeklyMissingItem[];
 }
 
 /** 全局总览完整响应 */

@@ -354,15 +354,19 @@ function computeWeeklyProgress(db, projectIds) {
   const thisWeekStartIso = dates.weekRange(dates.weekCode()).start;
 
   if (!ids.length) {
-    return { week: week, reports: [], tasks: [], milestones: [] };
+    return { week: week, reports: [], tasks: [], milestones: [], missing: [] };
   }
 
-  /* 项目名查表：id → name（缺失回落未命名项目），一次性 SELECT */
+  /* 项目名/状态查表：id → name（缺失回落未命名项目）+ status（用于未提交周报口径），一次性 SELECT */
   const projName = {};
+  const projStatus = {};
   chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
-    db.prepare('SELECT id, name FROM projects WHERE id IN (' + placeholders(part) + ')')
+    db.prepare('SELECT id, name, status FROM projects WHERE id IN (' + placeholders(part) + ')')
       .all(part)
-      .forEach(function (r) { projName[mappers.toStr(r.id)] = mappers.toStr(r.name) || agg.UNNAMED_PROJECT; });
+      .forEach(function (r) {
+        projName[mappers.toStr(r.id)] = mappers.toStr(r.name) || agg.UNNAMED_PROJECT;
+        projStatus[mappers.toStr(r.id)] = mappers.toStr(r.status);
+      });
   });
 
   /* ① 周报动态：上周（week=上周周码）范围内项目周报，提交优先、提交/更新倒序 */
@@ -387,6 +391,49 @@ function computeWeeklyProgress(db, projectIds) {
         });
       });
   });
+
+  /* ①.5 周报任务进度明细：work_report_tasks 中 selected=1（周报勾选的关键任务）逐条补齐到周报上 */
+  const reportIds = reports.map(function (r) { return r.id; });
+  if (reportIds.length) {
+    const rowsByReport = {};
+    chunk(reportIds, SQL_IN_CHUNK).forEach(function (part) {
+      db.prepare(
+        'SELECT report_id, node_code, node_name, progress_before, progress_after '
+        + 'FROM work_report_tasks WHERE report_id IN (' + placeholders(part) + ') AND selected = 1',
+      )
+        .all(part)
+        .forEach(function (r) {
+          if (!rowsByReport[r.report_id]) rowsByReport[r.report_id] = [];
+          rowsByReport[r.report_id].push({
+            nodeCode: mappers.toStr(r.node_code),
+            nodeName: mappers.toStr(r.node_name),
+            progressBefore: mappers.toNum(r.progress_before, 0),
+            progressAfter: mappers.toNum(r.progress_after, 0),
+          });
+        });
+    });
+    reports.forEach(function (r) { r.taskRows = rowsByReport[r.id] || []; });
+  } else {
+    reports.forEach(function (r) { r.taskRows = []; });
+  }
+
+  /* ①.6 上周未提交周报的项目（应填口径=进行中，与 countReportFill 一致；week=上周周码） */
+  const activeIds = ids.filter(function (id) { return projStatus[id] === '进行中'; });
+  const filledLastWeek = {};
+  chunk(activeIds, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      'SELECT DISTINCT project_id FROM work_reports WHERE project_id IN ('
+      + placeholders(part) + ') AND week = ? AND status = ?',
+    )
+      .all(part.concat([week, '已提交']))
+      .forEach(function (r) { filledLastWeek[mappers.toStr(r.project_id)] = true; });
+  });
+  const missing = activeIds
+    .filter(function (id) { return !filledLastWeek[id]; })
+    .map(function (id) {
+      return { projectId: id, projectName: projName[id] || agg.UNNAMED_PROJECT };
+    })
+    .sort(function (a, b) { return agg.compareText(a.projectName, b.projectName); });
 
   /* ② 上周任务进展：**真叶子**（leafNodesOf，含已完成）且 updated_at 落在 [上周一, 本周一)。
      不用 `node_type='task'` 直滤——父节点 node_type 也是 task（实测 9 个有子父任务），会混入汇总行；
@@ -433,7 +480,7 @@ function computeWeeklyProgress(db, projectIds) {
       });
   });
 
-  return { week: week, reports: reports, tasks: tasks, milestones: milestones };
+  return { week: week, reports: reports, tasks: tasks, milestones: milestones, missing: missing };
 }
 
 /**
