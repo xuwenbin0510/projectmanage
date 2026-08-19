@@ -16,6 +16,7 @@ const { writeAudit } = require('../lib/audit');
 const enums = require('../config/enums');
 const wbsService = require('./wbs.service');
 const milestoneService = require('./milestone.service');
+const snapshotService = require('./snapshot.service');
 
 /* ── 小工具 ─────────────────────────────────────────── */
 
@@ -821,6 +822,15 @@ function createReport(db, payload, me, submit) {
   });
 
   tx();
+
+  /* D03：周报提交 → 全量真叶子任务快照（事务外 + try/catch 隔离：快照失败只丢环比，不阻塞提交） */
+  if (isSubmit) {
+    try {
+      snapshotService.captureProjectTaskSnapshot(db, projectId, week, reportId);
+    } catch (e) {
+      // 快照失败仅影响环比积累，周报本体已落库（与审计「绝不回滚业务」同一哲学）
+    }
+  }
 
   /* ④ 审计写在事务外：writeAudit 内部吞异常，绝不回滚业务（lib/audit.js 铁律） */
   if (isSubmit) {

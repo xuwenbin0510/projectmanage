@@ -208,7 +208,73 @@ export interface OverdueDurationDistribution {
  * 口径：本周（ISO 周 · 周一~周日）。
  * ========================================================================== */
 
-/** 周报动态单行：本周（week = weekCode）范围内项目的周报 */
+/** 周报任务进度行（D02 · 周报勾选的关键任务 before→after） */
+export interface WeeklyTaskRowItem {
+  /** WBS 编码 */
+  nodeCode: string;
+  /** 任务名 */
+  nodeName: string;
+  /** 周报提交前进度 0~100 */
+  progressBefore: number;
+  /** 周报提交后进度 0~100 */
+  progressAfter: number;
+}
+
+/** 上周未提交周报的项目（D02 · 应填口径=进行中） */
+export interface WeeklyMissingItem {
+  projectId: string;
+  projectName: string;
+}
+
+/** 任务进度环比单行（D03 · 上周 vs 前周全量快照对比） */
+export interface TaskDeltaItem {
+  /** wbs_nodes.id */
+  nodeId: string;
+  /** WBS 编码 */
+  wbsCode: string;
+  /** 任务名 */
+  name: string;
+  projectId: string;
+  projectName: string;
+  /** 前周快照进度 0~100；-1 = 前周无快照（新增任务） */
+  prevProgress: number;
+  /** 上周快照进度 0~100 */
+  progress: number;
+  /** progress - prevProgress（新增任务恒 0） */
+  delta: number;
+  /** 上周快照已达成完成（status=完成 或 progress=100） */
+  done: boolean;
+  /** 前周无快照（上周新出现/新分配的任务） */
+  added: boolean;
+}
+
+/** 任务进度环比聚合（D03） */
+export interface TaskDeltaSummary {
+  /** 前周周码 'YYYY-Www' */
+  prevWeek: string;
+  /** 有变化的任务（推进/完成/新增/回退），按 delta 降序，最多 50 条 */
+  tasks: TaskDeltaItem[];
+  /** 推进任务数（delta > 0） */
+  advancedCount: number;
+  /** 完成数 */
+  completedCount: number;
+  /** 新增任务数 */
+  addedCount: number;
+  /** 净增百分点（Σ 正向 delta） */
+  netPoints: number;
+}
+
+/** 里程碑双周对比（D03 · done_at 口径，无需快照） */
+export interface MilestoneCompare {
+  /** 前周周码 */
+  prevWeek: string;
+  /** 前周达成数（done_at ∈ [前周一, 前周日]） */
+  prevDone: number;
+  /** 上周达成数（= milestones.length） */
+  lastDone: number;
+}
+
+/** 周报动态单行：上周（week=上周周码）范围内项目的周报 */
 export interface WeeklyReportItem {
   /** 周报 id（work_reports.id） */
   id: string;
@@ -222,8 +288,10 @@ export interface WeeklyReportItem {
   submittedAt: string;
   /** 最后更新时间（ISO） */
   updatedAt: string;
-  /** 本周完成说明（done_note），未填为 '' */
+  /** 上周完成说明（done_note），未填为 '' */
   summary: string;
+  /** D02：该周报勾选的任务进度明细（selected=1；无则空数组） */
+  taskRows: WeeklyTaskRowItem[];
 }
 
 /** 本周任务进展单行：本周 updated_at 落在 ISO 周内的叶子任务（含进度更新与已完成） */
@@ -260,16 +328,22 @@ export interface MilestoneAchievedItem {
   doneAt: string;
 }
 
-/** 本周工作进展聚合（D01 面板数据源） */
+/** 上周工作进展聚合（D01/D02/D03 面板数据源） */
 export interface WeeklyProgress {
-  /** 本周周码 'YYYY-Www'，用于面板副标题 */
+  /** 上周周码 'YYYY-Www'，用于面板副标题 */
   week: string;
   /** 周报动态列表（提交/更新倒序） */
   reports: WeeklyReportItem[];
-  /** 本周任务进展列表（updated_at 倒序；完成后置 done=true） */
+  /** 上周任务进展列表（updated_at 倒序；完成后置 done=true） */
   tasks: TaskUpdatedItem[];
-  /** 本周达成里程碑列表（done_at 倒序） */
+  /** 上周达成里程碑列表（done_at 倒序） */
   milestones: MilestoneAchievedItem[];
+  /** D02：上周未提交周报的进行中项目（按项目名升序） */
+  missing: WeeklyMissingItem[];
+  /** D03：任务进度环比（上周 vs 前周全量快照） */
+  delta: TaskDeltaSummary;
+  /** D03：里程碑双周达成对比 */
+  milestoneCompare: MilestoneCompare;
 }
 
 /** 全局总览完整响应 */
