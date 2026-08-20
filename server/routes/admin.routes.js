@@ -508,8 +508,7 @@ function validateTemplateDefinition(def) {
         required: m.required !== false,
         gate: m.gate ? {
           code: String(m.gate.code).trim(),
-          name: String(m.gate.name).trim(),
-          ownerRole: String((m.gate.ownerRole || 'tl')).trim(),
+          name: String(m.gate.name).trim(),          ownerRole: String((m.gate.ownerRole || 'tl')).trim(),
           items: m.gate.items.map(function (it) {
             return { content: String(it.content).trim(), ownerRole: String((it.ownerRole || m.gate.ownerRole || 'tl')).trim() };
           }),
@@ -520,6 +519,27 @@ function validateTemplateDefinition(def) {
       return { name: String(doc.name).trim(), milestoneCode: String((doc.milestoneCode || '')).trim() };
     }),
     wbsRules: d.wbsRules && typeof d.wbsRules === 'object' ? d.wbsRules : undefined,
+    team: Array.isArray(d.team) && d.team.length ? d.team.map(function (r, i) {
+      const role = String((r && r.role) || '').trim();
+      if (PROJECT_ROLES.indexOf(role) < 0) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: `definition.team[${i}].role`, message: '团队约束角色不合法：' + role }],
+        });
+      }
+      const min = Number(r.min);
+      const maxRaw = Number(r.max);
+      if (!Number.isFinite(min) || min < 0) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: `definition.team[${i}].min`, message: '团队约束「至少」需为非负数字' }],
+        });
+      }
+      if (!Number.isFinite(maxRaw) || (maxRaw !== -1 && maxRaw < min)) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: `definition.team[${i}].max`, message: '团队约束「至多」需为 -1（不限）或不小于「至少」' }],
+        });
+      }
+      return { role: role, min: min, max: maxRaw };
+    }) : undefined,
   };
 }
 

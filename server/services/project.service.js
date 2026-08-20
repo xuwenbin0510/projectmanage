@@ -374,20 +374,16 @@ function assertCreatePayload(payload) {
 /**
  * 成员角色基数校验（PM / TL 各恰好 1 人；B 类必须有 PO）。
  * @param {Array<{userOpenId:string, role:string}>} members
- * @param {'A'|'B'|'C'} type
- * @throws {AppError} E_PROJECT_PO_REQUIRED / E_ROLE_CARDINALITY
+ * @param {object} tpl 生命周期模板（API 形态，含 definition.team）
+ * @throws {AppError} E_PROJECT_PO_REQUIRED / E_ROLE_CARDINALITY / E_VALIDATION
+ *
+ * 团队约束优先级：模板 definition.team（min ≤ 人数 ≤ max，max=-1 不限）→
+ * 缺省回落系统默认（PM/TL 各恰 1；B 类另需 PO 恰 1）——老模板零行为变化。
  */
-function assertMemberCardinality(members, type) {
+function assertMemberCardinality(members, tpl) {
   const list = Array.isArray(members) ? members : [];
 
-  if (type === 'B' && !list.some(function (m) { return m.role === 'po'; })) {
-    throw new AppError(ErrorCode.E_PROJECT_PO_REQUIRED, undefined, { projectType: 'B' });
-  }
-  const pmCount = list.filter(function (m) { return m.role === 'pm'; }).length;
-  const tlCount = list.filter(function (m) { return m.role === 'tl'; }).length;
-  if (pmCount !== 1 || tlCount !== 1) {
-    throw new AppError(ErrorCode.E_ROLE_CARDINALITY, undefined, { pmCount: pmCount, tlCount: tlCount });
-  }
+  /* 角色合法性（与模板无关，保留） */
   const bad = list.filter(function (m) {
     return !m || !String(m.userOpenId || '').trim() || enums.PROJECT_ROLES.indexOf(m.role) < 0;
   });
@@ -396,6 +392,45 @@ function assertMemberCardinality(members, type) {
       fields: [{ field: 'members', message: '成员必须包含合法 userOpenId 与 projectRole' }],
     });
   }
+
+  /* 团队约束：模板 team 优先，缺省回落系统默认 */
+  const team =
+    tpl && tpl.definition && Array.isArray(tpl.definition.team) && tpl.definition.team.length
+      ? tpl.definition.team
+      : defaultTeamRules(tpl);
+  for (const rule of team) {
+    const role = String(rule.role || '');
+    const count = list.filter(function (m) { return m.role === role; }).length;
+    const min = Number(rule.min) || 0;
+    const maxRaw = Number(rule.max);
+    const max = maxRaw === -1 ? Infinity : maxRaw;
+    if (count < min || count > max) {
+      /* 回退规则场景保留原错误码语义（前端依赖的提示文案） */
+      if (role === 'po' && count === 0 && min === 1) {
+        throw new AppError(ErrorCode.E_PROJECT_PO_REQUIRED, undefined, { projectType: tpl ? tpl.projectType : 'B' });
+      }
+      if ((role === 'pm' || role === 'tl') && count !== 1) {
+        throw new AppError(ErrorCode.E_ROLE_CARDINALITY, undefined, { pmCount: countOf(list, 'pm'), tlCount: countOf(list, 'tl') });
+      }
+      throw new AppError(ErrorCode.E_VALIDATION, '团队成员不满足模板约束', {
+        fields: [{ field: 'members', message: `模板要求角色「${role}」${min}~${maxRaw === -1 ? '不限' : maxRaw} 人，当前 ${count} 人` }],
+      });
+    }
+  }
+}
+
+/** 模板未配置 team 时的系统默认约束（与历史硬编码完全一致） */
+function defaultTeamRules(tpl) {
+  const rules = [
+    { role: 'pm', min: 1, max: 1 },
+    { role: 'tl', min: 1, max: 1 },
+  ];
+  if (tpl && tpl.projectType === 'B') rules.push({ role: 'po', min: 1, max: 1 });
+  return rules;
+}
+
+function countOf(list, role) {
+  return list.filter(function (m) { return m.role === role; }).length;
 }
 
 /**
@@ -515,7 +550,6 @@ function createProject(db, payload, me) {
     ? payload.classifySuggested
     : type;
   classifyService.assertOverrideReason(type, suggested, payload.classifyOverrideReason);
-  assertMemberCardinality(payload.members, type);
 
   /* 方案A（阶段三补）：向导显式选模板 → 优先用 payload.templateId；
      校验归属分类 + 必须启用；不传时回落「分类下唯一生效模板」（旧行为） */
@@ -537,6 +571,9 @@ function createProject(db, payload, me) {
     tplRow = requireActiveTemplateRow(db, type);
   }
   const tpl = mappers.toApiTemplate(tplRow);
+
+  /* 成员基数校验必须放在模板选择之后：约束来源 = 模板 definition.team（缺省回落系统默认） */
+  assertMemberCardinality(payload.members, tpl);
 
   const seqRow = db.prepare('SELECT COUNT(*) AS n FROM projects').get();
   const seq = (seqRow && seqRow.n ? Number(seqRow.n) : 0) + 1;
