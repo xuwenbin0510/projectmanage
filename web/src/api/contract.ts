@@ -22,7 +22,16 @@ import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
-import type { DashboardOverview, DashboardOverviewQuery, DashboardTasksQuery, DashboardTaskRow } from '@/types/dashboard';
+import type {
+  DashboardDeliverableRow,
+  DashboardDeliverablesQuery,
+  DashboardGateRow,
+  DashboardGatesQuery,
+  DashboardOverview,
+  DashboardOverviewQuery,
+  DashboardTasksQuery,
+  DashboardTaskRow,
+} from '@/types/dashboard';
 
 /* ── 请求参数类型 ─────────────────────────────────── */
 
@@ -331,6 +340,12 @@ export interface ApiClient {
    * 与 overview 同 scope/过滤口径；维度参数三选一互斥（taskStatus → overdueBucket → priority）。
    */
   getDashboardTasks(query: DashboardTasksQuery): Promise<Paged<DashboardTaskRow>>;
+
+  /** 第二批：质量门明细（`GET /api/dashboard/gates`），gateStatus 过滤 + 分页 */
+  getDashboardGates(query: DashboardGatesQuery): Promise<Paged<DashboardGateRow>>;
+
+  /** 第二批：交付物明细（`GET /api/dashboard/deliverables`），docStatus 过滤 + 分页 */
+  getDashboardDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>>;
 
   /* 管理后台 */
   listUsers(): Promise<User[]>;

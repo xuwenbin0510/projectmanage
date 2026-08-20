@@ -27,6 +27,10 @@ import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, ReportReminder, GateTodo, ReportConfirmation, Session } from '@/types/workbench';
 import type {
+  DashboardDeliverableRow,
+  DashboardDeliverablesQuery,
+  DashboardGateRow,
+  DashboardGatesQuery,
   DashboardOverview,
   DashboardOverviewQuery,
   DashboardScope,
@@ -3288,6 +3292,141 @@ export class MockApiClient implements ApiClient {
       });
 
     /* 5. 分页返回（与服务端 envelope.paged 同构） */
+    return deepClone({
+      items: rows.slice((page - 1) * pageSize, page * pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    });
+  }
+
+  /**
+   * 第二批：门控明细（对应 `GET /api/dashboard/gates`，与服务端 getDashboardGates 逐字对齐）。
+   * 复用 getDashboardTasks 的范围/过滤步骤（决策⑥ 三态 + scope + 筛选），按 gateStatus 过滤。
+   */
+  async getDashboardGates(query: DashboardGatesQuery): Promise<Paged<DashboardGateRow>> {
+    await delay(200);
+    const db = getDb();
+    const me = currentUser(db);
+
+    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE));
+
+    const statusFilter =
+      query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
+    const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
+    const myPmProjectIds = new Set(
+      db.members.filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm').map((m) => m.projectId),
+    );
+    let items = db.projects
+      .filter((p) => (statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status)))
+      .filter((p) => {
+        if (scope === 'all') return true;
+        return query.onlyMine ? myPmProjectIds.has(p.id) : myProjectIds.has(p.id);
+      });
+    if (query.type) items = items.filter((r) => r.type === query.type);
+    if (query.health) items = items.filter((r) => r.health === query.health);
+    if (query.keyword) {
+      const k = query.keyword.trim().toLowerCase();
+      if (k) items = items.filter((r) => r.name.toLowerCase().includes(k) || r.code.toLowerCase().includes(k));
+    }
+    const scopeIds = new Set(items.map((p) => p.id));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+    const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
+    const milestoneNameById = new Map(db.milestones.map((m) => [m.id, m.name]));
+
+    const rows: DashboardGateRow[] = db.gates
+      .filter((g) => scopeIds.has(g.projectId))
+      .filter((g) => (query.gateStatus ? g.status === query.gateStatus : true))
+      .map((g) => ({
+        id: g.id,
+        projectId: g.projectId,
+        projectName: projectNameById.get(g.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        milestoneId: g.milestoneId,
+        milestoneName: milestoneNameById.get(g.milestoneId) ?? '未关联里程碑',
+        code: g.code,
+        name: g.name,
+        status: g.status,
+        decidedByName: g.decidedBy ? (userNameById.get(g.decidedBy) ?? '') : '',
+        decidedAt: g.decidedAt ?? '',
+      }))
+      .sort((a, b) => {
+        const c = a.projectName.localeCompare(b.projectName, 'zh-CN');
+        return c !== 0 ? c : a.code.localeCompare(b.code, 'zh-CN');
+      });
+
+    return deepClone({
+      items: rows.slice((page - 1) * pageSize, page * pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    });
+  }
+
+  /**
+   * 第二批：交付物明细（对应 `GET /api/dashboard/deliverables`，与服务端 getDashboardDeliverables 逐字对齐）。
+   * 复用 getDashboardTasks 的范围/过滤步骤，按 docStatus 过滤。
+   */
+  async getDashboardDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>> {
+    await delay(200);
+    const db = getDb();
+    const me = currentUser(db);
+
+    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE));
+
+    const statusFilter =
+      query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
+    const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
+    const myPmProjectIds = new Set(
+      db.members.filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm').map((m) => m.projectId),
+    );
+    let items = db.projects
+      .filter((p) => (statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status)))
+      .filter((p) => {
+        if (scope === 'all') return true;
+        return query.onlyMine ? myPmProjectIds.has(p.id) : myProjectIds.has(p.id);
+      });
+    if (query.type) items = items.filter((r) => r.type === query.type);
+    if (query.health) items = items.filter((r) => r.health === query.health);
+    if (query.keyword) {
+      const k = query.keyword.trim().toLowerCase();
+      if (k) items = items.filter((r) => r.name.toLowerCase().includes(k) || r.code.toLowerCase().includes(k));
+    }
+    const scopeIds = new Set(items.map((p) => p.id));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+    const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
+
+    const rows: DashboardDeliverableRow[] = db.documents
+      .filter((d) => scopeIds.has(d.projectId))
+      .filter((d) => (query.docStatus ? d.status === query.docStatus : true))
+      .map((d) => ({
+        id: d.id,
+        projectId: d.projectId,
+        projectName: projectNameById.get(d.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        templateKey: d.templateKey,
+        name: d.name,
+        version: Number(d.version) || 1,
+        status: d.status,
+        baselineFlag: (Number(d.baselineFlag) || 0) === 1,
+        baselinedAt: d.baselinedAt || '',
+        baselinedByName: d.baselinedBy ? (userNameById.get(d.baselinedBy) ?? '') : '',
+        uploadedByName: d.uploadedBy ? (userNameById.get(d.uploadedBy) ?? '') : '',
+        uploadedAt: d.uploadedAt || '',
+      }))
+      .sort((a, b) => {
+        const c = a.projectName.localeCompare(b.projectName, 'zh-CN');
+        if (c !== 0) return c;
+        const ka = a.templateKey || '';
+        const kb = b.templateKey || '';
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      });
+
     return deepClone({
       items: rows.slice((page - 1) * pageSize, page * pageSize),
       total: rows.length,

@@ -22,7 +22,16 @@ import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, Session } from '@/types/workbench';
-import type { DashboardOverview, DashboardOverviewQuery, DashboardTasksQuery, DashboardTaskRow } from '@/types/dashboard';
+import type {
+  DashboardDeliverableRow,
+  DashboardDeliverablesQuery,
+  DashboardGateRow,
+  DashboardGatesQuery,
+  DashboardOverview,
+  DashboardOverviewQuery,
+  DashboardTasksQuery,
+  DashboardTaskRow,
+} from '@/types/dashboard';
 import type {
   ApiClient,
   ProjectQuery,
@@ -376,6 +385,15 @@ export class HttpApiClient implements ApiClient {
   getDashboardTasks(query: DashboardTasksQuery): Promise<Paged<DashboardTaskRow>> {
     /* qs 跳过 undefined / null / ''，未选中的维度参数不污染 URL；语义与服务端一致 */
     return get<Paged<DashboardTaskRow>>(`/dashboard/tasks${qs(query as Record<string, unknown>)}`);
+  }
+
+  /* 第二批：质量与交付下探明细（门控 / 交付物） */
+  getDashboardGates(query: DashboardGatesQuery): Promise<Paged<DashboardGateRow>> {
+    return get<Paged<DashboardGateRow>>(`/dashboard/gates${qs(query as Record<string, unknown>)}`);
+  }
+
+  getDashboardDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>> {
+    return get<Paged<DashboardDeliverableRow>>(`/dashboard/deliverables${qs(query as Record<string, unknown>)}`);
   }
 
   /* 管理后台 */

@@ -533,3 +533,78 @@ export interface DashboardTaskRow {
   progress: number;
   ownerName: string;
 }
+
+/* ==========================================================================
+ * 第二批 · 质量与交付下探（门控 / 交付物明细抽屉）
+ * 对应后端接口 `GET /api/dashboard/gates`、`GET /api/dashboard/deliverables`。
+ * 复用总览筛选子集（scope/type/status/health/keyword/ownerOpenId/onlyMine），
+ * 服务端 resolveScope 静默降级（无 dashboard:global 者恒 mine）。
+ * ========================================================================== */
+
+/** 门控明细查询入参：总览筛选子集 + 门状态过滤 + 分页 */
+export interface DashboardGatesQuery {
+  scope?: DashboardScope;
+  type?: ProjectType | '';
+  status?: ProjectStatus | '';
+  health?: Health | '';
+  keyword?: string;
+  ownerOpenId?: string;
+  onlyMine?: boolean;
+  /** 门状态过滤（五态白名单）；不传 = 全量 */
+  gateStatus?: '未开始' | '待检查' | '已通过' | '有条件通过' | '不通过';
+  page?: number;
+  pageSize?: number;
+}
+
+/** 门控明细行（服务端返回字段） */
+export interface DashboardGateRow {
+  id: string;
+  projectId: string;
+  projectName: string;
+  milestoneId: string;
+  milestoneName: string;
+  /** 门编码（如 QG1） */
+  code: string;
+  /** 门名 */
+  name: string;
+  /** 五态之一 */
+  status: string;
+  /** 决议人姓名；未决议为「(未决议)」 */
+  decidedByName: string;
+  /** 决议时间 ISO；未决议为 '' */
+  decidedAt: string;
+}
+
+/** 交付物明细查询入参：总览筛选子集 + 交付状态过滤 + 分页 */
+export interface DashboardDeliverablesQuery {
+  scope?: DashboardScope;
+  type?: ProjectType | '';
+  status?: ProjectStatus | '';
+  health?: Health | '';
+  keyword?: string;
+  ownerOpenId?: string;
+  onlyMine?: boolean;
+  /** 交付状态过滤（待交付/已交付）；不传 = 全量 */
+  docStatus?: '待交付' | '已交付';
+  page?: number;
+  pageSize?: number;
+}
+
+/** 交付物明细行（服务端返回字段） */
+export interface DashboardDeliverableRow {
+  id: string;
+  projectId: string;
+  projectName: string;
+  /** 模板项标识（如 TPL-A-1）；'' = 手动上传/链接 */
+  templateKey: string;
+  name: string;
+  /** 交付版本号（替换文件/链接时 +1） */
+  version: number;
+  status: '待交付' | '已交付';
+  /** 是否已纳入基线 */
+  baselineFlag: boolean;
+  baselinedAt: string;
+  baselinedByName: string;
+  uploadedByName: string;
+  uploadedAt: string;
+}
