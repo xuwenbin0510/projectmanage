@@ -27,7 +27,7 @@ import { TemplateEditorDialog } from '@/components/admin/TemplateEditorDialog';
 import type { LifecycleTemplate, ProjectType, CreateTemplatePayload } from '@/types/project';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
-import { PROJECT_TYPE_LABEL } from '@/config/enums';
+import { PROJECT_TYPE_LABEL, PROJECT_ROLE_LABEL } from '@/config/enums';
 
 /** 新增模板弹窗表单 */
 interface CreateForm {
@@ -149,6 +149,30 @@ export function AdminTemplatesPage(): JSX.Element {
       width: 96,
       align: 'center',
       render: (t) => <Typography variant="caption">{t.definition.docs.length}</Typography>,
+    },
+    {
+      key: 'team',
+      label: '团队约束',
+      width: 230,
+      render: (t) => {
+        const rules = t.definition.team;
+        if (!rules || rules.length === 0) {
+          return <Typography variant="caption" color="text.secondary">系统默认</Typography>;
+        }
+        return (
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+            {rules.map((r) => (
+              <Chip
+                key={r.role}
+                size="small"
+                variant="outlined"
+                label={`${PROJECT_ROLE_LABEL[r.role]} ${r.min}~${r.max === -1 ? '∞' : r.max}`}
+                sx={{ height: 22, fontSize: 12 }}
+              />
+            ))}
+          </Stack>
+        );
+      },
     },
     {
       key: 'isActive',
