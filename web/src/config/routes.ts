@@ -21,6 +21,7 @@ export const ROUTES = {
   metrics: '/metrics',
   adminUsers: '/admin/users',
   adminPermissions: '/admin/permissions',
+  adminReviewTemplates: '/admin/review-templates',
   adminAuditLog: '/admin/audit-logs',
   adminTemplates: '/admin/templates',
 } as const;

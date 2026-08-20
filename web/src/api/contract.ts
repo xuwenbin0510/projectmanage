@@ -16,6 +16,9 @@ import type {
   MilestoneWithGate,
   MilestoneOverride,
   CloseBlocker,
+  ReviewTemplateConfig,
+  CreateReviewTemplatePayload,
+  UpdateReviewTemplatePayload,
 } from '@/types/project';
 import type { WbsNode, WbsNodeType, TaskStatus, Priority, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
@@ -358,6 +361,13 @@ export interface ApiClient {
   updateUser(openId: string, patch: UpdateUserPayload): Promise<User>;
   listTemplates(): Promise<LifecycleTemplate[]>;
   resetDemoData(): Promise<void>;
+
+  /* 阶段二：审批流程模板管理（仅 admin） */
+  listReviewTemplates(): Promise<ReviewTemplateConfig[]>;
+  createReviewTemplate(payload: CreateReviewTemplatePayload): Promise<ReviewTemplateConfig>;
+  updateReviewTemplate(key: string, patch: UpdateReviewTemplatePayload): Promise<ReviewTemplateConfig>;
+  toggleReviewTemplateActive(key: string, active: boolean): Promise<ReviewTemplateConfig>;
+  deleteReviewTemplate(key: string): Promise<{ key: string }>;
 
   /* P1 占位 */
   listRisks(projectId: string): Promise<Risk[]>;

@@ -13,6 +13,7 @@ import type { Review } from '@/types/review';
 import type { Change } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import { createSeedDb } from './fixtures';
+import type { ReviewTemplateConfig } from '@/types/project';
 
 /** D03：全量任务快照（mock 内存版，周报提交时采集，UNIQUE 语义由 mock 逻辑保证） */
 export interface ProgressSnapshotMock {
@@ -23,6 +24,25 @@ export interface ProgressSnapshotMock {
   progress: number;
   status: string;
 }
+
+/**
+ * 审批流程模板默认 seed（阶段二：审批流程可配置）。
+ * 与服务端 migrationV14 的 10 条内置 seed 逐条对齐：
+ *  - scope='project'：project:A/B/C/_default（立项审批链，key = project:<type>）
+ *  - scope='business'：formal/technical/code/ccb/pm_only/project（业务评审）
+ */
+export const DEFAULT_REVIEW_TEMPLATES: ReviewTemplateConfig[] = [
+  { key: 'project:A', scope: 'project', label: 'A 类项目立项审批', mode: 'serial', chain: ['pmo', 'tl', 'management'], description: 'A 类项目立项审批串行链：PMO → TL → 管理层', active: true, createdAt: '', updatedAt: '' },
+  { key: 'project:B', scope: 'project', label: 'B 类项目立项审批', mode: 'serial', chain: ['pm', 'tl'], description: 'B 类项目立项审批串行链：PM → TL', active: true, createdAt: '', updatedAt: '' },
+  { key: 'project:C', scope: 'project', label: 'C 类项目立项审批', mode: 'serial', chain: ['pmo', 'tl', 'management'], description: 'C 类项目立项审批串行链：PMO → TL → 管理层', active: true, createdAt: '', updatedAt: '' },
+  { key: 'project:_default', scope: 'project', label: '立项审批（默认）', mode: 'serial', chain: ['pm', 'tl'], description: '未匹配到具体项目类型时的立项审批兜底链', active: true, createdAt: '', updatedAt: '' },
+  { key: 'formal', scope: 'business', label: '正式评审', mode: 'parallel_veto', chain: ['pmo', 'tl', 'management', 'customer_rep'], description: '立项/需求/设计/验收 → 管理层 + PMO + TL + 客户代表，一票否决', active: true, createdAt: '', updatedAt: '' },
+  { key: 'technical', scope: 'business', label: '技术评审', mode: 'single', chain: ['tl'], description: '由技术负责人（TL）单人决议并留痕', active: true, createdAt: '', updatedAt: '' },
+  { key: 'code', scope: 'business', label: '代码评审', mode: 'single', chain: ['tl'], description: '≥1 人 Approve 即可通过', active: true, createdAt: '', updatedAt: '' },
+  { key: 'ccb', scope: 'business', label: 'CCB 变更评审', mode: 'serial', chain: ['pm', 'tl', 'po', 'customer_rep'], description: '基线变更 → PM → TL → PO → 客户代表 串行逐级', active: true, createdAt: '', updatedAt: '' },
+  { key: 'pm_only', scope: 'business', label: 'PM 审批', mode: 'single', chain: ['pm'], description: '非基线小变更 → PM 单人决议并留痕', active: true, createdAt: '', updatedAt: '' },
+  { key: 'project', scope: 'business', label: '立项审批', mode: 'serial', chain: ['pmo', 'management'], description: '立项审批串行链：PMO → 管理层', active: true, createdAt: '', updatedAt: '' },
+];
 
 /**
  * 内存 Mock 数据库（S1 静态原型唯一数据源）
@@ -46,6 +66,8 @@ export interface MockDb {
   auditLogs: AuditLog[];
   risks: Risk[];
   documents: ProjectDocument[];
+  /** 阶段二：审批流程模板（管理后台可配置） */
+  reviewTemplates: ReviewTemplateConfig[];
   /** D03：全量任务快照（周报提交时采集，供任务进度环比） */
   progressSnapshots: ProgressSnapshotMock[];
   /** 当前登录用户 openId（devlogin 写入） */
@@ -68,6 +90,10 @@ function load(): MockDb | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as MockDb;
     if (!parsed || !Array.isArray(parsed.projects)) return null;
+    /* 阶段二：旧缓存（v4）无 reviewTemplates → 兜底注入默认审批模板，避免运行时 undefined */
+    if (!Array.isArray(parsed.reviewTemplates)) {
+      parsed.reviewTemplates = DEFAULT_REVIEW_TEMPLATES.map((t) => ({ ...t }));
+    }
     return parsed;
   } catch {
     return null;

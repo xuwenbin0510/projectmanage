@@ -1,6 +1,7 @@
 /** 用户 / 项目 / 成员 / 生命周期模板 / 质量门 / 里程碑（简化方案一 · 无阶段实体） */
 
 import type { WbsRules } from '@/types/wbs';
+import type { ReviewMode } from '@/types/review';
 
 export type GlobalRole =
   | 'admin'
@@ -77,6 +78,43 @@ export interface UpdateUserPayload {
   name?: string;
   employeeId?: string;
   email?: string;
+}
+
+/* ── 阶段二 · 审批流程模板（管理配置） ─────────────── */
+
+export type ReviewTemplateScope = 'project' | 'business';
+/* 审批模式复用 review.ts 的 ReviewMode：serial / parallel_veto / single */
+
+/** 审批流程模板（review_templates 表；管理后台可配置） */
+export interface ReviewTemplateConfig {
+  key: string;
+  scope: ReviewTemplateScope;
+  label: string;
+  mode: ReviewMode;
+  chain: string[];
+  description: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 新增审批模板入参 */
+export interface CreateReviewTemplatePayload {
+  key: string;
+  scope: ReviewTemplateScope;
+  label: string;
+  mode: ReviewMode;
+  chain: string[];
+  description?: string;
+}
+
+/** 更新审批模板入参（只传需要更新的字段） */
+export interface UpdateReviewTemplatePayload {
+  label?: string;
+  scope?: ReviewTemplateScope;
+  mode?: ReviewMode;
+  chain?: string[];
+  description?: string;
 }
 
 /** 分类判定输入（P0-01） */

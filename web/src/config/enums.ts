@@ -371,6 +371,7 @@ export const AUDIT_ENTITY_LABEL: Record<AuditEntityType, string> = {
   change: '变更',
   user: '用户',
   document: '文档',
+  review_template: '审批模板',
 };
 
 /* ── 周报 ─────────────────────────────────────────── */

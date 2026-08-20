@@ -12,6 +12,7 @@ import { useLocation } from 'react-router-dom';
 const ADMIN_TABS = [
   { key: 'users', label: '用户与角色', path: ROUTES.adminUsers },
   { key: 'permissions', label: '权限矩阵', path: ROUTES.adminPermissions },
+  { key: 'reviewTemplates', label: '审批配置', path: ROUTES.adminReviewTemplates },
   { key: 'templates', label: '内置模板', path: ROUTES.adminTemplates },
   { key: 'audit', label: '审计日志', path: ROUTES.adminAuditLog },
 ];
