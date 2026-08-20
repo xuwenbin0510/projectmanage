@@ -121,9 +121,15 @@ function countPendingApprovals(db, me) {
 
 /**
  * 周报提醒：我参与且进行中项目，每项目一行（D8 / Mock L2352-2364）。
+ *
+ * 四态口径（与「待我确认周报」面板共用 resolveConfirmers 单一真源）：
+ *  - `待填`：本周无「已提交」周报；
+ *  - `待确认`：本周已提交未确认，且**当前用户是该周报确认人**；
+ *  - `待他人确认`：本周已提交未确认，但当前用户**不是**确认人（中性态，无操作入口）；
+ *  - `已确认`：本周已有「已确认」周报（终态）。
  * @param {import('better-sqlite3').Database} db
  * @param {object} me users 行
- * @returns {Array<{projectId: string, projectName: string, week: string, weekStart: string, weekEnd: string, filled: boolean}>} ReportReminder[]
+ * @returns {Array<{projectId: string, projectName: string, week: string, weekStart: string, weekEnd: string, filled: boolean, state: string}>} ReportReminder[]
  */
 function listReportReminders(db, me) {
   const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
@@ -151,13 +157,30 @@ function listReportReminders(db, me) {
   const confirmedStmt = db.prepare(
     "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已确认'",
   );
+  /* 已提交未确认时取作者，用于确认人判定（resolveConfirmers 单一真源，与「待我确认周报」面板一致） */
+  const authorStmt = db.prepare(
+    "SELECT author_open_id FROM work_reports WHERE project_id = ? AND week = ? AND status = '已提交' LIMIT 1",
+  );
 
   return rows.map(function (r) {
     const pid = mappers.toStr(r.id);
     const submitted = (filledStmt.get(pid, curWeek) || {}).c > 0;
     const confirmed = (confirmedStmt.get(pid, curWeek) || {}).c > 0;
-    /* 三态：待填（无提交）/ 待确认（已提交未确认）/ 已确认（终态） */
-    const state = !submitted ? '待填' : confirmed ? '已确认' : '待确认';
+    let state;
+    if (!submitted) {
+      state = '待填';
+    } else if (confirmed) {
+      state = '已确认';
+    } else {
+      /* 已提交未确认：仅当「我是确认人」才标「待确认」，否则标中性「待他人确认」
+         （避免非确认人看到「待确认」暗示去确认，却与「待我确认周报」面板为空矛盾） */
+      const authorRow = authorStmt.get(pid, curWeek);
+      const authorOpenId = authorRow ? mappers.toStr(authorRow.author_open_id) : '';
+      const isConfirmer = authorOpenId
+        ? reportService.resolveConfirmers(db, pid, authorOpenId).has(openId)
+        : false;
+      state = isConfirmer ? '待确认' : '待他人确认';
+    }
     return {
       projectId: pid,
       projectName: mappers.toStr(r.name),

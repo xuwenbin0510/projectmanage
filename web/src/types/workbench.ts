@@ -11,8 +11,8 @@ export interface ReportReminder {
   weekStart: string;
   weekEnd: string;
   filled: boolean;
-  /** D11：周报状态三态（待填 / 待确认 / 已确认） */
-  state: '待填' | '待确认' | '已确认';
+  /** D11：周报状态四态（待填 / 待确认 / 待他人确认 / 已确认） */
+  state: '待填' | '待确认' | '待他人确认' | '已确认';
 }
 
 /** D10：门控待办（我有决议权限的未决议门） */
