@@ -16,6 +16,7 @@ const { ok, asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
 const { requireAuth, requireGlobalRole } = require('../middleware/auth');
 const { toApiUser } = require('../lib/mappers');
 const { nowIso } = require('../lib/dates');
+const { genId } = require('../lib/ids');
 const { GLOBAL_ROLES, PROJECT_ROLES } = require('../config/enums');
 const projectService = require('../services/project.service');
 
@@ -416,6 +417,268 @@ router.delete(
     db.prepare('DELETE FROM review_templates WHERE key = ?').run(key);
 
     res.json(ok({ key: key }, '已删除'));
+  }),
+);
+
+/* ── 生命周期模板管理（阶段三：内置模板 CRUD + 节点编辑） ────── */
+
+const PROJECT_TYPES = ['A', 'B', 'C'];
+
+/**
+ * 校验并规范化模板 definition（整包替换语义）。
+ * - milestones：code 唯一必填 / name 必填 / offsetDays 非负数字 / required 布尔；
+ *   gate（一碑最多一门）code+name 必填、items 至少一项且 content 必填。
+ * - docs：name 必填；milestoneCode 非空时必须在 milestones.code 中存在。
+ * - wbsRules：透传原对象（前端编辑时带回，避免丢 WBS 规则）。
+ * @param {*} def
+ * @returns {{milestones:object[],docs:object[],wbsRules?:object}}
+ */
+function validateTemplateDefinition(def) {
+  const d = def && typeof def === 'object' ? def : {};
+  const milestones = Array.isArray(d.milestones) ? d.milestones : [];
+  const docs = Array.isArray(d.docs) ? d.docs : [];
+  const codes = new Set();
+
+  milestones.forEach(function (m, i) {
+    const code = String((m && m.code) || '').trim();
+    if (!code) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: `definition.milestones[${i}].code`, message: '里程碑编码必填' }],
+      });
+    }
+    if (codes.has(code)) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: `definition.milestones[${i}].code`, message: '里程碑编码重复：' + code }],
+      });
+    }
+    codes.add(code);
+    if (!String((m.name || '')).trim()) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: `definition.milestones[${i}].name`, message: '里程碑名称必填' }],
+      });
+    }
+    const offsetDays = Number(m.offsetDays);
+    if (!Number.isFinite(offsetDays) || offsetDays < 0) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: `definition.milestones[${i}].offsetDays`, message: '天数偏移需为非负数字' }],
+      });
+    }
+    if (m.gate) {
+      const g = m.gate;
+      if (!String((g.code || '')).trim() || !String((g.name || '')).trim()) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: `definition.milestones[${i}].gate`, message: '质量门编码与名称必填' }],
+        });
+      }
+      if (!Array.isArray(g.items) || !g.items.length) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: `definition.milestones[${i}].gate.items`, message: '质量门检查项至少一项' }],
+        });
+      }
+      g.items.forEach(function (it, j) {
+        if (!String((it && it.content) || '').trim()) {
+          throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+            fields: [{ field: `definition.milestones[${i}].gate.items[${j}].content`, message: '检查项内容必填' }],
+          });
+        }
+      });
+    }
+  });
+
+  docs.forEach(function (doc, i) {
+    if (!String((doc && doc.name) || '').trim()) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: `definition.docs[${i}].name`, message: '交付物名称必填' }],
+      });
+    }
+    const mc = String((doc && doc.milestoneCode) || '').trim();
+    if (mc && !codes.has(mc)) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: `definition.docs[${i}].milestoneCode`, message: '关联里程碑不存在：' + mc }],
+      });
+    }
+  });
+
+  return {
+    milestones: milestones.map(function (m) {
+      return {
+        code: String(m.code).trim(),
+        name: String(m.name).trim(),
+        offsetDays: Number(m.offsetDays),
+        required: m.required !== false,
+        gate: m.gate ? {
+          code: String(m.gate.code).trim(),
+          name: String(m.gate.name).trim(),
+          ownerRole: String((m.gate.ownerRole || 'tl')).trim(),
+          items: m.gate.items.map(function (it) {
+            return { content: String(it.content).trim(), ownerRole: String((it.ownerRole || m.gate.ownerRole || 'tl')).trim() };
+          }),
+        } : undefined,
+      };
+    }),
+    docs: docs.map(function (doc) {
+      return { name: String(doc.name).trim(), milestoneCode: String((doc.milestoneCode || '')).trim() };
+    }),
+    wbsRules: d.wbsRules && typeof d.wbsRules === 'object' ? d.wbsRules : undefined,
+  };
+}
+
+/**
+ * 新增生命周期模板（仅 admin）。
+ * 必填：projectType（A/B/C）、name；definition 可选（默认空骨架）。
+ * 新建模板 is_active=1（作为该类型的当前生效模板）。
+ */
+router.post(
+  '/admin/templates',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function createTemplate(req, res) {
+    const body = req.body || {};
+    const projectType = String(body.projectType || '');
+    const name = String(body.name || '').trim();
+    if (PROJECT_TYPES.indexOf(projectType) < 0) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: 'projectType', message: '适用分类必须为 A / B / C' }],
+      });
+    }
+    if (!name) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: 'name', message: '模板名称必填' }],
+      });
+    }
+    const definition = body.definition !== undefined
+      ? validateTemplateDefinition(body.definition)
+      : { milestones: [], docs: [], wbsRules: undefined };
+
+    const now = nowIso();
+    const id = genId('TMP');
+    db.prepare(
+      'INSERT INTO lifecycle_templates (id, project_type, version, name, definition, is_active, created_at) '
+      + 'VALUES (?, ?, ?, ?, ?, 1, ?)',
+    ).run(id, projectType, 1, name.slice(0, 60), JSON.stringify(definition), now);
+
+    res.json(ok(projectService.getTemplateById(db, id), '模板已创建'));
+  }),
+);
+
+/**
+ * 更新生命周期模板（仅 admin）。支持 { name?, definition?, isActive? }。
+ * definition 为**整包替换**语义：前端编辑器构造完整 definition（含 wbsRules）提交。
+ */
+router.put(
+  '/admin/templates/:id',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function updateTemplate(req, res) {
+    const id = String(req.params.id || '');
+    const body = req.body || {};
+    const target = db.prepare('SELECT * FROM lifecycle_templates WHERE id = ?').get(id);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '模板不存在', { id: id });
+
+    const sets = [];
+    const args = [];
+    if (body.name !== undefined) {
+      const name = String(body.name).trim();
+      if (!name) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'name', message: '模板名称必填' }],
+        });
+      }
+      sets.push('name = ?');
+      args.push(name.slice(0, 60));
+    }
+    if (body.definition !== undefined) {
+      sets.push('definition = ?');
+      args.push(JSON.stringify(validateTemplateDefinition(body.definition)));
+    }
+    if (body.isActive !== undefined) {
+      sets.push('is_active = ?');
+      args.push(body.isActive ? 1 : 0);
+    }
+    if (!sets.length) {
+      throw new AppError(ErrorCode.E_VALIDATION, '没有可更新的字段', {});
+    }
+    args.push(id);
+    db.prepare('UPDATE lifecycle_templates SET ' + sets.join(', ') + ' WHERE id = ?').run(args);
+
+    res.json(ok(projectService.getTemplateById(db, id), '已更新'));
+  }),
+);
+
+/** 启用/停用生命周期模板（仅 admin）。body: { active: boolean } */
+router.patch(
+  '/admin/templates/:id/active',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function toggleTemplateActive(req, res) {
+    const id = String(req.params.id || '');
+    const body = req.body || {};
+    const target = db.prepare('SELECT * FROM lifecycle_templates WHERE id = ?').get(id);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '模板不存在', { id: id });
+
+    const active = body.active === true || body.active === 1 || body.active === '1' ? 1 : 0;
+    db.prepare('UPDATE lifecycle_templates SET is_active = ? WHERE id = ?').run(active, id);
+
+    res.json(ok(projectService.getTemplateById(db, id), active ? '已启用' : '已停用'));
+  }),
+);
+
+/**
+ * 删除生命周期模板（仅 admin）。
+ * 存在引用该模板且未删除的项目（projects.template_id 且 deleted_at IS NULL）时拒绝。
+ */
+router.delete(
+  '/admin/templates/:id',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function deleteTemplate(req, res) {
+    const id = String(req.params.id || '');
+    const target = db.prepare('SELECT * FROM lifecycle_templates WHERE id = ?').get(id);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '模板不存在', { id: id });
+
+    const ref = db
+      .prepare('SELECT COUNT(*) AS n FROM projects WHERE template_id = ? AND deleted_at IS NULL')
+      .get(id);
+    if (ref && Number(ref.n) > 0) {
+      throw new AppError(ErrorCode.E_VALIDATION, '该模板已被项目引用，无法删除，可先停用', {
+        id: id,
+        refProjects: Number(ref.n),
+      });
+    }
+    db.prepare('DELETE FROM lifecycle_templates WHERE id = ?').run(id);
+
+    res.json(ok({ id: id }, '已删除'));
+  }),
+);
+
+/**
+ * 复制生命周期模板（仅 admin）。
+ * 新 id、名称加「（副本）」、version +1、**is_active=0**（副本默认停用，避免同类型两个启用模板争抢生效）。
+ */
+router.post(
+  '/admin/templates/:id/duplicate',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function duplicateTemplate(req, res) {
+    const id = String(req.params.id || '');
+    const target = db.prepare('SELECT * FROM lifecycle_templates WHERE id = ?').get(id);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '模板不存在', { id: id });
+
+    const now = nowIso();
+    const newId = genId('TMP');
+    db.prepare(
+      'INSERT INTO lifecycle_templates (id, project_type, version, name, definition, is_active, created_at) '
+      + 'VALUES (?, ?, ?, ?, ?, 0, ?)',
+    ).run(
+      newId,
+      target.project_type,
+      Number(target.version) + 1,
+      String(target.name).slice(0, 50) + '（副本）',
+      target.definition,
+      now,
+    );
+
+    res.json(ok(projectService.getTemplateById(db, newId), '已复制（副本默认停用）'));
   }),
 );
 

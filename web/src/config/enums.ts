@@ -372,6 +372,7 @@ export const AUDIT_ENTITY_LABEL: Record<AuditEntityType, string> = {
   user: '用户',
   document: '文档',
   review_template: '审批模板',
+  template: '生命周期模板',
 };
 
 /* ── 周报 ─────────────────────────────────────────── */

@@ -441,6 +441,18 @@ function listTemplates(db) {
 }
 
 /**
+ * 按 id 取模板（API 形态，含停用模板）；缺失返回 null。
+ * 阶段三：管理后台模板 CRUD 的读取出口。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} id
+ * @returns {object|null} LifecycleTemplate | null
+ */
+function getTemplateById(db, id) {
+  const row = db.prepare('SELECT * FROM lifecycle_templates WHERE id = ?').get(String(id));
+  return row ? mappers.toApiTemplate(row) : null;
+}
+
+/**
  * 由模板生成里程碑规格（向导未提交 `payload.milestones` 时的回退路径）。
  *
  * K-1：模板回退**不生成质量门**（`gate: null`），只保留类型契约。
@@ -690,6 +702,7 @@ module.exports = {
   loadListContext,
   getLifecycleTemplate,
   listTemplates,
+  getTemplateById,
   templateMilestoneSpecs,
   assertCreatePayload,
   assertMemberCardinality,

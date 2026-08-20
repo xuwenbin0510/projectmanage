@@ -243,6 +243,23 @@ export interface LifecycleTemplate {
   createdAt: string;
 }
 
+/* ── 阶段三 · 生命周期模板管理入参 ─────────────────── */
+
+/** 新增生命周期模板（仅 admin） */
+export interface CreateTemplatePayload {
+  projectType: ProjectType;
+  name: string;
+  /** 可选；缺省生成空骨架 { milestones: [], docs: [] } */
+  definition?: LifecycleTemplate['definition'];
+}
+
+/** 更新生命周期模板（仅 admin；definition 为整包替换，需含 wbsRules） */
+export interface UpdateTemplatePayload {
+  name?: string;
+  definition?: LifecycleTemplate['definition'];
+  isActive?: boolean;
+}
+
 export interface GateChecklistItem {
   id: string;
   gateId: string;

@@ -19,6 +19,8 @@ import type {
   ReviewTemplateConfig,
   CreateReviewTemplatePayload,
   UpdateReviewTemplatePayload,
+  CreateTemplatePayload,
+  UpdateTemplatePayload,
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
@@ -427,6 +429,23 @@ export class HttpApiClient implements ApiClient {
 
   async resetDemoData(): Promise<void> {
     await post<null>('/admin/reset-demo');
+  }
+
+  /* 阶段三：生命周期模板管理（仅 admin） */
+  createTemplate(payload: CreateTemplatePayload): Promise<LifecycleTemplate> {
+    return post<LifecycleTemplate>('/admin/templates', payload);
+  }
+  updateTemplate(id: string, patchBody: UpdateTemplatePayload): Promise<LifecycleTemplate> {
+    return put<LifecycleTemplate>(`/admin/templates/${encodeURIComponent(id)}`, patchBody);
+  }
+  toggleTemplateActive(id: string, active: boolean): Promise<LifecycleTemplate> {
+    return patch<LifecycleTemplate>(`/admin/templates/${encodeURIComponent(id)}/active`, { active });
+  }
+  deleteTemplate(id: string): Promise<{ id: string }> {
+    return del<{ id: string }>(`/admin/templates/${encodeURIComponent(id)}`);
+  }
+  duplicateTemplate(id: string): Promise<LifecycleTemplate> {
+    return post<LifecycleTemplate>(`/admin/templates/${encodeURIComponent(id)}/duplicate`);
   }
 
   /* 阶段二：审批流程模板管理（仅 admin） */
