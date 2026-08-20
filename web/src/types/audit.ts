@@ -10,7 +10,8 @@ export type AuditEntityType =
   | 'review'
   | 'change'
   | 'user'
-  | 'document';
+  | 'document'
+  | 'review_template';
 
 export type AuditAction =
   | 'create'

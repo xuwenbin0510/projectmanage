@@ -20,9 +20,24 @@ const router = express.Router();
 
 /**
  * 评审模板精简视图（契约 `MetaData.reviewTemplates`：只要 key/label/mode/chain）。
+ * 阶段二：DB 优先（scope='business' 且 active=1）→ 回落 enums.REVIEW_TEMPLATES。
+ * 项目类（scope='project'，如 project:A/B/C/_default）不进 meta——立项链由建项流程自动选择，
+ * 前端发起评审弹窗仍只展示业务类模板（与旧行为一致，零前端改动）。
  * @returns {Array<{key:string,label:string,mode:string,chain:string[]}>}
  */
 function reviewTemplateSummaries() {
+  try {
+    const rows = db
+      .prepare("SELECT key, label, mode, chain FROM review_templates WHERE scope = 'business' AND active = 1 ORDER BY key ASC")
+      .all();
+    if (rows.length) {
+      return rows.map(function (r) {
+        return { key: r.key, label: r.label, mode: r.mode, chain: JSON.parse(r.chain || '[]') };
+      });
+    }
+  } catch (e) {
+    /* 表不存在（老库未迁移）→ 回落旧配置 */
+  }
   return Object.keys(REVIEW_TEMPLATES).map(function (k) {
     const t = REVIEW_TEMPLATES[k];
     return { key: t.key, label: t.label, mode: t.mode, chain: t.chain.slice() };

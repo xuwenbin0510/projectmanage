@@ -1,4 +1,5 @@
 import type { MockDb, ProgressSnapshotMock } from '../db';
+import { DEFAULT_REVIEW_TEMPLATES } from '../db';
 import { createUsers } from './users';
 import { createTemplates } from './templates';
 import { createProjects } from './projects';
@@ -74,6 +75,7 @@ export function createSeedDb(): MockDb {
     auditLogs: createAuditLogs(users),
     risks: createRisks(users),
     documents: createDocuments(users),
+    reviewTemplates: DEFAULT_REVIEW_TEMPLATES.map((t) => ({ ...t, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })),
     progressSnapshots: createProgressSnapshots(wb),
     sessionOpenId: null,
   };

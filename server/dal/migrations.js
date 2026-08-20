@@ -1129,6 +1129,58 @@ function migrationV13(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v13 changes 加 code/review_id/applied_at/payload（D08 变更流程）');
 }
 
+/**
+ * v14：审批流程可配置（管理后台阶段二）。
+ *
+ * 新增 `review_templates` 表，把原先硬编码的两处审批配置迁入 DB：
+ *   - config.APPROVAL_TEMPLATES（A/B/C/_default 项目立项链，scope='project'）
+ *   - enums.REVIEW_TEMPLATES（formal/technical/code/ccb/pm_only/project 业务评审，scope='business'）
+ *
+ * 幂等 seed（INSERT OR IGNORE），老库升级自动补齐，不覆盖用户后续改动。
+ */
+function migrationV14(db, now) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS review_templates (
+      key         TEXT PRIMARY KEY,
+      scope       TEXT NOT NULL DEFAULT 'business',        -- project | business
+      label       TEXT NOT NULL,
+      mode        TEXT NOT NULL DEFAULT 'serial',          -- serial | parallel_veto | single
+      chain       TEXT NOT NULL DEFAULT '[]',              -- JSON 角色数组
+      description TEXT NOT NULL DEFAULT '',
+      active      INTEGER NOT NULL DEFAULT 1,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    );
+  `);
+
+  const seed = [
+    // ── 项目类（scope=project）：立项审批链，key = project:<type> ──
+    ['project:A', 'project', 'A 类项目立项审批', 'serial', ['pmo', 'tl', 'management'], 'A 类项目立项审批串行链：PMO → TL → 管理层'],
+    ['project:B', 'project', 'B 类项目立项审批', 'serial', ['pm', 'tl'], 'B 类项目立项审批串行链：PM → TL'],
+    ['project:C', 'project', 'C 类项目立项审批', 'serial', ['pmo', 'tl', 'management'], 'C 类项目立项审批串行链：PMO → TL → 管理层'],
+    ['project:_default', 'project', '立项审批（默认）', 'serial', ['pm', 'tl'], '未匹配到具体项目类型时的立项审批兜底链'],
+    // ── 业务类（scope=business）：与 enums.REVIEW_TEMPLATES 一一对应 ──
+    ['formal', 'business', '正式评审', 'parallel_veto', ['pmo', 'tl', 'management', 'customer_rep'], '立项/需求/设计/验收 → 管理层 + PMO + TL + 客户代表，一票否决'],
+    ['technical', 'business', '技术评审', 'single', ['tl'], '由技术负责人（TL）单人决议并留痕'],
+    ['code', 'business', '代码评审', 'single', ['tl'], '≥1 人 Approve 即可通过'],
+    ['ccb', 'business', 'CCB 变更评审', 'serial', ['pm', 'tl', 'po', 'customer_rep'], '基线变更 → PM → TL → PO → 客户代表 串行逐级'],
+    ['pm_only', 'business', 'PM 审批', 'single', ['pm'], '非基线小变更 → PM 单人决议并留痕'],
+    ['project', 'business', '立项审批', 'serial', ['pmo', 'management'], '立项审批串行链：PMO → 管理层'],
+  ];
+
+  const ins = db.prepare(
+    'INSERT OR IGNORE INTO review_templates (key, scope, label, mode, chain, description, active, created_at, updated_at) '
+    + 'VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)',
+  );
+  const tx = db.transaction(function () {
+    seed.forEach(function (s) {
+      ins.run(s[0], s[1], s[2], s[3], JSON.stringify(s[4]), s[5], now, now);
+    });
+  });
+  tx();
+  console.log('[migrations] v14 review_templates 表 + 10 条内置审批流 seed（审批流程可配置）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1149,6 +1201,7 @@ const MIGRATIONS = [
   { version: 11, name: 'connect-v11-template-docs', up: migrationV11 },
   { version: 12, name: 'connect-v12-doc-baseline', up: migrationV12 },
   { version: 13, name: 'connect-v13-change-flow', up: migrationV13 },
+  { version: 14, name: 'connect-v14-review-templates', up: migrationV14 },
 ];
 
 /**

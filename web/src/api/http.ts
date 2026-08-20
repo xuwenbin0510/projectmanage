@@ -16,6 +16,9 @@ import type {
   LifecycleTemplate,
   MilestoneWithGate,
   CloseBlocker,
+  ReviewTemplateConfig,
+  CreateReviewTemplatePayload,
+  UpdateReviewTemplatePayload,
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
@@ -112,6 +115,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const get = <T>(p: string): Promise<T> => request<T>('GET', p);
 const post = <T>(p: string, b?: unknown): Promise<T> => request<T>('POST', p, b ?? {});
+const put = <T>(p: string, b?: unknown): Promise<T> => request<T>('PUT', p, b ?? {});
 const patch = <T>(p: string, b?: unknown): Promise<T> => request<T>('PATCH', p, b ?? {});
 const del = <T>(p: string): Promise<T> => request<T>('DELETE', p);
 
@@ -423,6 +427,23 @@ export class HttpApiClient implements ApiClient {
 
   async resetDemoData(): Promise<void> {
     await post<null>('/admin/reset-demo');
+  }
+
+  /* 阶段二：审批流程模板管理（仅 admin） */
+  listReviewTemplates(): Promise<ReviewTemplateConfig[]> {
+    return get<ReviewTemplateConfig[]>('/admin/review-templates');
+  }
+  createReviewTemplate(payload: CreateReviewTemplatePayload): Promise<ReviewTemplateConfig> {
+    return post<ReviewTemplateConfig>('/admin/review-templates', payload);
+  }
+  updateReviewTemplate(key: string, patchBody: UpdateReviewTemplatePayload): Promise<ReviewTemplateConfig> {
+    return put<ReviewTemplateConfig>(`/admin/review-templates/${encodeURIComponent(key)}`, patchBody);
+  }
+  toggleReviewTemplateActive(key: string, active: boolean): Promise<ReviewTemplateConfig> {
+    return patch<ReviewTemplateConfig>(`/admin/review-templates/${encodeURIComponent(key)}/active`, { active });
+  }
+  deleteReviewTemplate(key: string): Promise<{ key: string }> {
+    return del<{ key: string }>(`/admin/review-templates/${encodeURIComponent(key)}`);
   }
 
   /* P1 */

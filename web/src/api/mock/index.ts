@@ -61,6 +61,7 @@ import type {
   AuditQuery,
   MetaData,
 } from '../contract';
+import type { ReviewTemplateConfig, CreateReviewTemplatePayload, UpdateReviewTemplatePayload } from '@/types/project';
 import { getDb, saveDb, resetDb } from './db';
 import type { MockDb } from './db';
 import { delay } from './delay';
@@ -99,6 +100,7 @@ import {
   REJECT_REASON_MAX,
   TASK_STATUSES,
   GLOBAL_ROLES,
+  PROJECT_ROLES,
 } from '@/config/enums';
 import {
   aggregateHealth,
@@ -308,8 +310,7 @@ function audit(
   projectId: string,
   summary: string,
   diff: AuditDiffEntry[] = [],
-): void {
-  const project = db.projects.find((p) => p.id === projectId);
+): void {  const project = db.projects.find((p) => p.id === projectId);
   db.auditLogs.unshift({
     id: genId('AL'),
     projectId,
@@ -325,6 +326,27 @@ function audit(
     summary: summary || AUDIT_ACTION_LABEL[action],
     createdAt: nowIso(),
   });
+}
+
+/* ── 阶段二：审批模板校验（白名单与服务端 admin.routes 一致） ───── */
+
+const ALLOWED_CHAIN_ROLES = new Set<string>([...GLOBAL_ROLES, ...PROJECT_ROLES, 'customer_rep']);
+
+function validateChain(chain: string[]): void {
+  if (!chain.length) throw new ApiError(ErrorCode.E_VALIDATION, '审批链至少一个角色');
+  const bad = chain.filter((r) => !ALLOWED_CHAIN_ROLES.has(r));
+  if (bad.length) throw new ApiError(ErrorCode.E_VALIDATION, '审批链含非法角色：' + bad.join(', '));
+}
+
+function validateReviewTemplate(payload: CreateReviewTemplatePayload): void {
+  if (payload.scope !== 'project' && payload.scope !== 'business') {
+    throw new ApiError(ErrorCode.E_VALIDATION, '范围必须为 project / business');
+  }
+  if (!payload.label || !String(payload.label).trim()) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
+  if (['serial', 'parallel_veto', 'single'].indexOf(payload.mode) < 0) {
+    throw new ApiError(ErrorCode.E_VALIDATION, '模式不合法');
+  }
+  validateChain(payload.chain.map(String));
 }
 
 /**
@@ -3547,6 +3569,101 @@ export class MockApiClient implements ApiClient {
     const db = resetDb();
     db.sessionOpenId = openId;
     saveDb();
+  }
+
+  /* ── 阶段二：审批流程模板管理（仅 admin） ───────────── */
+
+  async listReviewTemplates(): Promise<ReviewTemplateConfig[]> {
+    await delay();
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    return deepClone(
+      [...db.reviewTemplates].sort((a, b) => (a.scope === b.scope ? a.key.localeCompare(b.key) : a.scope === 'project' ? -1 : 1)),
+    );
+  }
+
+  async createReviewTemplate(payload: CreateReviewTemplatePayload): Promise<ReviewTemplateConfig> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const key = payload.key.trim();
+    if (!key) throw new ApiError(ErrorCode.E_VALIDATION, '模板 key 必填');
+    if (db.reviewTemplates.some((t) => t.key === key)) throw new ApiError(ErrorCode.E_VALIDATION, '模板 key 已存在');
+    validateReviewTemplate(payload);
+    const now = nowIso();
+    const tpl: ReviewTemplateConfig = {
+      key,
+      scope: payload.scope,
+      label: payload.label.trim(),
+      mode: payload.mode,
+      chain: payload.chain.map(String),
+      description: String(payload.description || '').slice(0, 200),
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.reviewTemplates.push(tpl);
+    audit(db, me, 'review_template', key, 'create', '', `新增审批模板「${tpl.label}」`, []);
+    saveDb();
+    return deepClone(tpl);
+  }
+
+  async updateReviewTemplate(key: string, patchBody: UpdateReviewTemplatePayload): Promise<ReviewTemplateConfig> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const tpl = db.reviewTemplates.find((t) => t.key === key) ?? nf();
+    const next: ReviewTemplateConfig = { ...tpl };
+    if (patchBody.label !== undefined) {
+      const label = String(patchBody.label).trim();
+      if (!label) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
+      next.label = label.slice(0, 40);
+    }
+    if (patchBody.scope !== undefined) {
+      if (patchBody.scope !== 'project' && patchBody.scope !== 'business') throw new ApiError(ErrorCode.E_VALIDATION, '范围必须为 project / business');
+      next.scope = patchBody.scope;
+    }
+    if (patchBody.mode !== undefined) {
+      if (['serial', 'parallel_veto', 'single'].indexOf(patchBody.mode) < 0) throw new ApiError(ErrorCode.E_VALIDATION, '模式不合法');
+      next.mode = patchBody.mode;
+    }
+    if (patchBody.chain !== undefined) {
+      const chain = patchBody.chain.map(String);
+      validateChain(chain);
+      next.chain = chain;
+    }
+    if (patchBody.description !== undefined) next.description = String(patchBody.description).slice(0, 200);
+    next.updatedAt = nowIso();
+    Object.assign(tpl, next);
+    audit(db, me, 'review_template', key, 'update', '', `更新审批模板「${tpl.label}」`, []);
+    saveDb();
+    return deepClone(tpl);
+  }
+
+  async toggleReviewTemplateActive(key: string, active: boolean): Promise<ReviewTemplateConfig> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const tpl = db.reviewTemplates.find((t) => t.key === key) ?? nf();
+    tpl.active = !!active;
+    tpl.updatedAt = nowIso();
+    audit(db, me, 'review_template', key, 'update', '', `${active ? '启用' : '停用'}审批模板「${tpl.label}」`, []);
+    saveDb();
+    return deepClone(tpl);
+  }
+
+  async deleteReviewTemplate(key: string): Promise<{ key: string }> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const idx = db.reviewTemplates.findIndex((t) => t.key === key);
+    if (idx < 0) nf();
+    const activeRef = db.reviews.filter((r) => r.templateKey === key && r.status === '审批中').length;
+    if (activeRef > 0) throw new ApiError(ErrorCode.E_VALIDATION, `该模板存在 ${activeRef} 条进行中的审批，无法删除，请先停用`);
+    db.reviewTemplates.splice(idx, 1);
+    audit(db, me, 'review_template', key, 'delete', '', `删除审批模板「${key}」`, []);
+    saveDb();
+    return { key };
   }
 
   /* ── P1 占位 ──────────────────────────────────── */

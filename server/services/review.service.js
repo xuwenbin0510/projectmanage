@@ -191,6 +191,33 @@ function getReview(db, id) {
  * @param {string[]} [assignees] 可选覆盖审批人 open_id 列表
  * @returns {Array<object>} ReviewStep[]（API 形态）
  */
+/**
+ * 审批模板 DB 优先读取（管理后台阶段二：审批流程可配置）。
+ *
+ * 查 `review_templates` 表 active=1 的记录；无记录返回 null，由调用方回落旧配置
+ * （config.APPROVAL_TEMPLATES / enums.REVIEW_TEMPLATES），保证老库零行为变化。
+ * @param {object} db
+ * @param {string} key
+ * @returns {{key:string,scope:string,label:string,mode:string,chain:string[]}|null}
+ */
+function getReviewTemplate(db, key) {
+  try {
+    const row = db
+      .prepare('SELECT key, scope, label, mode, chain FROM review_templates WHERE key = ? AND active = 1')
+      .get(String(key));
+    if (!row) return null;
+    return {
+      key: row.key,
+      scope: row.scope,
+      label: row.label,
+      mode: row.mode,
+      chain: JSON.parse(row.chain || '[]'),
+    };
+  } catch (e) {
+    return null; // 表不存在（极端情况：迁移未执行）→ 回落旧配置
+  }
+}
+
 function buildSteps(db, reviewId, projectId, chain, assignees) {
   const roleList = Array.isArray(chain) ? chain : [];
   const assigneeList = Array.isArray(assignees) ? assignees : [];
@@ -284,31 +311,47 @@ function createReview(db, payload, me) {
     });
   }
 
-  /* 模板选择（D2） */
+  /* 模板选择（D2，阶段二：DB 优先 → 回落旧配置） */
   let chain;
   let mode;
   let templateKey;
   let tplLabel;
   if (reviewType === 'project') {
     const type = mappers.toStr(project.type, 'B');
-    chain =
-      (config.APPROVAL_TEMPLATES && config.APPROVAL_TEMPLATES[type]) ||
-      config.APPROVAL_TEMPLATES._default ||
-      ['pm', 'tl'];
-    mode = 'serial';
-    templateKey = 'project:' + type;
-    tplLabel = '立项审批';
-  } else {
-    const tpl = enums.REVIEW_TEMPLATES[reviewType];
-    if (!tpl) {
-      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-        fields: [{ field: 'reviewType', message: '评审类型必须为 formal / technical / code / ccb / project 之一' }],
-      });
+    const dbTpl = getReviewTemplate(db, 'project:' + type) || getReviewTemplate(db, 'project:_default');
+    if (dbTpl) {
+      chain = dbTpl.chain;
+      mode = dbTpl.mode;
+      templateKey = dbTpl.key;
+      tplLabel = dbTpl.label;
+    } else {
+      chain =
+        (config.APPROVAL_TEMPLATES && config.APPROVAL_TEMPLATES[type]) ||
+        config.APPROVAL_TEMPLATES._default ||
+        ['pm', 'tl'];
+      mode = 'serial';
+      templateKey = 'project:' + type;
+      tplLabel = '立项审批';
     }
-    chain = tpl.chain;
-    mode = tpl.mode;
-    templateKey = tpl.key;
-    tplLabel = tpl.label;
+  } else {
+    const dbTpl = getReviewTemplate(db, reviewType);
+    if (dbTpl) {
+      chain = dbTpl.chain;
+      mode = dbTpl.mode;
+      templateKey = dbTpl.key;
+      tplLabel = dbTpl.label;
+    } else {
+      const tpl = enums.REVIEW_TEMPLATES[reviewType];
+      if (!tpl) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'reviewType', message: '评审类型必须为 formal / technical / code / ccb / project 之一' }],
+        });
+      }
+      chain = tpl.chain;
+      mode = tpl.mode;
+      templateKey = tpl.key;
+      tplLabel = tpl.label;
+    }
   }
 
   const id = genId('RV');
