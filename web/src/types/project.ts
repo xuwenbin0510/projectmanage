@@ -226,6 +226,15 @@ export interface TemplateDocItem {
   milestoneCode: string;
 }
 
+/** 模板约定的团队角色约束（definition.team 项；缺省回落系统默认：PM/TL 各恰 1，B 类另需 PO 恰 1） */
+export interface TemplateTeamRule {
+  role: ProjectRole;
+  /** 至少几人（0 = 不强制配置该角色） */
+  min: number;
+  /** 至多几人（-1 = 不限上限） */
+  max: number;
+}
+
 export interface LifecycleTemplate {
   id: string;
   projectType: ProjectType;
@@ -238,6 +247,8 @@ export interface LifecycleTemplate {
     docs: TemplateDocItem[];
     /** WBS 层级规则；只写差异项，其余由 `DEFAULT_WBS_RULES` 兜底（决策 D-2 / SK-5） */
     wbsRules?: Partial<WbsRules>;
+    /** 团队角色约束（可选；缺省回落系统默认规则，老模板零行为变化） */
+    team?: TemplateTeamRule[];
   };
   isActive: boolean;
   createdAt: string;

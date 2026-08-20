@@ -775,17 +775,39 @@ export class MockApiClient implements ApiClient {
     if (payload.type !== payload.classifySuggested && !payload.classifyOverrideReason.trim()) {
       throw new ApiError(ErrorCode.E_CLASSIFY_REASON_REQUIRED);
     }
-    if (payload.type === 'B' && !payload.members.some((m) => m.role === 'po')) {
-      throw new ApiError(ErrorCode.E_PROJECT_PO_REQUIRED);
-    }
-    const pmCount = payload.members.filter((m) => m.role === 'pm').length;
-    const tlCount = payload.members.filter((m) => m.role === 'tl').length;
-    if (pmCount !== 1 || tlCount !== 1) throw new ApiError(ErrorCode.E_ROLE_CARDINALITY);
 
     const tpl =
       (payload.templateId
         ? db.templates.find((t) => t.id === payload.templateId && t.projectType === payload.type && t.isActive)
         : db.templates.find((t) => t.projectType === payload.type && t.isActive)) ?? nf();
+
+    /* 团队约束：模板 definition.team 优先，缺省回落系统默认（PM/TL 各恰 1；B 类另需 PO 恰 1） */
+    const team =
+      tpl.definition.team && tpl.definition.team.length
+        ? tpl.definition.team
+        : [
+            { role: 'pm', min: 1, max: 1 },
+            { role: 'tl', min: 1, max: 1 },
+            ...(tpl.projectType === 'B' ? [{ role: 'po', min: 1, max: 1 }] : []),
+          ];
+    for (const rule of team) {
+      const count = payload.members.filter((m) => m.role === rule.role).length;
+      const min = Number(rule.min) || 0;
+      const maxRaw = Number(rule.max);
+      const max = maxRaw === -1 ? Infinity : maxRaw;
+      if (count < min || count > max) {
+        if (rule.role === 'po' && count === 0 && min === 1) throw new ApiError(ErrorCode.E_PROJECT_PO_REQUIRED);
+        if ((rule.role === 'pm' || rule.role === 'tl') && count !== 1) {
+          throw new ApiError(ErrorCode.E_ROLE_CARDINALITY);
+        }
+        throw new ApiError(
+          ErrorCode.E_VALIDATION,
+          `团队成员不满足模板约束：模板要求角色「${rule.role}」${min}~${maxRaw === -1 ? '不限' : maxRaw} 人，当前 ${count} 人`,
+          undefined,
+          400,
+        );
+      }
+    }
     const seq = db.projects.length + 1;
     const id = genId('P');
     const code = `P-${String(1000 + seq * 3).padStart(4, '0')}`;

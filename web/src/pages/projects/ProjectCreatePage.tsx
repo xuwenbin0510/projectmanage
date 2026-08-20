@@ -28,7 +28,7 @@ import { z } from 'zod';
 import { FieldRow, PageHeader, SectionCard, UserAvatar } from '@/components/common';
 import { api } from '@/api/client';
 import type { CreateProjectPayload } from '@/api/contract';
-import type { ClassifyInput, ClassifyResult, LifecycleTemplate, ProjectRole, ProjectType, User } from '@/types/project';
+import type { ClassifyInput, ClassifyResult, LifecycleTemplate, ProjectRole, ProjectType, TemplateTeamRule, User } from '@/types/project';
 import {
   PROJECT_ROLES,
   PROJECT_ROLE_LABEL,
@@ -84,6 +84,26 @@ interface CreateForm {
 }
 
 const STEPS = ['基本信息', '分类判定', '里程碑规划', '团队组建', '确认提交'] as const;
+
+/** 按团队约束规则检查成员；不满足返回错误文案，满足返回 null（与后端 assertMemberCardinality 同口径） */
+function checkTeamRules(members: MemberDraft[], rules: TemplateTeamRule[]): string | null {
+  for (const rule of rules) {
+    const count = members.filter((m) => m.role === rule.role).length;
+    const min = Number(rule.min) || 0;
+    const maxRaw = Number(rule.max);
+    const max = maxRaw === -1 ? Infinity : maxRaw;
+    if (count < min || count > max) {
+      if (rule.role === 'po' && count === 0 && min === 1) return '模板要求必须指定产品负责人（PO）';
+      return `模板要求角色「${PROJECT_ROLE_LABEL[rule.role]}」${min}~${maxRaw === -1 ? '不限' : maxRaw} 人，当前 ${count} 人`;
+    }
+  }
+  return null;
+}
+
+/** 团队约束的展示文案（用于提示 Alert 与确认页） */
+function teamRuleLabel(r: TemplateTeamRule): string {
+  return `${PROJECT_ROLE_LABEL[r.role]} ${r.min}~${r.max === -1 ? '不限' : r.max} 人`;
+}
 
 const baseSchema = z.object({
   name: z.string().trim().min(2, '项目名称至少 2 个字'),
@@ -254,10 +274,19 @@ export function ProjectCreatePage(): JSX.Element {
   const pmMember = form.members.find((m) => m.role === 'pm');
   const tlCount = form.members.filter((m) => m.role === 'tl').length;
   const pmCount = form.members.filter((m) => m.role === 'pm').length;
-  const hasPo = form.members.some((m) => m.role === 'po');
   const isOverride = form.type !== classifyResult.suggested;
   /** 方案A：当前选中的模板对象（下拉展示用） */
   const selectedTpl = templateOptions.find((t) => t.id === selectedTemplateId) ?? null;
+  /** 团队约束：模板 definition.team 优先，缺省回落系统默认（PM/TL 各恰 1；B 类另需 PO 恰 1） */
+  const teamRules: TemplateTeamRule[] = useMemo(() => {
+    if (selectedTpl?.definition.team?.length) return selectedTpl.definition.team;
+    const defs: TemplateTeamRule[] = [
+      { role: 'pm', min: 1, max: 1 },
+      { role: 'tl', min: 1, max: 1 },
+      ...(form.type === 'B' ? [{ role: 'po' as ProjectRole, min: 1, max: 1 }] : []),
+    ];
+    return defs;
+  }, [selectedTpl, form.type]);
 
   const nameOf = (openId: string): string => userList.find((u) => u.openId === openId)?.name ?? openId;
 
@@ -310,9 +339,11 @@ export function ProjectCreatePage(): JSX.Element {
       // 复合键防御：同一人可担任多个角色，但「同一人 + 同一角色」不能重复
       const keys = form.members.map((m) => `${m.userOpenId}::${m.role}`);
       if (new Set(keys).size !== keys.length) next.members = '同一成员的同一角色不能重复添加';
-      else if (pmCount !== 1) next.members = '项目经理（PM）有且仅有 1 人';
-      else if (tlCount !== 1) next.members = '技术负责人（TL）有且仅有 1 人';
-      else if (form.type === 'B' && !hasPo) next.members = 'B 类（产品型）项目必须指定产品负责人（PO）';
+      else {
+        // 团队约束：读模板 definition.team（缺省回落系统默认，与后端 assertMemberCardinality 同口径）
+        const ruleMsg = checkTeamRules(form.members, teamRules);
+        if (ruleMsg) next.members = ruleMsg;
+      }
     }
 
     return next;
@@ -581,8 +612,7 @@ export function ProjectCreatePage(): JSX.Element {
   const renderMembers = (): JSX.Element => (
     <Stack spacing={2}>
       <Alert severity="info" variant="outlined">
-        角色约束：项目经理（PM）与技术负责人（TL）<strong>各且仅有 1 人</strong>
-        {form.type === 'B' ? '；B 类（产品型）项目必须指定产品负责人（PO）' : ''}。
+        团队约束（{selectedTpl ? `模板「${selectedTpl.name}」` : '系统默认'}）：{teamRules.map(teamRuleLabel).join('；')}。
         <br />
         同一人可担任多个角色（如既是 PM 又是 TL），请<strong>分行添加</strong>。
       </Alert>
@@ -680,6 +710,9 @@ export function ProjectCreatePage(): JSX.Element {
       </FieldRow>
       <FieldRow label="生命周期模板">
         {selectedTpl ? `${selectedTpl.name} · v${selectedTpl.version}` : '系统默认模板'}
+      </FieldRow>
+      <FieldRow label="团队约束">
+        {teamRules.map(teamRuleLabel).join('；')}
       </FieldRow>
       <FieldRow label="里程碑">
         {form.milestones.length} 个里程碑 · 创建后可在里程碑页自由增删改

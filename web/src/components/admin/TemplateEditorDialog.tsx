@@ -22,7 +22,8 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 
-import type { LifecycleTemplate, TemplateMilestone, TemplateGate, TemplateDocItem } from '@/types/project';
+import type { LifecycleTemplate, TemplateMilestone, TemplateGate, TemplateDocItem, TemplateTeamRule } from '@/types/project';
+import { PROJECT_ROLES, PROJECT_ROLE_LABEL } from '@/config/enums';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
 
@@ -178,6 +179,8 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
   const [milestones, setMilestones] = useState<TemplateMilestone[]>([]);
   const [docs, setDocs] = useState<TemplateDocItem[]>([]);
   const [wbsRules, setWbsRules] = useState<LifecycleTemplate['definition']['wbsRules']>(undefined);
+  /** 团队角色约束（可选；缺省回落系统默认 PM/TL 各1 + B 类 PO 1） */
+  const [team, setTeam] = useState<TemplateTeamRule[]>([]);
   const [gateFor, setGateFor] = useState<number | null>(null); // 正在编辑门的里程碑下标
   const [saving, setSaving] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -195,6 +198,7 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
     })));
     setDocs(t.definition.docs.map((d) => ({ name: d.name, milestoneCode: d.milestoneCode })));
     setWbsRules(t.definition.wbsRules);
+    setTeam((t.definition.team ?? []).map((r) => ({ role: r.role, min: r.min, max: r.max })));
     setTouched(false);
   };
 
@@ -232,6 +236,7 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
         })),
         docs: docs.map((d) => ({ name: d.name.trim(), milestoneCode: d.milestoneCode.trim() })),
         wbsRules,
+        team: team.map((r) => ({ role: r.role, min: Number(r.min) || 0, max: Number(r.max) === -1 ? -1 : Number(r.max) || 0 })),
       };
       const updated = await api.updateTemplate(template.id, {
         name: name.trim(),
@@ -385,6 +390,83 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
                 )}
               </Stack>
             </Box>
+
+            {/* 团队角色约束 */}
+            <Box>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                <Typography variant="subtitle2">团队角色约束</Typography>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={() => {
+                    setTeam((list) => [...list, { role: 'member', min: 0, max: -1 }]);
+                    setTouched(true);
+                  }}
+                >
+                  添加规则
+                </Button>
+              </Stack>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                建项向导按此约束校验团队组成（至少 / 至多人数）；不配置则按系统默认：PM、TL 各 1 人，B 类另需 PO 1 人。
+              </Typography>
+              <Stack spacing={1}>
+                {team.map((r, i) => (
+                  <Stack key={i} direction="row" spacing={1} alignItems="center">
+                    <TextField
+                      size="small"
+                      select
+                      sx={{ width: 150 }}
+                      label="角色"
+                      value={r.role}
+                      onChange={(e) => {
+                        setTeam((list) => list.map((x, j) => (j === i ? { ...x, role: e.target.value as TemplateTeamRule['role'] } : x)));
+                        setTouched(true);
+                      }}
+                    >
+                      {PROJECT_ROLES.map((rl) => (
+                        <MenuItem key={rl} value={rl}>{PROJECT_ROLE_LABEL[rl]}</MenuItem>
+                      ))}
+                    </TextField>
+                    <TextField
+                      size="small"
+                      type="number"
+                      sx={{ width: 100 }}
+                      label="至少"
+                      value={r.min}
+                      onChange={(e) => {
+                        setTeam((list) => list.map((x, j) => (j === i ? { ...x, min: Number(e.target.value) } : x)));
+                        setTouched(true);
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      sx={{ width: 130 }}
+                      label="至多（-1=不限）"
+                      value={r.max}
+                      onChange={(e) => {
+                        setTeam((list) => list.map((x, j) => (j === i ? { ...x, max: Number(e.target.value) } : x)));
+                        setTouched(true);
+                      }}
+                    />
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        setTeam((list) => list.filter((_, j) => j !== i));
+                        setTouched(true);
+                      }}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Stack>
+                ))}
+                {team.length === 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    未配置团队约束，建项向导使用系统默认规则（PM/TL 各 1 人，B 类另需 PO 1 人）。
+                  </Typography>
+                )}
+              </Stack>
+            </Box>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -393,7 +475,7 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
             size="small"
             variant="contained"
             onClick={() => void save()}
-            disabled={saving || !name.trim() || milestones.some((m) => !m.code.trim() || !m.name.trim()) || docs.some((d) => !d.name.trim())}
+            disabled={saving || !name.trim() || milestones.some((m) => !m.code.trim() || !m.name.trim()) || docs.some((d) => !d.name.trim()) || team.some((r) => r.min < 0 || (r.max !== -1 && r.max < r.min))}
           >
             {saving ? '保存中…' : '保存'}
           </Button>

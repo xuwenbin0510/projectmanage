@@ -537,6 +537,7 @@ function toApiTemplate(row) {
       milestones: Array.isArray(definition.milestones) ? definition.milestones : [],
       docs: Array.isArray(definition.docs) ? definition.docs : [],
       wbsRules: definition.wbsRules && typeof definition.wbsRules === 'object' ? definition.wbsRules : undefined,
+      team: Array.isArray(definition.team) && definition.team.length ? definition.team : undefined,
     },
     isActive: toBool(row.is_active),
     createdAt: toStr(row.created_at),
