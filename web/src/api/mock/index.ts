@@ -2,6 +2,8 @@ import type { Paged } from '@/types/api';
 import { ApiError, ErrorCode } from '@/types/api';
 import type {
   User,
+  CreateUserPayload,
+  UpdateUserPayload,
   GlobalRole,
   Project,
   ProjectListItem,
@@ -96,6 +98,7 @@ import {
   normalizePriority,
   REJECT_REASON_MAX,
   TASK_STATUSES,
+  GLOBAL_ROLES,
 } from '@/config/enums';
 import {
   aggregateHealth,
@@ -3460,6 +3463,72 @@ export class MockApiClient implements ApiClient {
     audit(db, me, 'user', openId, 'update', '', `修改用户「${u.name}」全局角色`, [
       { field: 'globalRole', label: '全局角色', before, after: role },
     ]);
+    saveDb();
+    return deepClone(u);
+  }
+
+  /** 阶段一：新增用户（仅 admin，openId 唯一，状态恒 active） */
+  async createUser(payload: CreateUserPayload): Promise<User> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const openId = String(payload.openId || '').trim();
+    const name = String(payload.name || '').trim();
+    if (!openId) throw new ApiError(ErrorCode.E_VALIDATION, 'openId 必填');
+    if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '姓名必填');
+    const role = payload.globalRole ?? 'member';
+    if (!GLOBAL_ROLES.includes(role)) throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
+    if (db.users.some((x) => x.openId === openId)) throw new ApiError(ErrorCode.E_VALIDATION, '该 openId 已存在');
+    const now = nowIso();
+    const u: User = {
+      id: Math.max(0, ...db.users.map((x) => x.id)) + 1,
+      openId,
+      employeeId: payload.employeeId ?? '',
+      name,
+      email: payload.email ?? '',
+      dept: payload.dept ?? '',
+      avatarUrl: '',
+      globalRole: role,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.users.push(u);
+    audit(db, me, 'user', openId, 'create', '', `新增用户「${name}」`, [
+      { field: 'globalRole', label: '全局角色', before: '', after: role },
+    ]);
+    saveDb();
+    return deepClone(u);
+  }
+
+  /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin；只传需要更新的字段） */
+  async updateUser(openId: string, patchBody: UpdateUserPayload): Promise<User> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const u = db.users.find((x) => x.openId === openId) ?? nf();
+    if (patchBody.globalRole !== undefined) {
+      if (!GLOBAL_ROLES.includes(patchBody.globalRole)) throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
+      if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
+      if (u.globalRole === 'admin' && patchBody.globalRole !== 'admin') {
+        const admins = db.users.filter((x) => x.globalRole === 'admin').length;
+        if (admins <= 1) throw new ApiError(ErrorCode.E_LAST_ADMIN);
+      }
+      u.globalRole = patchBody.globalRole;
+    }
+    if (patchBody.status !== undefined) {
+      if (patchBody.status !== 'active' && patchBody.status !== 'disabled') {
+        throw new ApiError(ErrorCode.E_VALIDATION, '状态不合法');
+      }
+      if (openId === me.openId && patchBody.status === 'disabled') throw new ApiError(ErrorCode.E_SELF_ROLE);
+      u.status = patchBody.status;
+    }
+    if (patchBody.dept !== undefined) u.dept = String(patchBody.dept).slice(0, 60);
+    if (patchBody.name !== undefined && String(patchBody.name).trim()) u.name = String(patchBody.name).trim().slice(0, 40);
+    if (patchBody.employeeId !== undefined) u.employeeId = String(patchBody.employeeId).slice(0, 40);
+    if (patchBody.email !== undefined) u.email = String(patchBody.email).trim().slice(0, 80);
+    u.updatedAt = nowIso();
+    audit(db, me, 'user', openId, 'update', '', `更新用户「${u.name}」`, []);
     saveDb();
     return deepClone(u);
   }

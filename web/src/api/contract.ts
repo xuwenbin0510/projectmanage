@@ -1,6 +1,8 @@
 import type { Paged } from '@/types/api';
 import type {
   User,
+  CreateUserPayload,
+  UpdateUserPayload,
   GlobalRole,
   Project,
   ProjectListItem,
@@ -350,6 +352,10 @@ export interface ApiClient {
   /* 管理后台 */
   listUsers(): Promise<User[]>;
   updateUserRole(openId: string, role: GlobalRole): Promise<User>;
+  /** 阶段一：新增用户（仅 admin） */
+  createUser(payload: CreateUserPayload): Promise<User>;
+  /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin；只传需要更新的字段） */
+  updateUser(openId: string, patch: UpdateUserPayload): Promise<User>;
   listTemplates(): Promise<LifecycleTemplate[]>;
   resetDemoData(): Promise<void>;
 

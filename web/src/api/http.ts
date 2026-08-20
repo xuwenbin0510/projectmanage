@@ -2,6 +2,8 @@ import type { ApiEnvelope, Paged } from '@/types/api';
 import { ApiError, ErrorCode } from '@/types/api';
 import type {
   User,
+  CreateUserPayload,
+  UpdateUserPayload,
   GlobalRole,
   Project,
   ProjectListItem,
@@ -403,6 +405,16 @@ export class HttpApiClient implements ApiClient {
 
   updateUserRole(openId: string, role: GlobalRole): Promise<User> {
     return patch<User>(`/admin/users/${openId}`, { globalRole: role });
+  }
+
+  /** 阶段一：新增用户（仅 admin） */
+  createUser(payload: CreateUserPayload): Promise<User> {
+    return post<User>('/admin/users', payload);
+  }
+
+  /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin） */
+  updateUser(openId: string, patchBody: UpdateUserPayload): Promise<User> {
+    return patch<User>(`/admin/users/${openId}`, patchBody);
   }
 
   listTemplates(): Promise<LifecycleTemplate[]> {

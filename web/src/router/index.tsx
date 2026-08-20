@@ -26,6 +26,7 @@ import { ProjectAuditPage } from '@/pages/projects/ProjectAuditPage';
 import { RisksPage } from '@/pages/projects/RisksPage';
 import { DocumentsPage } from '@/pages/projects/DocumentsPage';
 import { AdminUsersPage } from '@/pages/admin/AdminUsersPage';
+import { AdminPermissionsPage } from '@/pages/admin/AdminPermissionsPage';
 import { AdminTemplatesPage } from '@/pages/admin/AdminTemplatesPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
 
@@ -109,6 +110,7 @@ export function AppRouter(): JSX.Element {
 
         <Route path="admin" element={<Navigate to={ROUTES.adminUsers} replace />} />
         <Route path="admin/users" element={<AdminUsersPage />} />
+        <Route path="admin/permissions" element={<AdminPermissionsPage />} />
         <Route path="admin/templates" element={<AdminTemplatesPage />} />
         <Route path="admin/audit-logs" element={<AdminAuditPage />} />
 

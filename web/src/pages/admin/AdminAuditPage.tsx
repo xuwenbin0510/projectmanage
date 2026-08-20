@@ -3,6 +3,7 @@ import { Box, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 
 import { EmptyState, LoadingState, PageHeader, SectionCard } from '@/components/common';
+import { AdminTabs } from './AdminTabs';
 import type { AuditLog } from '@/types/audit';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
@@ -48,6 +49,7 @@ export function AdminAuditPage(): JSX.Element {
 
   return (
     <Stack spacing={2.5}>
+      <AdminTabs />
       <PageHeader
         title="审计日志"
         subtitle="全平台关键操作的留痕查询；可按对象类型与动作过滤"
