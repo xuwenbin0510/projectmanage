@@ -20,6 +20,7 @@ export const ROUTES = {
   approvals: '/approvals',
   metrics: '/metrics',
   adminUsers: '/admin/users',
+  adminPermissions: '/admin/permissions',
   adminAuditLog: '/admin/audit-logs',
   adminTemplates: '/admin/templates',
 } as const;

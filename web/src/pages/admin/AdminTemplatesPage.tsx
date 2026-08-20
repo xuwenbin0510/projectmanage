@@ -3,6 +3,7 @@ import { Box, Chip, Stack, Typography } from '@mui/material';
 
 import { DataTable, EmptyState, LoadingState, PageHeader, SectionCard, StatusChip } from '@/components/common';
 import type { Column } from '@/components/common';
+import { AdminTabs } from './AdminTabs';
 import type { LifecycleTemplate, ProjectType } from '@/types/project';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
@@ -51,6 +52,7 @@ export function AdminTemplatesPage(): JSX.Element {
 
   return (
     <Stack spacing={2.5}>
+      <AdminTabs />
       <PageHeader title="生命周期模板" subtitle="A / B / C 三类项目各自的生命周期定义：里程碑、质量门与交付物（只读预览）" />
       <SectionCard flush>
         {loading ? (

@@ -59,6 +59,26 @@ export interface User {
   updatedAt: string;
 }
 
+/** 阶段一 · 新增用户入参（openId/name 必填，其余可选） */
+export interface CreateUserPayload {
+  openId: string;
+  name: string;
+  employeeId?: string;
+  email?: string;
+  dept?: string;
+  globalRole?: GlobalRole;
+}
+
+/** 阶段一 · 用户通用更新入参（只传需要更新的字段） */
+export interface UpdateUserPayload {
+  globalRole?: GlobalRole;
+  status?: 'active' | 'disabled';
+  dept?: string;
+  name?: string;
+  employeeId?: string;
+  email?: string;
+}
+
 /** 分类判定输入（P0-01） */
 export interface ClassifyInput {
   contractAmount: number;
