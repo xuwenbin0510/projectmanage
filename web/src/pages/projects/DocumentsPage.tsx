@@ -366,21 +366,21 @@ export function DocumentsPage(): JSX.Element {
               )}
               {!isTpl && <Chip size="small" label={associationLabel(d)} variant="outlined" sx={{ height: 18, fontSize: 11 }} />}
             </Stack>
-            <Typography
-              variant="caption"
-              color={isLink ? 'primary.main' : 'text.secondary'}
-              sx={{
-                maxWidth: 420,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                display: 'block',
-                cursor: isLink ? 'pointer' : 'default',
-              }}
-              onClick={isLink ? () => window.open(d.url, '_blank', 'noopener') : undefined}
-            >
-              {isLink ? d.url : d.fileName ? `${formatSize(d.fileSize)} · ${d.mimeType || '未知类型'}` : isTpl ? '未交付' : ''}
-            </Typography>
+            {!isLink && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  maxWidth: 420,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  display: 'block',
+                }}
+              >
+                {d.fileName ? `${formatSize(d.fileSize)} · ${d.mimeType || '未知类型'}` : isTpl ? '未交付' : ''}
+              </Typography>
+            )}
             {d.uploadedBy && (
               <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>
                 交付 {usersMap[d.uploadedBy] || d.uploadedBy}
