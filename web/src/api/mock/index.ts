@@ -61,7 +61,7 @@ import type {
   AuditQuery,
   MetaData,
 } from '../contract';
-import type { ReviewTemplateConfig, CreateReviewTemplatePayload, UpdateReviewTemplatePayload } from '@/types/project';
+import type { ReviewTemplateConfig, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, CreateTemplatePayload, UpdateTemplatePayload } from '@/types/project';
 import { getDb, saveDb, resetDb } from './db';
 import type { MockDb } from './db';
 import { delay } from './delay';
@@ -3560,6 +3560,92 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     currentUser(db);
     return deepClone(db.templates);
+  }
+
+  /* ── 阶段三：生命周期模板管理（仅 admin） ───────────── */
+
+  async createTemplate(payload: CreateTemplatePayload): Promise<LifecycleTemplate> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    if (['A', 'B', 'C'].indexOf(payload.projectType) < 0) throw new ApiError(ErrorCode.E_VALIDATION, '适用分类必须为 A / B / C');
+    if (!payload.name || !String(payload.name).trim()) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
+    const tpl: LifecycleTemplate = {
+      id: genId('TMP'),
+      projectType: payload.projectType,
+      version: 1,
+      name: String(payload.name).trim().slice(0, 60),
+      definition: payload.definition
+        ? deepClone(payload.definition)
+        : { milestones: [], docs: [], wbsRules: undefined },
+      isActive: true,
+      createdAt: nowIso(),
+    };
+    db.templates.push(tpl);
+    audit(db, me, 'template', tpl.id, 'create', '', `新增生命周期模板「${tpl.name}」`, []);
+    saveDb();
+    return deepClone(tpl);
+  }
+
+  async updateTemplate(id: string, patchBody: UpdateTemplatePayload): Promise<LifecycleTemplate> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const tpl = db.templates.find((t) => t.id === id) ?? nf();
+    if (patchBody.name !== undefined) {
+      const name = String(patchBody.name).trim();
+      if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
+      tpl.name = name.slice(0, 60);
+    }
+    if (patchBody.definition !== undefined) tpl.definition = deepClone(patchBody.definition);
+    if (patchBody.isActive !== undefined) tpl.isActive = !!patchBody.isActive;
+    audit(db, me, 'template', id, 'update', '', `更新生命周期模板「${tpl.name}」`, []);
+    saveDb();
+    return deepClone(tpl);
+  }
+
+  async toggleTemplateActive(id: string, active: boolean): Promise<LifecycleTemplate> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const tpl = db.templates.find((t) => t.id === id) ?? nf();
+    tpl.isActive = !!active;
+    audit(db, me, 'template', id, 'update', '', `${active ? '启用' : '停用'}生命周期模板「${tpl.name}」`, []);
+    saveDb();
+    return deepClone(tpl);
+  }
+
+  async deleteTemplate(id: string): Promise<{ id: string }> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const idx = db.templates.findIndex((t) => t.id === id);
+    if (idx < 0) nf();
+    const ref = db.projects.filter((p) => p.templateId === id && p.status !== '已结项' && p.status !== '已终止').length;
+    if (ref > 0) throw new ApiError(ErrorCode.E_VALIDATION, `该模板已被 ${ref} 个项目引用，无法删除，可先停用`);
+    db.templates.splice(idx, 1);
+    audit(db, me, 'template', id, 'delete', '', `删除生命周期模板「${id}」`, []);
+    saveDb();
+    return { id };
+  }
+
+  async duplicateTemplate(id: string): Promise<LifecycleTemplate> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    const src = db.templates.find((t) => t.id === id) ?? nf();
+    const copy: LifecycleTemplate = {
+      ...deepClone(src),
+      id: genId('TMP'),
+      version: src.version + 1,
+      name: src.name.slice(0, 50) + '（副本）',
+      isActive: false,
+      createdAt: nowIso(),
+    };
+    db.templates.push(copy);
+    audit(db, me, 'template', copy.id, 'create', '', `复制生命周期模板「${copy.name}」`, []);
+    saveDb();
+    return deepClone(copy);
   }
 
   /** 演示数据一键复位 */

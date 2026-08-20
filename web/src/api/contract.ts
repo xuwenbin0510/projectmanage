@@ -19,6 +19,8 @@ import type {
   ReviewTemplateConfig,
   CreateReviewTemplatePayload,
   UpdateReviewTemplatePayload,
+  CreateTemplatePayload,
+  UpdateTemplatePayload,
 } from '@/types/project';
 import type { WbsNode, WbsNodeType, TaskStatus, Priority, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
@@ -361,6 +363,13 @@ export interface ApiClient {
   updateUser(openId: string, patch: UpdateUserPayload): Promise<User>;
   listTemplates(): Promise<LifecycleTemplate[]>;
   resetDemoData(): Promise<void>;
+
+  /* 阶段三：生命周期模板管理（仅 admin） */
+  createTemplate(payload: CreateTemplatePayload): Promise<LifecycleTemplate>;
+  updateTemplate(id: string, patch: UpdateTemplatePayload): Promise<LifecycleTemplate>;
+  toggleTemplateActive(id: string, active: boolean): Promise<LifecycleTemplate>;
+  deleteTemplate(id: string): Promise<{ id: string }>;
+  duplicateTemplate(id: string): Promise<LifecycleTemplate>;
 
   /* 阶段二：审批流程模板管理（仅 admin） */
   listReviewTemplates(): Promise<ReviewTemplateConfig[]>;
