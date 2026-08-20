@@ -165,6 +165,10 @@ export class HttpApiClient implements ApiClient {
     return get<LifecycleTemplate | null>(`/meta/templates/${type}`);
   }
 
+  listTemplateOptions(type: ProjectType): Promise<LifecycleTemplate[]> {
+    return get<LifecycleTemplate[]>(`/meta/templates/options?type=${encodeURIComponent(type)}`);
+  }
+
   /* 项目 */
   classify(input: ClassifyInput): Promise<ClassifyResult> {
     return post<ClassifyResult>('/projects/classify', input);

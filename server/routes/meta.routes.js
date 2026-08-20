@@ -1,11 +1,12 @@
 /**
  * 元数据路由
  *
- *  GET /api/meta                  → MetaData {templates, reviewTemplates, wipDefault}
- *  GET /api/meta/templates/:type  → LifecycleTemplate | null（**缺失返回 null，不抛 404**）
+ *  GET /api/meta                          → MetaData {templates, reviewTemplates, wipDefault}
+ *  GET /api/meta/templates/options?type=X → LifecycleTemplate[]（该分类全部启用模板，version DESC；方案A 建项向导下拉）
+ *  GET /api/meta/templates/:type          → LifecycleTemplate | null（**缺失返回 null，不抛 404**）
  *
  * `/api/meta` 取代旧的 `/api/approval-config`。
- * 注册顺序：静态段 `/meta` 与 `/meta/templates/:type` 无冲突，但仍按「静态在前」书写。
+ * 注册顺序：静态段 `/meta`、`/meta/templates/options` 必须在前——否则 `options` 会被 `/meta/templates/:type` 的 `:type` 吃掉。
  */
 
 const express = require('express');
@@ -55,6 +56,15 @@ router.get(
         wipDefault: DEFAULT_WIP_LIMIT,
       }),
     );
+  }),
+);
+
+router.get(
+  '/meta/templates/options',
+  requireAuth,
+  asyncHandler(async function listTemplateOptions(req, res) {
+    /* 方案A：建项向导「生命周期模板」下拉数据源——该分类全部启用模板（version DESC） */
+    res.json(ok(projectService.listActiveTemplateOptions(db, String(req.query.type || ''))));
   }),
 );
 

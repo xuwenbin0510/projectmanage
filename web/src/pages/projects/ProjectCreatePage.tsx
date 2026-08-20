@@ -28,7 +28,7 @@ import { z } from 'zod';
 import { FieldRow, PageHeader, SectionCard, UserAvatar } from '@/components/common';
 import { api } from '@/api/client';
 import type { CreateProjectPayload } from '@/api/contract';
-import type { ClassifyInput, ClassifyResult, ProjectRole, ProjectType, User } from '@/types/project';
+import type { ClassifyInput, ClassifyResult, LifecycleTemplate, ProjectRole, ProjectType, User } from '@/types/project';
 import {
   PROJECT_ROLES,
   PROJECT_ROLE_LABEL,
@@ -129,8 +129,12 @@ export function ProjectCreatePage(): JSX.Element {
   const [step, setStep] = useState<number>(0);
   const [form, setForm] = useState<CreateForm>({ ...EMPTY_FORM });
   const [errors, setErrors] = useState<Record<string, string>>({});
-  /** 已据以构建里程碑草稿的项目分类（变化时才重建，避免覆盖用户编辑） */
-  const [msBuiltFor, setMsBuiltFor] = useState<string>('');
+  /** 已据以构建里程碑草稿的「分类::模板id」组合（变化时才重建，避免覆盖用户编辑） */
+  const [tplBuiltFor, setTplBuiltFor] = useState<string>('');
+  /** 方案A：当前分类的全部启用模板（version DESC，下拉数据源） */
+  const [templateOptions, setTemplateOptions] = useState<LifecycleTemplate[]>([]);
+  /** 方案A：向导中显式选中的模板 id（空 = 未选择，走系统默认） */
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   /** 生成里程碑时采用过的计划周期（用于检测周期变更是否需重算，P0-M5） */
   const [builtPeriod, setBuiltPeriod] = useState<{ start: string; end: string }>({ start: '', end: '' });
   /** 最近一次里程碑日期压缩结果（含压缩比 / 堆叠标志，供透明化提示 P1-M11/M12） */
@@ -185,19 +189,29 @@ export function ProjectCreatePage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classifyInput]);
 
-  /* ── 里程碑规划草稿：进入里程碑步骤时由模板带出（用户反馈①） ──
-   * 仅在分类变化（msBuiltFor !== form.type）时重建，避免覆盖用户编辑。
+  /* ── 里程碑规划草稿：进入里程碑步骤时按「分类 + 显式选中的模板」带出（用户反馈① + 方案A） ──
+   * 仅在「分类或模板」变化（tplBuiltFor !== `${type}::${templateId}`）时重建，避免覆盖用户编辑。
+   * 模板下拉数据源 = 该分类全部启用模板（version DESC），默认选中最新；切换模板即时重渲染。
    * 日期 = planStart + 模板偏移；用户在向导中可改名称 / 日期、可新增。
    */
   useEffect(() => {
     if (step !== 2) return;
-    if (msBuiltFor === form.type) return; // 首次 / 分类变化才重建，仍不覆盖用户编辑
+    const key = `${form.type}::${selectedTemplateId}`;
+    if (tplBuiltFor === key) return; // 分类 / 模板未变（含仅周期变化）→ 不重建，保留用户编辑
     const { planStart, planEnd } = form;
     let alive = true;
     api
-      .getLifecycleTemplate(form.type)
-      .then((tpl) => {
-        if (!alive || !tpl) return;
+      .listTemplateOptions(form.type)
+      .then((opts) => {
+        if (!alive) return;
+        setTemplateOptions(opts);
+        // 生效模板：选中项仍在该分类启用列表 → 用之；否则默认最新（version DESC 第一个）
+        const tpl = opts.find((t) => t.id === selectedTemplateId) ?? opts[0] ?? null;
+        if (selectedTemplateId !== (tpl?.id ?? '')) setSelectedTemplateId(tpl?.id ?? '');
+        if (!tpl) {
+          setTplBuiltFor(key);
+          return; // 该分类无启用模板 → 保持空里程碑，用户手工填写
+        }
         const offsets = tpl.definition.milestones.map((md) => md.offsetDays);
         const fit = fitMilestoneDatesEx(planStart, planEnd, offsets); // ★ 不再直算 addDays
         const specs: MilestoneDraft[] = tpl.definition.milestones.map((md, i) => ({
@@ -219,16 +233,16 @@ export function ProjectCreatePage(): JSX.Element {
         setForm((f) => ({ ...f, milestones: specs }));
         setFitInfo(fit);
         setBuiltPeriod({ start: planStart, end: planEnd });
-        setMsBuiltFor(form.type);
+        setTplBuiltFor(`${form.type}::${tpl.id}`);
       })
       .catch(() => {
-        if (alive) setMsBuiltFor(form.type);
+        if (alive) setTplBuiltFor(key);
       });
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, form.type, msBuiltFor, form.planStart, form.planEnd]); // ★ 补 planStart/planEnd（问题②根因）
+  }, [step, form.type, selectedTemplateId, tplBuiltFor, form.planStart, form.planEnd]);
 
   const patch = (p: Partial<CreateForm>): void => setForm((f) => ({ ...f, ...p }));
 
@@ -242,6 +256,8 @@ export function ProjectCreatePage(): JSX.Element {
   const pmCount = form.members.filter((m) => m.role === 'pm').length;
   const hasPo = form.members.some((m) => m.role === 'po');
   const isOverride = form.type !== classifyResult.suggested;
+  /** 方案A：当前选中的模板对象（下拉展示用） */
+  const selectedTpl = templateOptions.find((t) => t.id === selectedTemplateId) ?? null;
 
   const nameOf = (openId: string): string => userList.find((u) => u.openId === openId)?.name ?? openId;
 
@@ -375,6 +391,7 @@ export function ProjectCreatePage(): JSX.Element {
       classifyInput,
       classifySuggested: classifyResult.suggested,
       classifyOverrideReason: isOverride ? form.overrideReason.trim() : '',
+      templateId: selectedTemplateId || undefined,
       members: form.members.map((m) => ({ userOpenId: m.userOpenId, role: m.role })),
       milestones: form.milestones.map((m) => ({
         code: m.code,
@@ -661,12 +678,15 @@ export function ProjectCreatePage(): JSX.Element {
           ))}
         </Stack>
       </FieldRow>
+      <FieldRow label="生命周期模板">
+        {selectedTpl ? `${selectedTpl.name} · v${selectedTpl.version}` : '系统默认模板'}
+      </FieldRow>
       <FieldRow label="里程碑">
         {form.milestones.length} 个里程碑 · 创建后可在里程碑页自由增删改
       </FieldRow>
       <Divider />
       <Alert severity="info" variant="outlined">
-        提交后系统会按 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板生成里程碑（向导中已规划，可在此后继续增删改）；
+        提交后系统按所选模板（{PROJECT_TYPE_SHORT[form.type]} 类）生成里程碑（向导中已规划，可在此后继续增删改）；
         项目初始状态为「草稿」，需在概览页发起立项审批。
       </Alert>
     </Stack>
@@ -692,8 +712,32 @@ export function ProjectCreatePage(): JSX.Element {
 
   const renderMilestones = (): JSX.Element => (
     <Stack spacing={2}>
+      {/* 方案A：显式选择生命周期模板（该分类全部启用模板，默认最新；切换即时重渲染里程碑） */}
+      <Stack spacing={0.75}>
+        <Typography variant="subtitle2">生命周期模板（决定默认里程碑）</Typography>
+        <TextField
+          select
+          size="small"
+          fullWidth
+          value={selectedTemplateId}
+          onChange={(e) => setSelectedTemplateId(e.target.value)}
+          disabled={templateOptions.length === 0}
+          helperText={
+            templateOptions.length === 0
+              ? '该分类暂无启用模板，可手工填写里程碑（不阻断提交）'
+              : `${selectedTpl?.definition.milestones.length ?? 0} 个里程碑 · 创建后可在里程碑页自由增删改`
+          }
+        >
+          {templateOptions.map((t) => (
+            <MenuItem key={t.id} value={t.id}>
+              {t.name} · v{t.version}
+              {t.id === templateOptions[0]?.id ? '（默认）' : ''}
+            </MenuItem>
+          ))}
+        </TextField>
+      </Stack>
       <Alert severity="info" variant="outlined">
-        默认里程碑由 <strong>{PROJECT_TYPE_SHORT[form.type]}</strong> 模板带出，可修改<strong>名称 / 计划日期</strong>，
+        默认里程碑由所选模板带出，可修改<strong>名称 / 计划日期</strong>，
         可自由增删；也支持新增里程碑。
       </Alert>
       {periodDirty && (
