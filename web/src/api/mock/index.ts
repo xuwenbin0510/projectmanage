@@ -2629,7 +2629,17 @@ export class MockApiClient implements ApiClient {
       .map((p) => {
         const submitted = db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交');
         const confirmed = db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已确认');
-        const state: ReportReminder['state'] = !submitted ? '待填' : confirmed ? '已确认' : '待确认';
+        let state: ReportReminder['state'];
+        if (!submitted) {
+          state = '待填';
+        } else if (confirmed) {
+          state = '已确认';
+        } else {
+          /* 已提交未确认：仅当「我是确认人」才标「待确认」，否则中性「待他人确认」（与真后端一致） */
+          const author = db.reports.find((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交')?.author ?? '';
+          const isConfirmer = !!author && this.resolveConfirmers(db, p.id, author).has(me.openId);
+          state = isConfirmer ? '待确认' : '待他人确认';
+        }
         return {
           projectId: p.id,
           projectName: p.name,

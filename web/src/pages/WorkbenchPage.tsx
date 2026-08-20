@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, useRef } from 'react';
 import {
   Box,
   Button,
@@ -76,6 +76,9 @@ export function WorkbenchPage(): JSX.Element {
     progress?: ProgressSegment;
     priority?: Priority;
   }>({ open: false });
+
+  /* D11-修复：多份待填周报时，点击指标卡滚动到「周报提醒」区块逐项目填写 */
+  const reportRemindersRef = useRef<HTMLDivElement>(null);
 
   const fetcher = useCallback(() => api.getWorkbench(), []);
   const { data, loading, error, run } = useAsync(fetcher, []);
@@ -173,10 +176,15 @@ export function WorkbenchPage(): JSX.Element {
           value={stats.missingReports}
           unit="份"
           tone={stats.missingReports > 0 ? 'warning' : 'success'}
-          hint={missing.length > 0 ? '点击前往填写' : '本周周报已全部填写'}
+          hint={missing.length > 0 ? (missing.length > 1 ? `还有 ${missing.length} 份待填，点击查看` : '点击前往填写') : '本周周报已全部填写'}
           icon={<EditNoteOutlinedIcon fontSize="small" />}
           onClick={() => {
-            if (missing.length > 0) navigate(ROUTES.projectReports(missing[0].projectId));
+            if (missing.length === 1) {
+              navigate(ROUTES.projectReports(missing[0].projectId));
+            } else if (missing.length > 1) {
+              /* 多份待填：跳到「周报提醒」区块，每行各自「去填写」覆盖全部项目 */
+              reportRemindersRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
           }}
         />
         {/* D11：待决议质量门（= gateTodos.length，点击跳首个待决议门项目） */}
@@ -273,6 +281,7 @@ export function WorkbenchPage(): JSX.Element {
         </SectionCard>
 
         {/* ── 周报提醒 ── */}
+        <Box ref={reportRemindersRef}>
         <SectionCard title="周报提醒" subtitle={reportReminders[0]?.week ?? ''}>
           {reportReminders.length === 0 ? (
             <EmptyState title="暂无需要填报的项目" dense />
@@ -312,6 +321,9 @@ export function WorkbenchPage(): JSX.Element {
                 {r.state === '待确认' && (
                   <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.brand.primary, flexShrink: 0 }} />
                 )}
+                {r.state === '待他人确认' && (
+                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.text.secondary, flexShrink: 0 }} />
+                )}
                 {r.state === '已确认' && (
                   <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.status.success, flexShrink: 0 }} />
                 )}
@@ -326,9 +338,12 @@ export function WorkbenchPage(): JSX.Element {
             <Button
               size="small"
               variant={r.state === '待填' || r.state === '待确认' ? 'contained' : 'text'}
-              onClick={() => navigate(ROUTES.projectReports(r.projectId))}
+              disabled={r.state === '待他人确认' || r.state === '已确认'}
+              onClick={() => {
+                if (r.state === '待填' || r.state === '待确认') navigate(ROUTES.projectReports(r.projectId));
+              }}
             >
-              {r.state === '待填' ? '去填写' : r.state === '待确认' ? '去确认' : '已确认'}
+              {r.state === '待填' ? '去填写' : r.state === '待确认' ? '去确认' : r.state}
             </Button>
           </Stack>
         ))}
@@ -340,6 +355,7 @@ export function WorkbenchPage(): JSX.Element {
             </Stack>
           )}
         </SectionCard>
+        </Box>
 
         {/* ── 门控待办（D10：我有决议权限的未决议门，点击跳项目概览门区） ── */}
         <SectionCard title="门控待办" subtitle={`${gateTodos.length} 道门待决议`}>
