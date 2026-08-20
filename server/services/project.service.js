@@ -429,6 +429,23 @@ function getLifecycleTemplate(db, type) {
 }
 
 /**
+ * 取项目分类对应的**全部启用模板**（API 形态，version DESC）。
+ * 方案A（阶段三补）：建项向导「生命周期模板」下拉的数据源。
+ * @param {import('better-sqlite3').Database} db
+ * @param {'A'|'B'|'C'} type
+ * @returns {Array<object>} LifecycleTemplate[]
+ */
+function listActiveTemplateOptions(db, type) {
+  if (enums.PROJECT_TYPES.indexOf(type) < 0) return [];
+  return db
+    .prepare(
+      'SELECT * FROM lifecycle_templates WHERE project_type = ? AND is_active = 1 ORDER BY version DESC',
+    )
+    .all(String(type))
+    .map(mappers.toApiTemplate);
+}
+
+/**
  * 全部生命周期模板（API 形态）。
  * @param {import('better-sqlite3').Database} db
  * @returns {Array<object>} LifecycleTemplate[]
@@ -500,7 +517,25 @@ function createProject(db, payload, me) {
   classifyService.assertOverrideReason(type, suggested, payload.classifyOverrideReason);
   assertMemberCardinality(payload.members, type);
 
-  const tplRow = requireActiveTemplateRow(db, type);
+  /* 方案A（阶段三补）：向导显式选模板 → 优先用 payload.templateId；
+     校验归属分类 + 必须启用；不传时回落「分类下唯一生效模板」（旧行为） */
+  let tplRow;
+  if (payload.templateId) {
+    tplRow = db
+      .prepare(
+        'SELECT * FROM lifecycle_templates WHERE id = ? AND project_type = ? AND is_active = 1',
+      )
+      .get(String(payload.templateId), type);
+    if (!tplRow) {
+      throw new AppError(
+        ErrorCode.E_VALIDATION,
+        '指定的生命周期模板不存在、已停用或不属于该项目分类',
+        { templateId: String(payload.templateId), projectType: type },
+      );
+    }
+  } else {
+    tplRow = requireActiveTemplateRow(db, type);
+  }
   const tpl = mappers.toApiTemplate(tplRow);
 
   const seqRow = db.prepare('SELECT COUNT(*) AS n FROM projects').get();
@@ -701,6 +736,7 @@ module.exports = {
   toListItem,
   loadListContext,
   getLifecycleTemplate,
+  listActiveTemplateOptions,
   listTemplates,
   getTemplateById,
   templateMilestoneSpecs,

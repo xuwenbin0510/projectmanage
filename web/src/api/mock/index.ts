@@ -709,6 +709,18 @@ export class MockApiClient implements ApiClient {
     return tpl ? deepClone(tpl) : null;
   }
 
+  /** 方案A：某分类下全部启用模板（version DESC，建项向导下拉数据源） */
+  async listTemplateOptions(type: ProjectType): Promise<LifecycleTemplate[]> {
+    await delay(60);
+    const db = getDb();
+    currentUser(db);
+    return deepClone(
+      db.templates
+        .filter((t) => t.projectType === type && t.isActive)
+        .sort((a, b) => b.version - a.version),
+    );
+  }
+
   /* ── 项目 ─────────────────────────────────────── */
 
   /** @prd P0-01 分类判定 */
@@ -770,7 +782,10 @@ export class MockApiClient implements ApiClient {
     const tlCount = payload.members.filter((m) => m.role === 'tl').length;
     if (pmCount !== 1 || tlCount !== 1) throw new ApiError(ErrorCode.E_ROLE_CARDINALITY);
 
-    const tpl = db.templates.find((t) => t.projectType === payload.type && t.isActive) ?? nf();
+    const tpl =
+      (payload.templateId
+        ? db.templates.find((t) => t.id === payload.templateId && t.projectType === payload.type && t.isActive)
+        : db.templates.find((t) => t.projectType === payload.type && t.isActive)) ?? nf();
     const seq = db.projects.length + 1;
     const id = genId('P');
     const code = `P-${String(1000 + seq * 3).padStart(4, '0')}`;

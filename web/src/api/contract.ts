@@ -68,6 +68,11 @@ export interface CreateProjectPayload {
   classifyOverrideReason: string;
   members: Array<{ userOpenId: string; role: ProjectRole }>;
   /**
+   * 方案A（阶段三补）：建项向导显式选中的生命周期模板 id（必须属于 type 分类且启用）。
+   * 不传时服务端回落「分类下唯一生效模板」（旧行为）。
+   */
+  templateId?: string;
+  /**
    * 新建项目时随项目一起提交的里程碑规格（取代静默生成）。
    * 为空时服务端回退到模板静默生成（向后兼容）。
    * 向导中由模板带出、用户可改名称 / 日期、可新增（非必备）。
@@ -248,6 +253,8 @@ export interface ApiClient {
   getMeta(): Promise<MetaData>;
   /** 按项目分类取当前生效的生命周期模板（向导里程碑预填用）；模板缺失返回 null，不抛 404 */
   getLifecycleTemplate(type: ProjectType): Promise<LifecycleTemplate | null>;
+  /** 方案A：某分类下全部启用模板（version DESC，建项向导「生命周期模板」下拉数据源） */
+  listTemplateOptions(type: ProjectType): Promise<LifecycleTemplate[]>;
 
   /* 项目 P0-01 ~ P0-04 P0-17 */
   classify(input: ClassifyInput): Promise<ClassifyResult>;
