@@ -25,7 +25,7 @@ import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem 
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
-import type { WorkbenchData, ReportReminder, GateTodo, Session } from '@/types/workbench';
+import type { WorkbenchData, ReportReminder, GateTodo, ReportConfirmation, Session } from '@/types/workbench';
 import type {
   DashboardOverview,
   DashboardOverviewQuery,
@@ -2627,14 +2627,17 @@ export class MockApiClient implements ApiClient {
     const reportReminders: ReportReminder[] = db.projects
       .filter((p) => myProjectIds.has(p.id) && p.status === '进行中')
       .map((p) => {
-        const filled = db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交');
+        const submitted = db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交');
+        const confirmed = db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已确认');
+        const state: ReportReminder['state'] = !submitted ? '待填' : confirmed ? '已确认' : '待确认';
         return {
           projectId: p.id,
           projectName: p.name,
           week: curWeek,
           weekStart: range.start,
           weekEnd: range.end,
-          filled,
+          filled: submitted,
+          state,
         };
       });
 
@@ -2665,18 +2668,33 @@ export class MockApiClient implements ApiClient {
         };
       });
 
+    /* D11：待我确认周报 = 状态「已提交」且我是确认人（复用 mock resolveConfirmers，与真后端单一真源一致） */
+    const reportConfirmations: ReportConfirmation[] = db.reports
+      .filter((r) => r.status === '已提交')
+      .filter((r) => this.resolveConfirmers(db, r.projectId, r.author).has(me.openId))
+      .map((r) => ({
+        id: r.id,
+        projectId: r.projectId,
+        projectName: db.projects.find((p) => p.id === r.projectId)?.name ?? '',
+        week: r.week,
+        authorName: r.authorName,
+        submittedAt: r.submittedAt ?? '',
+      }));
+
     return deepClone({
       stats: {
         pendingApprovals: myApprovals.length,
         overdueTasks,
         missingReports: reportReminders.filter((r) => !r.filled).length,
         pendingGates: gateTodos.length,
+        pendingConfirmations: reportConfirmations.length,
       },
       myProjects,
       myTasks,
       myApprovals,
       reportReminders,
       gateTodos,
+      reportConfirmations,
     });
   }
 
@@ -3040,6 +3058,42 @@ export class MockApiClient implements ApiClient {
       ? Math.round(items.reduce((n, p) => n + (Number(p.progress) || 0), 0) / items.length)
       : 0;
 
+    /* D11：门控 / 交付物 / 周报闭环聚合（输入 = 范围内项目 scopeIds，与服务端对齐） */
+    const gates = (() => {
+      const inScope = db.gates.filter((g) => scopeIds.has(g.projectId));
+      const countOf = (st: string) => inScope.filter((g) => g.status === st).length;
+      const notStarted = countOf('未开始');
+      const pendingCheck = countOf('待检查');
+      return {
+        passed: countOf('已通过'),
+        conditional: countOf('有条件通过'),
+        failed: countOf('不通过'),
+        pendingCheck,
+        notStarted,
+        pending: notStarted + pendingCheck,
+        total: inScope.length,
+      };
+    })();
+
+    const deliverables = (() => {
+      const inScope = db.documents.filter((d) => scopeIds.has(d.projectId));
+      const delivered = inScope.filter((d) => d.status === '已交付').length;
+      const pending = inScope.filter((d) => d.status === '待交付').length;
+      const baselined = inScope.filter((d) => d.baselineFlag).length;
+      const total = inScope.length;
+      return { total, delivered, pending, baselined, baselineRate: total ? Math.round((baselined / total) * 100) : 0 };
+    })();
+
+    const reportClosure = (() => {
+      const inScope = db.reports.filter(
+        (r) => scopeIds.has(r.projectId) && (r.status === '已提交' || r.status === '已确认'),
+      );
+      const submitted = inScope.filter((r) => r.status === '已提交').length;
+      const confirmed = inScope.filter((r) => r.status === '已确认').length;
+      const denom = submitted + confirmed;
+      return { submitted, confirmed, closureRate: denom ? Math.round((confirmed / denom) * 100) : 0 };
+    })();
+
     return deepClone({
       scope,
       generatedAt: nowIso(),
@@ -3051,6 +3105,9 @@ export class MockApiClient implements ApiClient {
         reportFillRate: reportDue ? Math.round((reportFilled / reportDue) * 100) : 100,
         reportFilled,
         reportDue,
+        /* D11：周报闭环（待确认周报数 + 已闭环率） */
+        pendingReportConfirm: reportClosure.submitted,
+        reportClosureRate: reportClosure.closureRate,
         averageProgress,
       },
       statusDonut,
@@ -3058,6 +3115,9 @@ export class MockApiClient implements ApiClient {
       priorityDist,
       statusDist,
       overdueDuration,
+      /* D11：门控总览 / 交付物总览 */
+      gates,
+      deliverables,
       overdue,
       ownerLoad,
       reportMissing,

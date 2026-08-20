@@ -113,6 +113,48 @@ export interface OverviewStats {
   reportDue: number;
   /** 整体进度 0~100（口径：里程碑达成率的算术平均） */
   averageProgress: number;
+  /** D11：范围内待确认周报数（work_reports.status='已提交'） */
+  pendingReportConfirm: number;
+  /** D11：周报闭环率 0~100（已确认 / (已提交+已确认)） */
+  reportClosureRate: number;
+}
+
+/**
+ * 质量门状态聚合（D11 · 全局总览「门控总览」）。
+ * `pending`（待决议）= 未开始 + 待检查；`total` = 五态之和。
+ */
+export interface GateStatusSummary {
+  /** 已通过 */
+  passed: number;
+  /** 有条件通过 */
+  conditional: number;
+  /** 不通过 */
+  failed: number;
+  /** 待检查 */
+  pendingCheck: number;
+  /** 未开始 */
+  notStarted: number;
+  /** 待决议（未开始 + 待检查） */
+  pending: number;
+  /** 门总数 */
+  total: number;
+}
+
+/**
+ * 交付物聚合（D11 · 全局总览「交付物总览」）。
+ * `baselineRate` = 已纳入基线数 / 总数（0~100）。
+ */
+export interface DeliverableSummary {
+  /** 交付物登记总数 */
+  total: number;
+  /** 已交付 */
+  delivered: number;
+  /** 待交付 */
+  pending: number;
+  /** 已纳入基线 */
+  baselined: number;
+  /** 基线覆盖率 0~100 */
+  baselineRate: number;
 }
 
 /** 状态环单段 */
@@ -361,6 +403,10 @@ export interface DashboardOverview {
   statusDist: TaskStatusDistribution;
   /** B17：在办叶子任务中已逾期者按 1–7 / 8–30 / >30 天分段 */
   overdueDuration: OverdueDurationDistribution;
+  /** D11：范围内质量门状态聚合（门控总览） */
+  gates: GateStatusSummary;
+  /** D11：范围内交付物聚合（交付物总览） */
+  deliverables: DeliverableSummary;
   /** 按「逾期 ↓ → 临期 ↓ → 项目名」排序，只含有逾期或临期的项目 */
   overdue: OverdueByProject[];
   /** 按「逾期 ↓ → 在办 ↓ → 姓名 ↑」排序，未分配恒最后 */

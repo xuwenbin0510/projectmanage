@@ -135,7 +135,16 @@ function ReportRow({ r, onOpen }: { r: WeeklyReportItem; onOpen: (r: WeeklyRepor
         <Typography sx={{ fontSize: 13, fontWeight: 600, minWidth: 0 }} noWrap>
           {r.projectName}
         </Typography>
-        <StatusChip status={r.status} />
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          {r.status === '已提交' && (
+            <Chip
+              size="small"
+              label="待确认"
+              sx={{ height: 20, fontSize: 11, bgcolor: 'warning.main', color: '#fff', fontWeight: 700 }}
+            />
+          )}
+          <StatusChip status={r.status} />
+        </Stack>
       </Stack>
       <Typography variant="caption" color="text.secondary" sx={{ mt: 0.25, display: 'block' }}>
         {r.authorName || '—'}
