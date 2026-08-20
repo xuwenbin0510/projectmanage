@@ -1022,6 +1022,140 @@ function getDashboardTasks(db, query, me) {
   return paged(rows.slice(start, start + q.pageSize), rows.length, q.page, q.pageSize);
 }
 
+/**
+ * 质量门明细（第二批 · 全局总览「质量与交付」下探）。
+ *
+ * 与 getDashboardTasks 同源同口径：normalizeQuery / resolveScope / listScopedItems 全部复用
+ * （scope / 筛选 / 决策⑥ / 权限降级逐字一致）。行 = 门 × 项目 × 里程碑 × 决议人。
+ * 过滤：`gateStatus`（五态白名单）命中 → 只返回该状态的门；未传 → 全量。
+ * 排序：项目名 ↑ → 门编码 ↑。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} query req.query（DashboardGatesQuery）
+ * @param {object} me users 行
+ * @returns {{items: Array<object>, total: number, page: number, pageSize: number}}
+ */
+function getDashboardGates(db, query, me) {
+  const q = normalizeQuery(query);
+  const scope = resolveScope(me, q.scope);
+  const items = listScopedItems(db, q, me, scope);
+  const projectIds = items.map(function (p) { return String(p.id); });
+  if (!projectIds.length) return paged([], 0, q.page, q.pageSize);
+
+  const nameById = {};
+  items.forEach(function (p) { nameById[String(p.id)] = String(p.name || '') || agg.UNNAMED_PROJECT; });
+  const nameOf = mappers.makeNameLookup(db);
+
+  const gateStatus = GATE_STATUSES.indexOf(String(query && query.gateStatus)) >= 0 ? String(query.gateStatus) : '';
+  const rows = [];
+  chunk(projectIds, SQL_IN_CHUNK).forEach(function (part) {
+    const where = ['g.project_id IN (' + placeholders(part) + ')'];
+    const args = part.slice();
+    if (gateStatus) { where.push('g.status = ?'); args.push(gateStatus); }
+    db.prepare(
+      'SELECT g.id, g.project_id, g.milestone_id, g.code, g.name, g.status, g.decided_by, g.decided_at, m.name AS milestone_name '
+      + 'FROM quality_gates g LEFT JOIN milestones m ON m.id = g.milestone_id '
+      + 'WHERE ' + where.join(' AND '),
+    )
+      .all(args)
+      .forEach(function (r) { rows.push(r); });
+  });
+
+  const out = rows
+    .map(function (r) {
+      return {
+        id: mappers.toStr(r.id),
+        projectId: mappers.toStr(r.project_id),
+        projectName: nameById[mappers.toStr(r.project_id)] || agg.UNNAMED_PROJECT,
+        milestoneId: mappers.toStr(r.milestone_id),
+        milestoneName: mappers.toStr(r.milestone_name) || '未关联里程碑',
+        code: mappers.toStr(r.code),
+        name: mappers.toStr(r.name),
+        status: mappers.toStr(r.status, '未开始'),
+        decidedByName: nameOf(mappers.toStr(r.decided_by)),
+        decidedAt: mappers.toStr(r.decided_at),
+      };
+    })
+    .sort(function (a, b) {
+      const c = agg.compareText(a.projectName, b.projectName);
+      return c !== 0 ? c : agg.compareText(a.code, b.code);
+    });
+
+  const start = (q.page - 1) * q.pageSize;
+  return paged(out.slice(start, start + q.pageSize), out.length, q.page, q.pageSize);
+}
+
+/** 交付物状态白名单（手动/链接记录恒「已交付」，模板项 待交付/已交付） */
+const DOC_STATUSES = ['待交付', '已交付'];
+
+/**
+ * 交付物明细（第二批 · 全局总览「质量与交付」下探）。
+ *
+ * 口径同 getDashboardTasks / getDashboardGates：复用 scope / 筛选 / 决策⑥ / 权限降级。
+ * 行 = 交付物 × 项目 × 上传人 × 基线信息。
+ * 过滤：`docStatus`（待交付/已交付）命中 → 只返回该状态的交付物；未传 → 全量。
+ * 排序：项目名 ↑ → 模板项编码 ↑（手动记录恒最后）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} query req.query（DashboardDeliverablesQuery）
+ * @param {object} me users 行
+ * @returns {{items: Array<object>, total: number, page: number, pageSize: number}}
+ */
+function getDashboardDeliverables(db, query, me) {
+  const q = normalizeQuery(query);
+  const scope = resolveScope(me, q.scope);
+  const items = listScopedItems(db, q, me, scope);
+  const projectIds = items.map(function (p) { return String(p.id); });
+  if (!projectIds.length) return paged([], 0, q.page, q.pageSize);
+
+  const nameById = {};
+  items.forEach(function (p) { nameById[String(p.id)] = String(p.name || '') || agg.UNNAMED_PROJECT; });
+  const nameOf = mappers.makeNameLookup(db);
+
+  const docStatus = DOC_STATUSES.indexOf(String(query && query.docStatus)) >= 0 ? String(query.docStatus) : '';
+  const rows = [];
+  chunk(projectIds, SQL_IN_CHUNK).forEach(function (part) {
+    const where = ['d.project_id IN (' + placeholders(part) + ')'];
+    const args = part.slice();
+    if (docStatus) { where.push('d.status = ?'); args.push(docStatus); }
+    db.prepare(
+      'SELECT d.id, d.project_id, d.template_key, d.name, d.version, d.status, d.baseline_flag, d.baselined_at, d.baselined_by, d.uploaded_by, d.uploaded_at '
+      + 'FROM project_documents d WHERE ' + where.join(' AND '),
+    )
+      .all(args)
+      .forEach(function (r) { rows.push(r); });
+  });
+
+  const out = rows
+    .map(function (r) {
+      return {
+        id: mappers.toStr(r.id),
+        projectId: mappers.toStr(r.project_id),
+        projectName: nameById[mappers.toStr(r.project_id)] || agg.UNNAMED_PROJECT,
+        templateKey: mappers.toStr(r.template_key),
+        name: mappers.toStr(r.name),
+        version: mappers.toNum(r.version, 1),
+        status: mappers.toStr(r.status, '已交付'),
+        baselineFlag: mappers.toNum(r.baseline_flag, 0) === 1,
+        baselinedAt: mappers.toStr(r.baselined_at),
+        baselinedByName: nameOf(mappers.toStr(r.baselined_by)),
+        uploadedByName: nameOf(mappers.toStr(r.uploaded_by)),
+        uploadedAt: mappers.toStr(r.uploaded_at),
+      };
+    })
+    .sort(function (a, b) {
+      const c = agg.compareText(a.projectName, b.projectName);
+      if (c !== 0) return c;
+      const ka = String(a.templateKey || '');
+      const kb = String(b.templateKey || '');
+      if (ka !== kb) return ka < kb ? -1 : ka > kb ? 1 : 0;
+      return agg.compareText(a.name, b.name);
+    });
+
+  const start = (q.page - 1) * q.pageSize;
+  return paged(out.slice(start, start + q.pageSize), out.length, q.page, q.pageSize);
+}
+
 module.exports = {
   MANAGED_STATUSES,
   OVERDUE_BUCKETS,
@@ -1044,4 +1178,6 @@ module.exports = {
   sortItems,
   getDashboardOverview,
   getDashboardTasks,
+  getDashboardGates,
+  getDashboardDeliverables,
 };

@@ -42,4 +42,21 @@ router.get(
   }),
 );
 
+/* 第二批：质量与交付下探明细（门控 / 交付物；鉴权口径同上，复用 resolveScope 静默降级） */
+router.get(
+  '/dashboard/gates',
+  requireAuth,
+  asyncHandler(async function getDashboardGates(req, res) {
+    res.json(ok(dashboardService.getDashboardGates(db, req.query, req.user)));
+  }),
+);
+
+router.get(
+  '/dashboard/deliverables',
+  requireAuth,
+  asyncHandler(async function getDashboardDeliverables(req, res) {
+    res.json(ok(dashboardService.getDashboardDeliverables(db, req.query, req.user)));
+  }),
+);
+
 module.exports = router;

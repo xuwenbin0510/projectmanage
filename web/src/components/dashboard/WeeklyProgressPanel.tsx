@@ -527,6 +527,8 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
 
   return (
     <SectionCard title="上周工作进展" subtitle={weekLabel} sx={{ mb: 2 }}>
+      {/* 第二批：内容限宽 1200 居中（宽屏不再全宽 stretch，空白归两侧） */}
+      <Box sx={{ maxWidth: 1200, mx: 'auto' }}>
       {/* D02：上周未提交周报的进行中项目警示（项目名可点击 → 项目周报页补交） */}
       {missing.length > 0 && (
         <Box
@@ -607,16 +609,23 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
               需连续两周提交后展示「上周 vs 前周」的进展变化
             </Typography>
           ) : (
-            <Stack spacing={1}>
+            <Box
+              sx={{
+                display: 'grid',
+                gap: 1,
+                /* 第二批：xl 下 2 列（单条更紧凑，宽屏空白减半） */
+                gridTemplateColumns: { xs: '1fr', xl: 'repeat(2, 1fr)' },
+              }}
+            >
               {data.delta.tasks.slice(0, MAX_ITEMS).map((t) => (
                 <DeltaRow key={t.nodeId} t={t} />
               ))}
               {data.delta.tasks.length > MAX_ITEMS && (
-                <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center', gridColumn: '1 / -1' }}>
                   共 {data.delta.tasks.length} 条变化，仅显示前 {MAX_ITEMS} 条
                 </Typography>
               )}
-            </Stack>
+            </Box>
           )}
         </Box>
       )}
@@ -686,6 +695,7 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
           </Block>
         </Box>
       )}
+      </Box>
       {/* D03.1：周报完整详情弹窗（点击周报卡片下钻） */}
       <ReportDetailDialog
         report={detailReport}

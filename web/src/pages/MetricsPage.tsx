@@ -55,8 +55,10 @@ import {
 import type { Column } from '@/components/common';
 import {
   CategoryBarChart,
+  DeliverableDetailDrawer,
   DistributionTaskDrawer,
   DonutChart,
+  GateDetailDrawer,
   HealthDonut,
   OverdueBarChart,
   OwnerLoadBarChart,
@@ -65,6 +67,10 @@ import {
   WeeklyProgressPanel,
 } from '@/components/dashboard';
 import type { CategoryBarRow, DonutSegment } from '@/components/dashboard';
+import type {
+  DashboardDeliverablesQuery,
+  DashboardGatesQuery,
+} from '@/types/dashboard';
 import { useDashboardOverview, useDebounced } from '@/hooks';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
@@ -113,14 +119,16 @@ const projectColumns: Array<Column<ProjectListItem>> = [
   {
     key: 'name',
     label: '项目',
+    /* 第二批：fixed 布局下限制项目列宽度（宽屏不再无限拉长），内容 ellipsis */
+    width: { xs: 'auto', md: 280, xl: 340 },
     render: (r) => (
       <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
         <HealthDot health={r.health} />
-        <Box sx={{ minWidth: 0 }}>
+        <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
           <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
             {r.name}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" color="text.secondary" noWrap>
             {r.code} · {r.customer || '内部'}
           </Typography>
         </Box>
@@ -285,6 +293,64 @@ export function MetricsPage(): JSX.Element {
     setDistDrawer({ open: true, title, query: { ...base, ...dim } });
   };
 
+  /* 第二批：质量与交付下探抽屉（门控 / 交付物，受控组件，query 存 state 保证身份稳定） */
+  const [gateDrawer, setGateDrawer] = useState<{
+    open: boolean;
+    title: string;
+    query: DashboardGatesQuery;
+  }>({ open: false, title: '', query: {} });
+
+  /** 段 id（gateSegments）→ 门状态白名单值；打开门控明细抽屉 */
+  const openGate = (segId: string): void => {
+    const map: Record<string, DashboardGatesQuery['gateStatus']> = {
+      passed: '已通过',
+      conditional: '有条件通过',
+      failed: '不通过',
+      pendingCheck: '待检查',
+      notStarted: '未开始',
+    };
+    const gateStatus = map[segId];
+    setGateDrawer({
+      open: true,
+      title: gateStatus ? `「${gateStatus}」质量门明细` : '质量门明细',
+      query: {
+        scope,
+        type: query.type ?? '',
+        status: query.status ?? '',
+        health: query.health ?? '',
+        keyword: query.keyword ?? '',
+        ownerOpenId: query.ownerOpenId ?? '',
+        onlyMine: query.onlyMine ?? false,
+        gateStatus,
+      },
+    });
+  };
+
+  const [delivDrawer, setDelivDrawer] = useState<{
+    open: boolean;
+    title: string;
+    query: DashboardDeliverablesQuery;
+  }>({ open: false, title: '', query: {} });
+
+  /** 段 id（deliverableSegments）→ 交付状态；打开交付物明细抽屉 */
+  const openDeliverables = (segId: string): void => {
+    const docStatus = segId === 'delivered' ? '已交付' : segId === 'pending' ? '待交付' : undefined;
+    setDelivDrawer({
+      open: true,
+      title: docStatus ? `「${docStatus}」成果物明细` : '交付物明细',
+      query: {
+        scope,
+        type: query.type ?? '',
+        status: query.status ?? '',
+        health: query.health ?? '',
+        keyword: query.keyword ?? '',
+        ownerOpenId: query.ownerOpenId ?? '',
+        onlyMine: query.onlyMine ?? false,
+        docStatus,
+      },
+    });
+  };
+
   /* 分组锚点 ref（指标卡下钻滚动目标） */
   const tasksRef = useRef<HTMLDivElement | null>(null);
   const qualityRef = useRef<HTMLDivElement | null>(null);
@@ -378,7 +444,8 @@ export function MetricsPage(): JSX.Element {
       : '我参与的';
 
   return (
-    <Box>
+    /* 第二批：高分辨率自适应 —— 内容区限宽 1600 居中（4K/宽屏不再全宽拉伸） */
+    <Box sx={{ maxWidth: 1600, mx: 'auto', px: { xs: 2, md: 3 } }}>
       <PageHeader
         title="全局总览"
         subtitle={`${scopeLabel} · ${refreshedAt ? `更新于 ${refreshedAt}` : '加载中…'}`}
@@ -545,14 +612,14 @@ export function MetricsPage(): JSX.Element {
           onClick={() => scrollToRef(weeklyRef)}
           icon={<AssignmentLateOutlinedIcon fontSize="small" />}
         />
-        {/* D11：待决议质量门（未开始 + 待检查）；第一批 hint 加「不通过」红灯，failed>0 时升 danger */}
+        {/* D11：待决议质量门（未开始 + 待检查）；第一批 hint 加「不通过」红灯，failed>0 时升 danger；第二批点击下探门明细 */}
         <StatCard
           label="待决议质量门"
           value={data?.gates?.pending ?? 0}
           unit="道"
           tone={(data?.gates?.failed ?? 0) > 0 ? 'danger' : (data?.gates?.pending ?? 0) > 0 ? 'warning' : 'success'}
           hint={`已过 ${data?.gates?.passed ?? 0}/${data?.gates?.total ?? 0} · 不通过 ${data?.gates?.failed ?? 0}`}
-          onClick={() => scrollToRef(qualityRef)}
+          onClick={() => openGate('')}
           icon={<VerifiedOutlinedIcon fontSize="small" />}
         />
         {/* 3rd batch near-30d milestone card click sorts nextMilestone + scrolls to table */}
@@ -565,14 +632,14 @@ export function MetricsPage(): JSX.Element {
           onClick={() => { setQuery({ sort: query.sort === 'nextMilestone' ? undefined : 'nextMilestone' }); scrollToRef(tableRef); }}
           icon={<EventOutlinedIcon fontSize="small" />}
         />
-        {/* deliverable rate card */}
+        {/* deliverable rate card 第二批点击下探交付物明细 */}
         <StatCard
           label="交付物已交付率"
           value={deliveredRate}
           unit="%"
           tone={rateTone(deliveredRate)}
           hint={`待交付 ${data?.deliverables?.pending ?? 0} · 已基线 ${data?.deliverables?.baselined ?? 0}`}
-          onClick={() => scrollToRef(qualityRef)}
+          onClick={() => openDeliverables('')}
           icon={<Inventory2OutlinedIcon fontSize="small" />}
         />
         {/* 第三批：周报闭环率（与「周报填报率」闭环：填报 + 确认） */}
@@ -684,7 +751,7 @@ export function MetricsPage(): JSX.Element {
               gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
             }}
           >
-            {/* ⑧ 质量门状态分布 */}
+            {/* ⑧ 质量门状态分布（第二批：点段下探门控明细抽屉） */}
             <DonutChart
               title="质量门状态分布"
               subtitle={`${data?.gates?.passed ?? 0}/${data?.gates?.total ?? 0} 已过 · ${data?.gates?.pending ?? 0} 待决议`}
@@ -695,8 +762,9 @@ export function MetricsPage(): JSX.Element {
               empty={(data?.gates?.total ?? 0) === 0}
               emptyTitle="暂无质量门"
               emptyDescription="范围内项目尚未配置质量门"
+              onSegmentClick={(seg) => openGate(seg.id)}
             />
-            {/* ⑨ 交付物状态分布（第一批中心值换已交付率，基线保留副标题） */}
+            {/* ⑨ 交付物状态分布（第一批中心值换已交付率，基线保留副标题；第二批：点段下探交付物明细） */}
             <DonutChart
               title="交付物状态分布"
               subtitle={`已交付 ${data?.deliverables?.delivered ?? 0}/${data?.deliverables?.total ?? 0} · 待交付 ${data?.deliverables?.pending ?? 0} · 已基线 ${data?.deliverables?.baselined ?? 0}`}
@@ -707,6 +775,7 @@ export function MetricsPage(): JSX.Element {
               empty={(data?.deliverables?.total ?? 0) === 0}
               emptyTitle="暂无交付物"
               emptyDescription="范围内项目尚未登记交付物"
+              onSegmentClick={(seg) => openDeliverables(seg.id)}
             />
           </Box>
         </SectionCard>
@@ -723,21 +792,22 @@ export function MetricsPage(): JSX.Element {
         {error ? (
           <ErrorState error={error} onRetry={refresh} />
         ) : (
-          <DataTable<ProjectListItem>
-            columns={projectColumns}
-            rows={projects?.items ?? []}
-            rowKey={(r) => r.id}
-            loading={loading}
-            emptyTitle="没有符合条件的项目"
-            emptyDescription="调整筛选条件，或切换到「我参与的」范围"
-            onRowClick={(r) => navigate(ROUTES.projectOverview(r.id))}
-            pagination={{
-              page: query.page ?? 1,
-              pageSize: query.pageSize ?? 20,
-              total: projects?.total ?? 0,
-              onChange: (page, pageSize) => setQuery({ page, pageSize }),
-            }}
-          />
+           <DataTable<ProjectListItem>
+             columns={projectColumns}
+             rows={projects?.items ?? []}
+             rowKey={(r) => r.id}
+             loading={loading}
+             emptyTitle="没有符合条件的项目"
+             emptyDescription="调整筛选条件，或切换到「我参与的」范围"
+             onRowClick={(r) => navigate(ROUTES.projectOverview(r.id))}
+             pagination={{
+               page: query.page ?? 1,
+               pageSize: query.pageSize ?? 20,
+               total: projects?.total ?? 0,
+               onChange: (page, pageSize) => setQuery({ page, pageSize }),
+             }}
+             tableLayout="fixed"
+           />
         )}
       </SectionCard>
       </Box>
@@ -756,6 +826,19 @@ export function MetricsPage(): JSX.Element {
         title={distDrawer.title}
         query={distDrawer.query}
         onClose={() => setDistDrawer((s) => ({ ...s, open: false }))}
+      />
+      {/* 第二批：质量与交付下探抽屉（门控 / 交付物明细） */}
+      <GateDetailDrawer
+        open={gateDrawer.open}
+        title={gateDrawer.title}
+        query={gateDrawer.query}
+        onClose={() => setGateDrawer((s) => ({ ...s, open: false }))}
+      />
+      <DeliverableDetailDrawer
+        open={delivDrawer.open}
+        title={delivDrawer.title}
+        query={delivDrawer.query}
+        onClose={() => setDelivDrawer((s) => ({ ...s, open: false }))}
       />
     </Box>
   );

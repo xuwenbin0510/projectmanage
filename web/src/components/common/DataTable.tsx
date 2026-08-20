@@ -14,7 +14,8 @@ import { EmptyState, LoadingState } from './States';
 export interface Column<T> {
   key: string;
   label: string;
-  width?: number | string;
+  /** 列宽：px / CSS 字符串 / 响应式对象（第二批起支持，配合 tableLayout="fixed" 控制拉伸上限） */
+  width?: number | string | Record<string, number | string>;
   align?: 'left' | 'right' | 'center';
   render?: (row: T, index: number) => ReactNode;
   /** 移动端隐藏 */
@@ -37,6 +38,12 @@ interface DataTableProps<T> {
     onChange: (page: number, pageSize: number) => void;
   };
   dense?: boolean;
+  /**
+   * 表格布局（第二批 · 高分辨率自适应）：
+   * - `auto`（默认）：浏览器按内容分配列宽，兼容既有页面；
+   * - `fixed`：按列 `width` 固定分配，未设宽度的列均分剩余空间（配合列级 minWidth/maxWidth 控制拉伸上限）。
+   */
+  tableLayout?: 'auto' | 'fixed';
 }
 
 /** 通用数据表格（含空态 / 加载态 / 分页） */
@@ -50,6 +57,7 @@ export function DataTable<T>({
   onRowClick,
   pagination,
   dense = false,
+  tableLayout = 'auto',
 }: DataTableProps<T>): JSX.Element {
   if (loading) return <LoadingState variant="skeleton" rows={5} height={44} />;
   if (!rows.length) return <EmptyState title={emptyTitle} description={emptyDescription} dense />;
@@ -57,7 +65,7 @@ export function DataTable<T>({
   return (
     <Box>
       <TableContainer>
-        <Table size={dense ? 'small' : 'medium'}>
+        <Table size={dense ? 'small' : 'medium'} sx={{ tableLayout }}>
           <TableHead>
             <TableRow>
               {columns.map((c) => (
