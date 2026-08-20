@@ -19,7 +19,7 @@
  * @prd B12
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import {
   Box,
   Button,
@@ -251,6 +251,15 @@ export function MetricsPage(): JSX.Element {
     setDistDrawer({ open: true, title, query: { ...base, ...dim } });
   };
 
+  /* 分组锚点 ref（指标卡下钻滚动目标） */
+  const tasksRef = useRef<HTMLDivElement | null>(null);
+  const qualityRef = useRef<HTMLDivElement | null>(null);
+  const weeklyRef = useRef<HTMLDivElement | null>(null);
+  const tableRef = useRef<HTMLDivElement | null>(null);
+  const scrollToRef = (ref: RefObject<HTMLDivElement | null>): void => {
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const stats = data?.stats;
   const projects = data?.projects;
 
@@ -467,6 +476,7 @@ export function MetricsPage(): JSX.Element {
           unit="个"
           tone="brand"
           hint={scopeLabel}
+          onClick={() => scrollToRef(tableRef)}
           icon={<BusinessOutlinedIcon fontSize="small" />}
         />
         <StatCard
@@ -475,6 +485,7 @@ export function MetricsPage(): JSX.Element {
           unit="个"
           tone={(stats?.redProjects ?? 0) > 0 ? 'danger' : 'success'}
           hint="健康度 = 红"
+          onClick={() => setQuery({ health: 'red' })}
           icon={<ErrorOutlineIcon fontSize="small" />}
         />
         <StatCard
@@ -483,6 +494,7 @@ export function MetricsPage(): JSX.Element {
           unit="个"
           tone={(stats?.overdueTasks ?? 0) > 0 ? 'danger' : 'success'}
           hint="范围内未完成且超期"
+          onClick={() => scrollToRef(tasksRef)}
           icon={<ReportProblemOutlinedIcon fontSize="small" />}
         />
         <StatCard
@@ -491,6 +503,7 @@ export function MetricsPage(): JSX.Element {
           unit="%"
           tone={rateTone(stats?.reportFillRate)}
           hint={`已填 ${stats?.reportFilled ?? 0} / 应填 ${stats?.reportDue ?? 0}`}
+          onClick={() => scrollToRef(weeklyRef)}
           icon={<AssignmentLateOutlinedIcon fontSize="small" />}
         />
         {/* D11：待决议质量门（未开始 + 待检查） */}
@@ -500,6 +513,7 @@ export function MetricsPage(): JSX.Element {
           unit="道"
           tone={(data?.gates?.pending ?? 0) > 0 ? 'warning' : 'success'}
           hint={`已过 ${data?.gates?.passed ?? 0} / ${data?.gates?.total ?? 0}`}
+          onClick={() => scrollToRef(qualityRef)}
           icon={<VerifiedOutlinedIcon fontSize="small" />}
         />
         {/* D11：交付物已基线率 */}
@@ -509,109 +523,144 @@ export function MetricsPage(): JSX.Element {
           unit="%"
           tone={rateTone(data?.deliverables?.baselineRate)}
           hint={`已基线 ${data?.deliverables?.baselined ?? 0} / ${data?.deliverables?.total ?? 0}`}
+          onClick={() => scrollToRef(qualityRef)}
           icon={<Inventory2OutlinedIcon fontSize="small" />}
         />
       </Box>
 
-      {/* ══ 图表区（7 张等高图表，md+ 两列、xl+ 三列） ══ */}
-      <Box
-        sx={{
-          display: 'grid',
-          gap: 2.5,
-          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
-          mb: 2.5,
-        }}
-      >
-        {/* ① 项目状态分布（不动） */}
-        <DonutChart
-          title="项目状态分布"
-          subtitle="口径：在管三态（已批准 / 进行中 / 挂起）"
-          segments={statusSegments}
-          centerValue={String(stats?.managedProjects ?? 0)}
-          centerLabel="在管项目"
-          loading={loading}
-          empty={(data?.statusDonut.total ?? 0) === 0}
-          emptyTitle="暂无在管项目"
-          emptyDescription="切换范围或调整筛选条件试试"
-          onSegmentClick={(seg) => {
-            const st = seg.id as ProjectStatus;
-            setQuery({ status: query.status === st ? '' : st });
+      {/* ══ 图表区：按主题分组（项目健康 / 任务执行 / 质量与交付） ══ */}
+
+      {/* ① 项目健康 */}
+      <SectionCard title="项目健康" subtitle="状态 · 健康度 · 负责人负荷" sx={{ mb: 2.5 }}>
+        <Box
+          sx={{
+            display: 'grid',
+            gap: 2.5,
+            gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
           }}
-        />
-        {/* ② 项目健康度分布（HealthDistBar → HealthDonut，props 等价） */}
-        <HealthDonut
-          dist={data?.health ?? { green: 0, yellow: 0, red: 0, total: 0 }}
-          loading={loading}
-          onDrill={(h) => setQuery({ health: query.health === h ? '' : h })}
-        />
-        {/* ③ 逾期 / 临期任务（不动） */}
-        <OverdueBarChart rows={data?.overdue ?? []} loading={loading} onDrill={openOverdue} />
-        {/* ④ 负责人负荷（不动） */}
-        <OwnerLoadBarChart rows={data?.ownerLoad ?? []} loading={loading} onDrill={openOwner} />
-        {/* ⑤ 任务优先级分布（B18：点档下钻到任务明细抽屉） */}
-        <CategoryBarChart
-          title="任务优先级分布"
-          subtitle={`共 ${data?.priorityDist.total ?? 0} 个未完成任务`}
-          rows={priorityRows}
-          loading={loading}
-          emptyTitle="暂无进行中的任务"
-          emptyDescription="没有需要按优先级排期的任务"
-          onDrill={(key) => openDist(`${key} 任务明细`, { priority: key as Priority })}
-        />
-        {/* ⑥ 任务状态分布（B18：点档下钻到任务明细抽屉） */}
-        <CategoryBarChart
-          title="任务状态分布"
-          subtitle={`共 ${data?.statusDist.total ?? 0} 个任务（含已完成）`}
-          rows={statusRows}
-          loading={loading}
-          emptyTitle="当前范围暂无任务"
-          onDrill={(key) => openDist(`${key}任务明细`, { taskStatus: key as TaskStatus })}
-        />
-        {/* ⑦ 逾期时长分段（B18：点档下钻到任务明细抽屉） */}
-        <CategoryBarChart
-          title="逾期时长分段"
-          subtitle={`共 ${data?.overdueDuration.total ?? 0} 个逾期任务`}
-          rows={durationRows}
-          loading={loading}
-          emptyTitle="太好了，没有逾期任务 🎉"
-          emptyDescription="所有任务都在计划节奏内"
-          onDrill={(key) =>
-            openDist(DURATION_TITLE[key] ?? `${key} 任务明细`, {
-              overdueBucket: DURATION_KEY_TO_BUCKET[key],
-            })
-          }
-        />
-        {/* ⑧ 质量门状态分布（D11） */}
-        <DonutChart
-          title="质量门状态分布"
-          subtitle={`${data?.gates?.passed ?? 0}/${data?.gates?.total ?? 0} 已过 · ${data?.gates?.pending ?? 0} 待决议`}
-          segments={gateSegments}
-          centerValue={`${gatePassRate}%`}
-          centerLabel="门通过率"
-          loading={loading}
-          empty={(data?.gates?.total ?? 0) === 0}
-          emptyTitle="暂无质量门"
-          emptyDescription="范围内项目尚未配置质量门"
-        />
-        {/* ⑨ 交付物状态分布（D11） */}
-        <DonutChart
-          title="交付物状态分布"
-          subtitle={`${data?.deliverables?.delivered ?? 0}/${data?.deliverables?.total ?? 0} 已交付 · ${data?.deliverables?.baselined ?? 0} 已基线`}
-          segments={deliverableSegments}
-          centerValue={`${data?.deliverables?.baselineRate ?? 0}%`}
-          centerLabel="已基线覆盖"
-          loading={loading}
-          empty={(data?.deliverables?.total ?? 0) === 0}
-          emptyTitle="暂无交付物"
-          emptyDescription="范围内项目尚未登记交付物"
-        />
+        >
+          {/* ① 项目状态分布 */}
+          <DonutChart
+            title="项目状态分布"
+            subtitle="口径：在管三态（已批准 / 进行中 / 挂起）"
+            segments={statusSegments}
+            centerValue={String(stats?.managedProjects ?? 0)}
+            centerLabel="在管项目"
+            loading={loading}
+            empty={(data?.statusDonut.total ?? 0) === 0}
+            emptyTitle="暂无在管项目"
+            emptyDescription="切换范围或调整筛选条件试试"
+            onSegmentClick={(seg) => {
+              const st = seg.id as ProjectStatus;
+              setQuery({ status: query.status === st ? '' : st });
+            }}
+          />
+          {/* ② 项目健康度分布 */}
+          <HealthDonut
+            dist={data?.health ?? { green: 0, yellow: 0, red: 0, total: 0 }}
+            loading={loading}
+            onDrill={(h) => setQuery({ health: query.health === h ? '' : h })}
+          />
+          {/* ④ 负责人负荷 */}
+          <OwnerLoadBarChart rows={data?.ownerLoad ?? []} loading={loading} onDrill={openOwner} />
+        </Box>
+      </SectionCard>
+
+      {/* ② 任务执行 */}
+      <Box ref={tasksRef}>
+        <SectionCard title="任务执行" subtitle="逾期 · 优先级 · 状态 · 时长" sx={{ mb: 2.5 }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 2.5,
+              gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
+            }}
+          >
+            {/* ③ 逾期 / 临期任务 */}
+            <OverdueBarChart rows={data?.overdue ?? []} loading={loading} onDrill={openOverdue} />
+            {/* ⑤ 任务优先级分布 */}
+            <CategoryBarChart
+              title="任务优先级分布"
+              subtitle={`共 ${data?.priorityDist.total ?? 0} 个未完成任务`}
+              rows={priorityRows}
+              loading={loading}
+              emptyTitle="暂无进行中的任务"
+              emptyDescription="没有需要按优先级排期的任务"
+              onDrill={(key) => openDist(`${key} 任务明细`, { priority: key as Priority })}
+            />
+            {/* ⑥ 任务状态分布 */}
+            <CategoryBarChart
+              title="任务状态分布"
+              subtitle={`共 ${data?.statusDist.total ?? 0} 个任务（含已完成）`}
+              rows={statusRows}
+              loading={loading}
+              emptyTitle="当前范围暂无任务"
+              onDrill={(key) => openDist(`${key}任务明细`, { taskStatus: key as TaskStatus })}
+            />
+            {/* ⑦ 逾期时长分段 */}
+            <CategoryBarChart
+              title="逾期时长分段"
+              subtitle={`共 ${data?.overdueDuration.total ?? 0} 个逾期任务`}
+              rows={durationRows}
+              loading={loading}
+              emptyTitle="太好了，没有逾期任务 🎉"
+              emptyDescription="所有任务都在计划节奏内"
+              onDrill={(key) =>
+                openDist(DURATION_TITLE[key] ?? `${key} 任务明细`, {
+                  overdueBucket: DURATION_KEY_TO_BUCKET[key],
+                })
+              }
+            />
+          </Box>
+        </SectionCard>
+      </Box>
+
+      {/* ③ 质量与交付 */}
+      <Box ref={qualityRef}>
+        <SectionCard title="质量与交付" subtitle="质量门 · 交付物" sx={{ mb: 2.5 }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 2.5,
+              gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
+            }}
+          >
+            {/* ⑧ 质量门状态分布 */}
+            <DonutChart
+              title="质量门状态分布"
+              subtitle={`${data?.gates?.passed ?? 0}/${data?.gates?.total ?? 0} 已过 · ${data?.gates?.pending ?? 0} 待决议`}
+              segments={gateSegments}
+              centerValue={`${gatePassRate}%`}
+              centerLabel="门通过率"
+              loading={loading}
+              empty={(data?.gates?.total ?? 0) === 0}
+              emptyTitle="暂无质量门"
+              emptyDescription="范围内项目尚未配置质量门"
+            />
+            {/* ⑨ 交付物状态分布 */}
+            <DonutChart
+              title="交付物状态分布"
+              subtitle={`${data?.deliverables?.delivered ?? 0}/${data?.deliverables?.total ?? 0} 已交付 · ${data?.deliverables?.baselined ?? 0} 已基线`}
+              segments={deliverableSegments}
+              centerValue={`${data?.deliverables?.baselineRate ?? 0}%`}
+              centerLabel="已基线覆盖"
+              loading={loading}
+              empty={(data?.deliverables?.total ?? 0) === 0}
+              emptyTitle="暂无交付物"
+              emptyDescription="范围内项目尚未登记交付物"
+            />
+          </Box>
+        </SectionCard>
       </Box>
 
       {/* ══ D01 · 上周工作进展面板（周报动态 / 任务进展 / 达成里程碑，周例会场景） ══ */}
-      <WeeklyProgressPanel data={data?.weeklyProgress} loading={loading} />
+      <Box ref={weeklyRef}>
+        <WeeklyProgressPanel data={data?.weeklyProgress} loading={loading} />
+      </Box>
 
       {/* ══ 项目明细表（整行下钻到单项目仪表盘） ══ */}
-      <SectionCard flush>
+      <Box ref={tableRef}>
+        <SectionCard flush>
         {error ? (
           <ErrorState error={error} onRetry={refresh} />
         ) : (
@@ -632,6 +681,7 @@ export function MetricsPage(): JSX.Element {
           />
         )}
       </SectionCard>
+      </Box>
 
       <OwnerLoadDrawer open={drawerOpen} row={drawerRow} onClose={() => setDrawerOpen(false)} />
       <OverdueTaskDrawer
