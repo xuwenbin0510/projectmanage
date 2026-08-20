@@ -37,6 +37,7 @@ router.get(
     const myApprovals = workbenchService.listMyApprovals(db, req.user);
     const reportReminders = workbenchService.listReportReminders(db, req.user);
     const gateTodos = workbenchService.listGateTodos(db, req.user);
+    const reportConfirmations = workbenchService.listReportConfirmations(db, req.user);
 
     res.json(
       ok({
@@ -46,12 +47,15 @@ router.get(
           missingReports: reportReminders.filter(function (r) { return !r.filled; }).length,
           /* D10：门控待办数（= gateTodos.length，同一 listGateTodos 口径） */
           pendingGates: gateTodos.length,
+          /* D11：待我确认周报数（= reportConfirmations.length，同一 resolveConfirmers 口径） */
+          pendingConfirmations: reportConfirmations.length,
         },
         myProjects: myProjects,
         myTasks: myTasks,
         myApprovals: myApprovals,
         reportReminders: reportReminders,
         gateTodos: gateTodos,
+        reportConfirmations: reportConfirmations,
       }),
     );
   }),

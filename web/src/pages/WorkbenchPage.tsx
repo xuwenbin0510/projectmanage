@@ -12,6 +12,7 @@ import {
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
+import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -145,7 +146,7 @@ export function WorkbenchPage(): JSX.Element {
         sx={{
           display: 'grid',
           gap: 2,
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           mb: 2.5,
         }}
       >
@@ -177,6 +178,16 @@ export function WorkbenchPage(): JSX.Element {
           onClick={() => {
             if (missing.length > 0) navigate(ROUTES.projectReports(missing[0].projectId));
           }}
+        />
+        {/* D11：待决议质量门（= gateTodos.length，点击跳首个待决议门项目） */}
+        <StatCard
+          label="待决议质量门"
+          value={stats.pendingGates}
+          unit="道"
+          tone={stats.pendingGates > 0 ? 'warning' : 'success'}
+          hint="点击查看待决议门"
+          icon={<VerifiedOutlinedIcon fontSize="small" />}
+          onClick={() => navigate(gateTodos.length ? ROUTES.projectOverview(gateTodos[0].projectId) : ROUTES.metrics)}
         />
       </Box>
 
@@ -267,51 +278,60 @@ export function WorkbenchPage(): JSX.Element {
             <EmptyState title="暂无需要填报的项目" dense />
           ) : (
             <Stack spacing={1}>
-              {reportReminders.map((r) => (
-                <Stack
-                  key={r.projectId}
-                  direction="row"
-                  alignItems="center"
-                  justifyContent="space-between"
-                  spacing={1}
-                  sx={{
-                    px: 1.5,
-                    py: 1.25,
-                    borderRadius: 1.5,
-                    border: `1px solid ${r.filled ? tokens.border.subtle : alpha(tokens.status.warning, 0.5)}`,
-                    bgcolor: r.filled ? 'transparent' : alpha(tokens.status.warning, 0.08),
-                  }}
-                >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Stack direction="row" spacing={0.75} alignItems="center">
-                      {!r.filled && (
-                        <Box
-                          sx={{
-                            width: 7,
-                            height: 7,
-                            borderRadius: '50%',
-                            bgcolor: tokens.status.danger,
-                            flexShrink: 0,
-                          }}
-                        />
-                      )}
-                      <Typography sx={{ fontSize: 13.5 }} noWrap>
-                        {r.projectName}
-                      </Typography>
-                    </Stack>
-                    <Typography variant="caption" color="text.secondary">
-                      {r.weekStart} ~ {r.weekEnd}
-                    </Typography>
-                  </Box>
-                  <Button
-                    size="small"
-                    variant={r.filled ? 'text' : 'contained'}
-                    onClick={() => navigate(ROUTES.projectReports(r.projectId))}
-                  >
-                    {r.filled ? '已填写' : '去填写'}
-                  </Button>
-                </Stack>
-              ))}
+        {reportReminders.map((r) => (
+          <Stack
+            key={r.projectId}
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            spacing={1}
+            sx={{
+              px: 1.5,
+              py: 1.25,
+              borderRadius: 1.5,
+              border: `1px solid ${
+                r.state === '待填'
+                  ? alpha(tokens.status.warning, 0.5)
+                  : r.state === '待确认'
+                    ? alpha(tokens.brand.primary, 0.5)
+                    : tokens.border.subtle
+              }`,
+              bgcolor:
+                r.state === '待填'
+                  ? alpha(tokens.status.warning, 0.08)
+                  : r.state === '待确认'
+                    ? alpha(tokens.brand.primary, 0.08)
+                    : 'transparent',
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" spacing={0.75} alignItems="center">
+                {r.state === '待填' && (
+                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.status.danger, flexShrink: 0 }} />
+                )}
+                {r.state === '待确认' && (
+                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.brand.primary, flexShrink: 0 }} />
+                )}
+                {r.state === '已确认' && (
+                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.status.success, flexShrink: 0 }} />
+                )}
+                <Typography sx={{ fontSize: 13.5 }} noWrap>
+                  {r.projectName}
+                </Typography>
+              </Stack>
+              <Typography variant="caption" color="text.secondary">
+                {r.weekStart} ~ {r.weekEnd}
+              </Typography>
+            </Box>
+            <Button
+              size="small"
+              variant={r.state === '待填' || r.state === '待确认' ? 'contained' : 'text'}
+              onClick={() => navigate(ROUTES.projectReports(r.projectId))}
+            >
+              {r.state === '待填' ? '去填写' : r.state === '待确认' ? '去确认' : '已确认'}
+            </Button>
+          </Stack>
+        ))}
               {missing.length > 0 && (
                 <Typography variant="caption" color="text.secondary">
                   还有 {missing.length} 个项目本周未提交周报。
@@ -348,6 +368,47 @@ export function WorkbenchPage(): JSX.Element {
                       </Typography>
                     </Box>
                     <Chip size="small" label={`责任 ${g.ownerRole.toUpperCase()}`} variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </SectionCard>
+
+        {/* ── 待我确认周报（D11：我是确认人的已提交周报，点击进项目周报确认） ── */}
+        <SectionCard
+          title="待我确认周报"
+          subtitle={`${(data?.reportConfirmations ?? []).length} 份待确认`}
+        >
+          {(data?.reportConfirmations ?? []).length === 0 ? (
+            <EmptyState title="没有待我确认的周报" description="已提交的周报都已确认完毕" dense />
+          ) : (
+            <Stack spacing={1}>
+              {(data?.reportConfirmations ?? []).slice(0, 5).map((c) => (
+                <Paper
+                  key={c.id}
+                  variant="outlined"
+                  onClick={() => navigate(ROUTES.projectReports(c.projectId))}
+                  sx={{
+                    p: 1.5,
+                    cursor: 'pointer',
+                    '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) },
+                  }}
+                >
+                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
+                        {c.projectName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {c.week} · 报告人 {c.authorName}
+                      </Typography>
+                    </Box>
+                    <Chip
+                      size="small"
+                      label="待确认"
+                      sx={{ height: 20, fontSize: 11, bgcolor: 'warning.main', color: '#fff', fontWeight: 700 }}
+                    />
                   </Stack>
                 </Paper>
               ))}

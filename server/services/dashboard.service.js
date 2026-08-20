@@ -325,6 +325,117 @@ function countReportFill(db, projectIds) {
   return { week: week, due: ids.length, filled: ids.length - missingIds.length, missingIds: missingIds };
 }
 
+/** 质量门状态白名单（与质量门状态机一致，顺序即分布图段序） */
+const GATE_STATUSES = ['未开始', '待检查', '已通过', '有条件通过', '不通过'];
+
+/**
+ * 范围内质量门状态聚合（D11 · 全局总览「门控总览」）。
+ *
+ * 输入 = 范围内项目 id（已应用 scope / 过滤 / 决策 ⑥ 在管三态）；
+ * `quality_gates` 经 `project_id IN (...)` 统计各状态计数。
+ * `pending`（待决议）= 未开始 + 待检查；`total` = 全部状态之和。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds 范围内项目 id
+ * @returns {{passed: number, conditional: number, failed: number, pendingCheck: number, notStarted: number, pending: number, total: number}}
+ */
+function aggregateGates(db, projectIds) {
+  const ids = (projectIds || []).map(String).filter(Boolean);
+  const result = { passed: 0, conditional: 0, failed: 0, pendingCheck: 0, notStarted: 0, pending: 0, total: 0 };
+  if (!ids.length) return result;
+
+  const counts = {};
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare('SELECT status, COUNT(*) c FROM quality_gates WHERE project_id IN (' + placeholders(part) + ') GROUP BY status')
+      .all(part)
+      .forEach(function (r) { counts[String(r.status)] = mappers.toNum(r.c, 0); });
+  });
+
+  result.notStarted = counts['未开始'] || 0;
+  result.pendingCheck = counts['待检查'] || 0;
+  result.passed = counts['已通过'] || 0;
+  result.conditional = counts['有条件通过'] || 0;
+  result.failed = counts['不通过'] || 0;
+  result.pending = result.notStarted + result.pendingCheck;
+  result.total = GATE_STATUSES.reduce(function (s, k) { return s + (counts[k] || 0); }, 0);
+  return result;
+}
+
+/**
+ * 范围内交付物聚合（D11 · 全局总览「交付物总览」）。
+ *
+ * 输入 = 范围内项目 id；`project_documents` 按 `status` × `baseline_flag` 分组计数：
+ *  - `delivered` = status='已交付'；`pending` = status='待交付'；
+ *  - `baselined` = baseline_flag=1（不论状态，已交付或待交付均可纳入基线）；
+ *  - `baselineRate` = baselined / total（total=0 时为 0）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds 范围内项目 id
+ * @returns {{total: number, delivered: number, pending: number, baselined: number, baselineRate: number}}
+ */
+function aggregateDeliverables(db, projectIds) {
+  const ids = (projectIds || []).map(String).filter(Boolean);
+  const result = { total: 0, delivered: 0, pending: 0, baselined: 0, baselineRate: 0 };
+  if (!ids.length) return result;
+
+  const rows = [];
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      'SELECT status, baseline_flag, COUNT(*) c FROM project_documents WHERE project_id IN (' + placeholders(part) + ') GROUP BY status, baseline_flag',
+    )
+      .all(part)
+      .forEach(function (r) { rows.push({ status: String(r.status), bl: mappers.toNum(r.baseline_flag, 0), c: mappers.toNum(r.c, 0) }); });
+  });
+
+  let total = 0;
+  let delivered = 0;
+  let pending = 0;
+  let baselined = 0;
+  rows.forEach(function (r) {
+    total += r.c;
+    if (r.status === '已交付') delivered += r.c;
+    else if (r.status === '待交付') pending += r.c;
+    if (r.bl) baselined += r.c;
+  });
+  result.total = total;
+  result.delivered = delivered;
+  result.pending = pending;
+  result.baselined = baselined;
+  result.baselineRate = total ? Math.round((baselined / total) * 100) : 0;
+  return result;
+}
+
+/**
+ * 范围内周报闭环聚合（D11 · 全局总览「周报闭环」）。
+ *
+ * 仅统计 `status IN ('已提交','已确认')` 的周报（草稿不计入闭环口径）：
+ *  - `submitted` = 已提交（待确认）；`confirmed` = 已确认；
+ *  - `closureRate` = confirmed / (submitted + confirmed)（分母=0 时 100）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds 范围内项目 id
+ * @returns {{submitted: number, confirmed: number, closureRate: number}}
+ */
+function countReportClosure(db, projectIds) {
+  const ids = (projectIds || []).map(String).filter(Boolean);
+  const result = { submitted: 0, confirmed: 0, closureRate: 0 };
+  if (!ids.length) return result;
+
+  const cnt = {};
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      "SELECT status, COUNT(*) c FROM work_reports WHERE project_id IN (" + placeholders(part) + ") AND status IN ('已提交','已确认') GROUP BY status",
+    )
+      .all(part)
+      .forEach(function (r) { cnt[String(r.status)] = mappers.toNum(r.c, 0); });
+  });
+  result.submitted = cnt['已提交'] || 0;
+  result.confirmed = cnt['已确认'] || 0;
+  const denom = result.submitted + result.confirmed;
+  result.closureRate = denom ? Math.round((result.confirmed / denom) * 100) : 0;
+  return result;
+}
+
 /**
  * 上周工作进展（D01 · 全局总览面板「上周工作进展」）。
  *
@@ -697,6 +808,11 @@ function getDashboardOverview(db, query, me) {
     .map(function (p) { return String(p.id); });
   const fill = countReportFill(db, activeIds);
 
+  /* D11：门控 / 交付物 / 周报闭环聚合（输入 = 范围内项目 id，继承 scope / 决策⑥） */
+  const gates = aggregateGates(db, projectIds);
+  const deliverables = aggregateDeliverables(db, projectIds);
+  const reportClosure = countReportClosure(db, projectIds);
+
   const reportMissing = fill.missingIds.map(function (id) {
     return {
       projectId: id,
@@ -729,6 +845,9 @@ function getDashboardOverview(db, query, me) {
       reportFillRate: fill.due ? Math.round((fill.filled / fill.due) * 100) : 100,
       reportFilled: fill.filled,
       reportDue: fill.due,
+      /* D11：周报闭环（范围内待确认周报数 + 已闭环率） */
+      pendingReportConfirm: reportClosure.submitted,
+      reportClosureRate: reportClosure.closureRate,
       averageProgress: agg.averageProgress(items),
     },
     statusDonut: statusDonut,
@@ -736,6 +855,9 @@ function getDashboardOverview(db, query, me) {
     priorityDist: priorityDist,
     statusDist: statusDist,
     overdueDuration: overdueDuration,
+    /* D11：门控总览 / 交付物总览（聚合结果，前端构造分布图段） */
+    gates: gates,
+    deliverables: deliverables,
     overdue: overdue,
     ownerLoad: ownerLoad,
     reportMissing: reportMissing,
@@ -835,6 +957,9 @@ module.exports = {
   countReportFill,
   computeWeeklyProgress,
   computeOwnerOptions,
+  aggregateGates,
+  aggregateDeliverables,
+  countReportClosure,
   sortItems,
   getDashboardOverview,
   getDashboardTasks,

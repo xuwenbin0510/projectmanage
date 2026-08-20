@@ -22,6 +22,7 @@ const dates = require('../lib/dates');
 const mappers = require('../lib/mappers');
 const wbs = require('../lib/wbs');
 const reviewService = require('./review.service');
+const reportService = require('./report.service');
 
 /**
  * 我负责且未完成的真叶子任务（按 dueDate 升序，与 Mock L2069 一致）。
@@ -147,16 +148,24 @@ function listReportReminders(db, me) {
   const filledStmt = db.prepare(
     "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已提交'",
   );
+  const confirmedStmt = db.prepare(
+    "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已确认'",
+  );
 
   return rows.map(function (r) {
-    const filled = (filledStmt.get(mappers.toStr(r.id), curWeek) || {}).c > 0;
+    const pid = mappers.toStr(r.id);
+    const submitted = (filledStmt.get(pid, curWeek) || {}).c > 0;
+    const confirmed = (confirmedStmt.get(pid, curWeek) || {}).c > 0;
+    /* 三态：待填（无提交）/ 待确认（已提交未确认）/ 已确认（终态） */
+    const state = !submitted ? '待填' : confirmed ? '已确认' : '待确认';
     return {
-      projectId: mappers.toStr(r.id),
+      projectId: pid,
       projectName: mappers.toStr(r.name),
       week: curWeek,
       weekStart: weekStart,
       weekEnd: weekEnd,
-      filled: !!filled,
+      filled: !!submitted,
+      state: state,
     };
   });
 }
@@ -235,6 +244,52 @@ function listGateTodos(db, me) {
   });
 }
 
+/**
+ * 待我确认周报（D11）：我是确认人且状态为「已提交」的周报。
+ *
+ * 复用 `report.service.listPendingConfirmation`（同一 `resolveConfirmers` 口径，
+ * 确认人解析单一真源，前端/工作台不重复实现）；再补 `projectName` 映射供面板展示。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me users 行
+ * @returns {Array<{id: string, projectId: string, projectName: string, week: string, authorName: string, submittedAt: string}>}
+ */
+function listReportConfirmations(db, me) {
+  const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
+  if (!openId) return [];
+  const reports = reportService.listPendingConfirmation(db, openId);
+  if (!reports.length) return [];
+
+  const pids = reports.map(function (r) { return String(r.projectId); });
+  const nameById = {};
+  if (pids.length) {
+    db.prepare('SELECT id, name FROM projects WHERE id IN (' + pids.map(function () { return '?'; }).join(',') + ')')
+      .all(pids)
+      .forEach(function (r) { nameById[mappers.toStr(r.id)] = mappers.toStr(r.name); });
+  }
+
+  return reports.map(function (r) {
+    return {
+      id: mappers.toStr(r.id),
+      projectId: mappers.toStr(r.projectId),
+      projectName: nameById[mappers.toStr(r.projectId)] || '',
+      week: mappers.toStr(r.week),
+      authorName: mappers.toStr(r.authorName),
+      submittedAt: r.submittedAt ? String(r.submittedAt) : '',
+    };
+  });
+}
+
+/**
+ * 待我确认周报数：`listReportConfirmations().length`（同一 resolveConfirmers 口径）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me users 行
+ * @returns {number}
+ */
+function countPendingConfirmations(db, me) {
+  return listReportConfirmations(db, me).length;
+}
+
 module.exports = {
   listMyTasks,
   countOverdue,
@@ -243,4 +298,6 @@ module.exports = {
   listReportReminders,
   countMissingReports,
   listGateTodos,
+  listReportConfirmations,
+  countPendingConfirmations,
 };

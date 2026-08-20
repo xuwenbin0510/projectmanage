@@ -11,6 +11,8 @@ export interface ReportReminder {
   weekStart: string;
   weekEnd: string;
   filled: boolean;
+  /** D11：周报状态三态（待填 / 待确认 / 已确认） */
+  state: '待填' | '待确认' | '已确认';
 }
 
 /** D10：门控待办（我有决议权限的未决议门） */
@@ -25,6 +27,16 @@ export interface GateTodo {
   ownerRole: string;
 }
 
+/** D11：待我确认周报（我是确认人且状态=已提交） */
+export interface ReportConfirmation {
+  id: string;
+  projectId: string;
+  projectName: string;
+  week: string;
+  authorName: string;
+  submittedAt: string;
+}
+
 export interface WorkbenchData {
   stats: {
     pendingApprovals: number;
@@ -32,6 +44,8 @@ export interface WorkbenchData {
     missingReports: number;
     /** D10：门控待办数 */
     pendingGates: number;
+    /** D11：待我确认周报数 */
+    pendingConfirmations: number;
   };
   myProjects: ProjectListItem[];
   myTasks: WbsNode[];
@@ -39,6 +53,8 @@ export interface WorkbenchData {
   reportReminders: ReportReminder[];
   /** D10：门控待办明细（点击跳项目概览门区） */
   gateTodos: GateTodo[];
+  /** D11：待我确认周报明细（点击跳项目周报确认） */
+  reportConfirmations: ReportConfirmation[];
 }
 
 /** 登录会话 */
