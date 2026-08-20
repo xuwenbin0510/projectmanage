@@ -118,6 +118,8 @@ export interface ProjectListItem extends Project {
   milestoneTotal: number;
   nextMilestoneDate: string | null;
   highRiskCount: number;
+  /** 第三批：近 30 天到期里程碑（仅 dashboard 明细行注入，其他列表页可能为 undefined） */
+  milestoneDue?: { total: number; overdue: number; upcoming: number };
 }
 
 export interface ProjectMember {

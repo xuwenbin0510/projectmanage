@@ -23,6 +23,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import {
   Box,
   Button,
+  Chip,
   FormControlLabel,
   InputAdornment,
   MenuItem,
@@ -176,6 +177,38 @@ const projectColumns: Array<Column<ProjectListItem>> = [
         </Typography>
       </Box>
     ),
+  },
+  {
+    /* 第三批：近 30 天到期里程碑（数据来自后端 aggregateMilestones.byProject，已分页注入） */
+    key: 'milestoneDue',
+    label: '近30天里程碑',
+    width: 132,
+    hideOnMobile: true,
+    render: (r) => {
+      const d = r.milestoneDue;
+      if (!d || d.total === 0) {
+        return <Typography sx={{ fontSize: 13 }} color="text.secondary">—</Typography>;
+      }
+      const overdueOn = d.overdue > 0;
+      return (
+        <Box>
+          <Chip
+            size="small"
+            label={d.total}
+            sx={{
+              height: 20,
+              fontWeight: 700,
+              fontSize: 12,
+              bgcolor: overdueOn ? 'error.main' : 'warning.main',
+              color: '#fff',
+            }}
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+            {overdueOn ? `已过期 ${d.overdue}` : `未来30天 ${d.upcoming}`}
+          </Typography>
+        </Box>
+      );
+    },
   },
   { key: 'pmName', label: 'PM', width: 84, hideOnMobile: true },
 ];
@@ -467,12 +500,12 @@ export function MetricsPage(): JSX.Element {
         </Stack>
       </SectionCard>
 
-      {/* ══ 顶部指标卡（第一批扩展至 7 张：在管/红灯/逾期/周报填报率/待决议门/里程碑到期/交付物交付率） ══ */}
+      {/* ══ 顶部指标卡（第三批 8 张 4×2 布局：在管/红灯/逾期/周报填报率/待决议门/里程碑到期/交付物交付率/周报闭环率） ══ */}
       <Box
         sx={{
           display: 'grid',
           gap: 2,
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)', xl: 'repeat(7, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', lg: 'repeat(4, 1fr)', xl: 'repeat(4, 1fr)' },
           mb: 2.5,
         }}
       >
@@ -522,17 +555,17 @@ export function MetricsPage(): JSX.Element {
           onClick={() => scrollToRef(qualityRef)}
           icon={<VerifiedOutlinedIcon fontSize="small" />}
         />
-        {/* 第一批：近 30 天到期里程碑（未完成 & 有计划日期 & ≤ 今天+30；hint 分 已过期/未来30天） */}
+        {/* 3rd batch near-30d milestone card click sorts nextMilestone + scrolls to table */}
         <StatCard
           label="近30天到期里程碑"
           value={data?.milestones?.total ?? 0}
           unit="个"
           tone={(data?.milestones?.overdue ?? 0) > 0 ? 'danger' : (data?.milestones?.total ?? 0) > 0 ? 'warning' : 'success'}
           hint={`已过期 ${data?.milestones?.overdue ?? 0} · 未来30天 ${data?.milestones?.upcoming ?? 0}`}
-          onClick={() => scrollToRef(tableRef)}
+          onClick={() => { setQuery({ sort: query.sort === 'nextMilestone' ? undefined : 'nextMilestone' }); scrollToRef(tableRef); }}
           icon={<EventOutlinedIcon fontSize="small" />}
         />
-        {/* 第一批：交付物已交付率（替代 D11 基线率；基线信息保留在 hint） */}
+        {/* deliverable rate card */}
         <StatCard
           label="交付物已交付率"
           value={deliveredRate}
@@ -541,6 +574,16 @@ export function MetricsPage(): JSX.Element {
           hint={`待交付 ${data?.deliverables?.pending ?? 0} · 已基线 ${data?.deliverables?.baselined ?? 0}`}
           onClick={() => scrollToRef(qualityRef)}
           icon={<Inventory2OutlinedIcon fontSize="small" />}
+        />
+        {/* 第三批：周报闭环率（与「周报填报率」闭环：填报 + 确认） */}
+        <StatCard
+          label="周报闭环率"
+          value={stats?.reportClosureRate ?? 0}
+          unit="%"
+          tone={rateTone(stats?.reportClosureRate)}
+          hint={`待确认 ${stats?.pendingReportConfirm ?? 0} · 已闭环（已确认/已提交+已确认）`}
+          onClick={() => scrollToRef(weeklyRef)}
+          icon={<AssignmentLateOutlinedIcon fontSize="small" />}
         />
       </Box>
 

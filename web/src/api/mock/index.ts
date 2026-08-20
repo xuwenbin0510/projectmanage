@@ -3113,10 +3113,18 @@ export class MockApiClient implements ApiClient {
         .filter((m) => scopeIds.has(m.projectId) && !m.doneAt && !!m.currentDate && m.currentDate <= limitStr)
         .sort((a, b) => a.currentDate.localeCompare(b.currentDate));
       const overdue = inScope.filter((m) => m.currentDate < todayStr).length;
+      const byProject: Record<string, { total: number; overdue: number; upcoming: number }> = {};
+      inScope.forEach((m) => {
+        if (!byProject[m.projectId]) byProject[m.projectId] = { total: 0, overdue: 0, upcoming: 0 };
+        byProject[m.projectId].total += 1;
+        if (m.currentDate < todayStr) byProject[m.projectId].overdue += 1;
+        else byProject[m.projectId].upcoming += 1;
+      });
       return {
         total: inScope.length,
         overdue,
         upcoming: inScope.length - overdue,
+        byProject,
         items: inScope.slice(0, 20).map((m) => ({
           projectId: m.projectId,
           projectName: nameById.get(m.projectId) ?? '未命名项目',
@@ -3159,7 +3167,9 @@ export class MockApiClient implements ApiClient {
       weeklyProgress,
       ownerOptions,
       projects: {
-        items: sorted.slice((page - 1) * pageSize, page * pageSize),
+        items: sorted
+          .slice((page - 1) * pageSize, page * pageSize)
+          .map((p) => ({ ...p, milestoneDue: milestones.byProject[p.id] ?? { total: 0, overdue: 0, upcoming: 0 } })),
         total: items.length,
         page,
         pageSize,
