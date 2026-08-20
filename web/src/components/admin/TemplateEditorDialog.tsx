@@ -244,6 +244,8 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
       });
       toast.success(`已保存「${updated.name}」`);
       onSaved(updated);
+      /* 保存成功后自动关闭编辑窗口（用户反馈） */
+      onClose();
     } catch (e) {
       toast.error(e);
     } finally {
