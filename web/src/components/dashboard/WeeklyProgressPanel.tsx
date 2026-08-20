@@ -527,8 +527,8 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
 
   return (
     <SectionCard title="上周工作进展" subtitle={weekLabel} sx={{ mb: 2 }}>
-      {/* 第二批：内容限宽 1200 居中（宽屏不再全宽 stretch，空白归两侧） */}
-      <Box sx={{ maxWidth: 1200, mx: 'auto' }}>
+      {/* 第二批修正：去掉内层限宽，与页面 1600 容器全宽对齐（delta 列表 xl 2 列仍治空白） */}
+      <Box>
       {/* D02：上周未提交周报的进行中项目警示（项目名可点击 → 项目周报页补交） */}
       {missing.length > 0 && (
         <Box
