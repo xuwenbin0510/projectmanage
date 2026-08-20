@@ -36,7 +36,7 @@ import EmojiEventsOutlinedIcon from '@mui/icons-material/EmojiEventsOutlined';
 import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import TrendingUpOutlinedIcon from '@mui/icons-material/TrendingUpOutlined';
 import { useNavigate } from 'react-router-dom';
-import { SectionCard, StatusChip } from '@/components/common';
+import { SectionCard, StatusChip, EmptyState } from '@/components/common';
 import { ROUTES } from '@/config/routes';
 import { api } from '@/api/client';
 import { fmtDate, fmtDateTime, fmtShort, shiftWeek, weekCode, weekRange } from '@/utils/date';
@@ -65,15 +65,19 @@ interface BlockProps {
   title: string;
   count: number;
   emptyText: string;
+  /** 第三批：空态引导副文案（如「上周未勾选任务进展」+ 引导说明） */
+  emptyDescription?: string;
   /** 列表上方的说明文字（如排序/交互提示） */
   caption?: string;
   children?: React.ReactNode;
+  /** 第三批：跨列（里程碑块用，跨整行避免与上方两栏等高错位） */
+  fullWidth?: boolean;
 }
 
-function Block({ icon, title, count, emptyText, caption, children }: BlockProps): JSX.Element {
+function Block({ icon, title, count, emptyText, emptyDescription, caption, children, fullWidth }: BlockProps): JSX.Element {
   const isEmpty = count === 0;
   return (
-    <Box sx={{ minWidth: 0 }}>
+    <Box sx={{ minWidth: 0, gridColumn: fullWidth ? { md: '1 / -1' } : undefined }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
         {icon}
         <Typography sx={{ fontSize: 14, fontWeight: 600, flex: '1 1 auto', minWidth: 0 }} noWrap>
@@ -97,12 +101,7 @@ function Block({ icon, title, count, emptyText, caption, children }: BlockProps)
         </Typography>
       )}
       {isEmpty ? (
-        <Typography
-          variant="body2"
-          sx={{ color: 'text.disabled', fontSize: 13, py: 3, textAlign: 'center' }}
-        >
-          {emptyText}
-        </Typography>
+        <EmptyState title={emptyText} description={emptyDescription} dense />
       ) : (
         <Stack spacing={1} sx={{ maxHeight: 340, overflowY: 'auto', pr: 0.5 }}>
           {children}
@@ -630,7 +629,8 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
           sx={{
             display: 'grid',
             gap: 2.5,
-            gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+            /* 第三批：两栏布局（周报动态 + 上周任务进展 同行 / 上周达成里程碑 跨整行），消除三栏等高错位 */
+            gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' },
           }}
         >
           <Block
@@ -654,7 +654,8 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             icon={<PlaylistAddCheckOutlinedIcon fontSize="small" sx={{ color: 'primary.main' }} />}
             title="上周任务进展"
             count={tasks.length}
-            emptyText="上周暂无任务更新"
+            emptyText="上周未勾选任务进展"
+            emptyDescription="周报里勾选的关键任务进度会自动汇总到这里，便于周例会快速回顾。"
             caption="按任务最后更新时间（物理时间）落在上周统计"
           >
             {tasks.slice(0, MAX_ITEMS).map((t) => (
@@ -672,6 +673,7 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             title="上周达成里程碑"
             count={milestones.length}
             emptyText="上周暂无里程碑达成"
+            fullWidth
           >
             {milestones.slice(0, MAX_ITEMS).map((m) => (
               <MilestoneRow key={m.id} m={m} />

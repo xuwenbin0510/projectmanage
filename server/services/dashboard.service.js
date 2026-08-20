@@ -415,14 +415,15 @@ function aggregateDeliverables(db, projectIds) {
  *  - `upcoming`（未来 30 天）= today ≤ planned_date ≤ today+30；
  *  - `total` = overdue + upcoming。
  * 附带 `items`（按计划日期升序，至多 20 条）供后续下探/列表直接渲染，本批前端只用计数。
+ * 附带 `byProject`（projectId → {total, overdue, upcoming}）供明细表加列「近 30 天到期」。
  *
  * @param {import('better-sqlite3').Database} db
  * @param {Array<string>} projectIds 范围内项目 id
- * @returns {{total: number, overdue: number, upcoming: number, items: Array<{projectId: string, projectName: string, name: string, plannedDate: string, overdue: boolean}>}}
+ * @returns {{total: number, overdue: number, upcoming: number, items: Array<{projectId: string, projectName: string, name: string, plannedDate: string, overdue: boolean}>, byProject: Object<string, {total: number, overdue: number, upcoming: number}>}}
  */
 function aggregateMilestones(db, projectIds) {
   const ids = (projectIds || []).map(String).filter(Boolean);
-  const result = { total: 0, overdue: 0, upcoming: 0, items: [] };
+  const result = { total: 0, overdue: 0, upcoming: 0, items: [], byProject: {} };
   if (!ids.length) return result;
 
   const todayStr = dates.today();                            // 'YYYY-MM-DD'
@@ -455,6 +456,11 @@ function aggregateMilestones(db, projectIds) {
     result.total += 1;
     if (isOverdue) result.overdue += 1;
     else result.upcoming += 1;
+    /* byProject 累计（每个项目的近 30 天到期里程碑数） */
+    if (!result.byProject[pid]) result.byProject[pid] = { total: 0, overdue: 0, upcoming: 0 };
+    result.byProject[pid].total += 1;
+    if (isOverdue) result.byProject[pid].overdue += 1;
+    else result.byProject[pid].upcoming += 1;
     if (result.items.length < 20) {
       result.items.push({
         projectId: pid,
@@ -900,6 +906,12 @@ function getDashboardOverview(db, query, me) {
   const sorted = sortItems(items, q.sort, overdueByProject);
   const start = (q.page - 1) * q.pageSize;
 
+  /* 第三批：分页项注入 milestoneDue（明细表「近 30 天到期」列数据源；只给前端渲染用，total 仍为 items.length） */
+  const dueMap = milestoneDue.byProject || {};
+  const pageItems = sorted.slice(start, start + q.pageSize).map(function (p) {
+    return Object.assign({}, p, { milestoneDue: dueMap[String(p.id)] || { total: 0, overdue: 0, upcoming: 0 } });
+  });
+
   return {
     scope: scope,
     generatedAt: dates.nowIso(),
@@ -931,7 +943,7 @@ function getDashboardOverview(db, query, me) {
     reportMissing: reportMissing,
     weeklyProgress: weeklyProgress,
     ownerOptions: ownerOptions,
-    projects: paged(sorted.slice(start, start + q.pageSize), items.length, q.page, q.pageSize),
+    projects: paged(pageItems, items.length, q.page, q.pageSize),
   };
 }
 

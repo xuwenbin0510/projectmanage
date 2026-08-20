@@ -180,6 +180,8 @@ export interface MilestoneDueSummary {
     /** 是否已过期 */
     overdue: boolean;
   }>;
+  /** 第三批：按项目聚合（projectId → {total, overdue, upcoming}），明细表「近 30 天到期」列数据源 */
+  byProject: Record<string, { total: number; overdue: number; upcoming: number }>;
 }
 
 /** 状态环单段 */
