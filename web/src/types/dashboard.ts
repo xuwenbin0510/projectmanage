@@ -157,6 +157,31 @@ export interface DeliverableSummary {
   baselineRate: number;
 }
 
+/**
+ * 近 30 天到期里程碑聚合（第一批 · 全局总览「近 30 天到期里程碑」卡）。
+ * 仅统计未完成（done_at IS NULL）且有计划日期（planned_date 非空）、
+ * planned_date ≤ 今天+30 的里程碑；`overdue`（已过期）= planned_date < today。
+ */
+export interface MilestoneDueSummary {
+  /** overdue + upcoming */
+  total: number;
+  /** 已过期（planned_date < today） */
+  overdue: number;
+  /** 未来 30 天（today ≤ planned_date ≤ today+30） */
+  upcoming: number;
+  /** 明细（按计划日期升序，至多 20 条，供后续下探直接渲染） */
+  items: Array<{
+    projectId: string;
+    projectName: string;
+    /** 里程碑名 */
+    name: string;
+    /** 计划日期 YYYY-MM-DD */
+    plannedDate: string;
+    /** 是否已过期 */
+    overdue: boolean;
+  }>;
+}
+
 /** 状态环单段 */
 export interface StatusDonutSegment {
   status: ProjectStatus;
@@ -407,6 +432,8 @@ export interface DashboardOverview {
   gates: GateStatusSummary;
   /** D11：范围内交付物聚合（交付物总览） */
   deliverables: DeliverableSummary;
+  /** 第一批：近 30 天到期里程碑（已过期 / 未来 30 天分段） */
+  milestones: MilestoneDueSummary;
   /** 按「逾期 ↓ → 临期 ↓ → 项目名」排序，只含有逾期或临期的项目 */
   overdue: OverdueByProject[];
   /** 按「逾期 ↓ → 在办 ↓ → 姓名 ↑」排序，未分配恒最后 */

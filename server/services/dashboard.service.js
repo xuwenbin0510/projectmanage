@@ -406,6 +406,69 @@ function aggregateDeliverables(db, projectIds) {
 }
 
 /**
+ * 范围内里程碑到期聚合（第一批 · 全局总览「近 30 天到期里程碑」）。
+ *
+ * 输入 = 范围内项目 id（已应用 scope / 过滤 / 决策⑥）。
+ * 仅统计**未完成**（done_at IS NULL）且**有计划日期**（planned_date 非空）的里程碑，
+ * 且 planned_date ≤ 今天 + 30 天：
+ *  - `overdue`（已过期）= planned_date < today；
+ *  - `upcoming`（未来 30 天）= today ≤ planned_date ≤ today+30；
+ *  - `total` = overdue + upcoming。
+ * 附带 `items`（按计划日期升序，至多 20 条）供后续下探/列表直接渲染，本批前端只用计数。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds 范围内项目 id
+ * @returns {{total: number, overdue: number, upcoming: number, items: Array<{projectId: string, projectName: string, name: string, plannedDate: string, overdue: boolean}>}}
+ */
+function aggregateMilestones(db, projectIds) {
+  const ids = (projectIds || []).map(String).filter(Boolean);
+  const result = { total: 0, overdue: 0, upcoming: 0, items: [] };
+  if (!ids.length) return result;
+
+  const todayStr = dates.today();                            // 'YYYY-MM-DD'
+  const limitIso = dates.addDays(todayStr, 30);              // ISO（可能带 T00:00:00Z）
+  const limitStr = String(limitIso).slice(0, 10);            // 'YYYY-MM-DD'
+
+  const projName = {};
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare('SELECT id, name FROM projects WHERE id IN (' + placeholders(part) + ')')
+      .all(part)
+      .forEach(function (r) { projName[mappers.toStr(r.id)] = mappers.toStr(r.name) || agg.UNNAMED_PROJECT; });
+  });
+
+  const rows = [];
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      'SELECT id, project_id, name, planned_date FROM milestones '
+      + 'WHERE project_id IN (' + placeholders(part) + ') '
+      + "AND done_at IS NULL AND planned_date IS NOT NULL AND planned_date != '' AND planned_date <= ? "
+      + 'ORDER BY planned_date ASC',
+    )
+      .all(part.concat([limitStr]))
+      .forEach(function (r) { rows.push(r); });
+  });
+
+  rows.forEach(function (r) {
+    const pid = mappers.toStr(r.project_id);
+    const planned = mappers.toStr(r.planned_date);           // 'YYYY-MM-DD'
+    const isOverdue = planned < todayStr;
+    result.total += 1;
+    if (isOverdue) result.overdue += 1;
+    else result.upcoming += 1;
+    if (result.items.length < 20) {
+      result.items.push({
+        projectId: pid,
+        projectName: projName[pid] || agg.UNNAMED_PROJECT,
+        name: mappers.toStr(r.name),
+        plannedDate: planned,
+        overdue: isOverdue,
+      });
+    }
+  });
+  return result;
+}
+
+/**
  * 范围内周报闭环聚合（D11 · 全局总览「周报闭环」）。
  *
  * 仅统计 `status IN ('已提交','已确认')` 的周报（草稿不计入闭环口径）：
@@ -813,6 +876,9 @@ function getDashboardOverview(db, query, me) {
   const deliverables = aggregateDeliverables(db, projectIds);
   const reportClosure = countReportClosure(db, projectIds);
 
+  /* 第一批：近 30 天到期里程碑（未完成 & 有计划日期 & ≤ 今天+30，分段 已过期/未来30天） */
+  const milestoneDue = aggregateMilestones(db, projectIds);
+
   const reportMissing = fill.missingIds.map(function (id) {
     return {
       projectId: id,
@@ -858,6 +924,8 @@ function getDashboardOverview(db, query, me) {
     /* D11：门控总览 / 交付物总览（聚合结果，前端构造分布图段） */
     gates: gates,
     deliverables: deliverables,
+    /* 第一批：近 30 天到期里程碑（已过期 / 未来 30 天分段） */
+    milestones: milestoneDue,
     overdue: overdue,
     ownerLoad: ownerLoad,
     reportMissing: reportMissing,
@@ -959,6 +1027,7 @@ module.exports = {
   computeOwnerOptions,
   aggregateGates,
   aggregateDeliverables,
+  aggregateMilestones,
   countReportClosure,
   sortItems,
   getDashboardOverview,

@@ -39,6 +39,7 @@ import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined
 import AssignmentLateOutlinedIcon from '@mui/icons-material/AssignmentLateOutlined';
 import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+import EventOutlinedIcon from '@mui/icons-material/EventOutlined';
 
 import {
   DataTable,
@@ -324,6 +325,11 @@ export function MetricsPage(): JSX.Element {
     ? Math.round(((data?.gates?.passed ?? 0) / (data?.gates?.total ?? 0)) * 100)
     : 0;
 
+  /* 第一批：交付物已交付率（卡片 + 图中心值共用；分母为全量，手动记录恒已交付影响 <4%） */
+  const deliveredRate = (data?.deliverables?.total ?? 0)
+    ? Math.round(((data?.deliverables?.delivered ?? 0) / (data?.deliverables?.total ?? 0)) * 100)
+    : 0;
+
   /* D11：交付物状态分布段（已交付/待交付），中心值=已基线覆盖率 */
   const deliverableSegments: DonutSegment[] = [
     { id: 'delivered', label: '已交付', value: data?.deliverables?.delivered ?? 0, color: palette.health.green },
@@ -461,12 +467,12 @@ export function MetricsPage(): JSX.Element {
         </Stack>
       </SectionCard>
 
-      {/* ══ 顶部指标卡（D11 扩展至 6 张：在管/红灯/逾期/周报填报率/待决议门/交付物基线率） ══ */}
+      {/* ══ 顶部指标卡（第一批扩展至 7 张：在管/红灯/逾期/周报填报率/待决议门/里程碑到期/交付物交付率） ══ */}
       <Box
         sx={{
           display: 'grid',
           gap: 2,
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', xl: 'repeat(6, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)', xl: 'repeat(7, 1fr)' },
           mb: 2.5,
         }}
       >
@@ -506,23 +512,33 @@ export function MetricsPage(): JSX.Element {
           onClick={() => scrollToRef(weeklyRef)}
           icon={<AssignmentLateOutlinedIcon fontSize="small" />}
         />
-        {/* D11：待决议质量门（未开始 + 待检查） */}
+        {/* D11：待决议质量门（未开始 + 待检查）；第一批 hint 加「不通过」红灯，failed>0 时升 danger */}
         <StatCard
           label="待决议质量门"
           value={data?.gates?.pending ?? 0}
           unit="道"
-          tone={(data?.gates?.pending ?? 0) > 0 ? 'warning' : 'success'}
-          hint={`已过 ${data?.gates?.passed ?? 0} / ${data?.gates?.total ?? 0}`}
+          tone={(data?.gates?.failed ?? 0) > 0 ? 'danger' : (data?.gates?.pending ?? 0) > 0 ? 'warning' : 'success'}
+          hint={`已过 ${data?.gates?.passed ?? 0}/${data?.gates?.total ?? 0} · 不通过 ${data?.gates?.failed ?? 0}`}
           onClick={() => scrollToRef(qualityRef)}
           icon={<VerifiedOutlinedIcon fontSize="small" />}
         />
-        {/* D11：交付物已基线率 */}
+        {/* 第一批：近 30 天到期里程碑（未完成 & 有计划日期 & ≤ 今天+30；hint 分 已过期/未来30天） */}
         <StatCard
-          label="交付物已基线率"
-          value={data?.deliverables?.baselineRate ?? 0}
+          label="近30天到期里程碑"
+          value={data?.milestones?.total ?? 0}
+          unit="个"
+          tone={(data?.milestones?.overdue ?? 0) > 0 ? 'danger' : (data?.milestones?.total ?? 0) > 0 ? 'warning' : 'success'}
+          hint={`已过期 ${data?.milestones?.overdue ?? 0} · 未来30天 ${data?.milestones?.upcoming ?? 0}`}
+          onClick={() => scrollToRef(tableRef)}
+          icon={<EventOutlinedIcon fontSize="small" />}
+        />
+        {/* 第一批：交付物已交付率（替代 D11 基线率；基线信息保留在 hint） */}
+        <StatCard
+          label="交付物已交付率"
+          value={deliveredRate}
           unit="%"
-          tone={rateTone(data?.deliverables?.baselineRate)}
-          hint={`已基线 ${data?.deliverables?.baselined ?? 0} / ${data?.deliverables?.total ?? 0}`}
+          tone={rateTone(deliveredRate)}
+          hint={`待交付 ${data?.deliverables?.pending ?? 0} · 已基线 ${data?.deliverables?.baselined ?? 0}`}
           onClick={() => scrollToRef(qualityRef)}
           icon={<Inventory2OutlinedIcon fontSize="small" />}
         />
@@ -637,13 +653,13 @@ export function MetricsPage(): JSX.Element {
               emptyTitle="暂无质量门"
               emptyDescription="范围内项目尚未配置质量门"
             />
-            {/* ⑨ 交付物状态分布 */}
+            {/* ⑨ 交付物状态分布（第一批中心值换已交付率，基线保留副标题） */}
             <DonutChart
               title="交付物状态分布"
-              subtitle={`${data?.deliverables?.delivered ?? 0}/${data?.deliverables?.total ?? 0} 已交付 · ${data?.deliverables?.baselined ?? 0} 已基线`}
+              subtitle={`已交付 ${data?.deliverables?.delivered ?? 0}/${data?.deliverables?.total ?? 0} · 待交付 ${data?.deliverables?.pending ?? 0} · 已基线 ${data?.deliverables?.baselined ?? 0}`}
               segments={deliverableSegments}
-              centerValue={`${data?.deliverables?.baselineRate ?? 0}%`}
-              centerLabel="已基线覆盖"
+              centerValue={`${deliveredRate}%`}
+              centerLabel="已交付率"
               loading={loading}
               empty={(data?.deliverables?.total ?? 0) === 0}
               emptyTitle="暂无交付物"

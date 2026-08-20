@@ -3104,6 +3104,29 @@ export class MockApiClient implements ApiClient {
       return { submitted, confirmed, closureRate: denom ? Math.round((confirmed / denom) * 100) : 0 };
     })();
 
+    /* 第一批：近 30 天到期里程碑（未完成 & 有计划日期 & ≤ 今天+30，分段 已过期/未来30天，与服务端对齐） */
+    const milestones = (() => {
+      const nameById = new Map(items.map((p) => [p.id, p.name]));
+      const todayStr = today();
+      const limitStr = addDays(todayStr, 30);
+      const inScope = db.milestones
+        .filter((m) => scopeIds.has(m.projectId) && !m.doneAt && !!m.currentDate && m.currentDate <= limitStr)
+        .sort((a, b) => a.currentDate.localeCompare(b.currentDate));
+      const overdue = inScope.filter((m) => m.currentDate < todayStr).length;
+      return {
+        total: inScope.length,
+        overdue,
+        upcoming: inScope.length - overdue,
+        items: inScope.slice(0, 20).map((m) => ({
+          projectId: m.projectId,
+          projectName: nameById.get(m.projectId) ?? '未命名项目',
+          name: m.name,
+          plannedDate: m.currentDate,
+          overdue: m.currentDate < todayStr,
+        })),
+      };
+    })();
+
     return deepClone({
       scope,
       generatedAt: nowIso(),
@@ -3128,6 +3151,8 @@ export class MockApiClient implements ApiClient {
       /* D11：门控总览 / 交付物总览 */
       gates,
       deliverables,
+      /* 第一批：近 30 天到期里程碑（已过期 / 未来 30 天分段） */
+      milestones,
       overdue,
       ownerLoad,
       reportMissing,
