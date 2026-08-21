@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 
 import { api } from '@/api/client';
 import type { TodoItem, TodoGroup, TodoState, TodoType } from '@/types/todo';
@@ -185,9 +186,18 @@ export function useTodos(): TodoState {
     setLoading(false);
   }, []);
 
+  // 挂载时聚合一次
   useEffect(() => {
     void aggregate();
   }, [aggregate]);
+
+  // 路由切换后重新聚合：用户跳去处理某条待办（审批/填周报/改任务）再返回时，
+  // 铃铛常驻不卸载，需靠路由变化触发 reload，使已处理的待办数字实时更新。
+  const location = useLocation();
+  useEffect(() => {
+    void aggregate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
   const total = groups.reduce((sum, g) => sum + g.items.length, 0);
 
