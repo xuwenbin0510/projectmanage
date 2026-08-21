@@ -27,7 +27,7 @@ import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem 
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
-import type { WorkbenchData, ReportReminder, GateTodo, ReportConfirmation, Session } from '@/types/workbench';
+import type { WorkbenchData, ReportReminder, GateTodo, ReportConfirmation, WorkbenchReportClosure, WorkbenchReportClosureItem, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
   DashboardDeliverablesQuery,
@@ -3523,6 +3523,104 @@ export class MockApiClient implements ApiClient {
       total: rows.length,
       page,
       pageSize,
+    });
+  }
+
+  /**
+   * 工作台下钻：交付物明细（feat/workbench-cards-fix）。
+   * 与「交付物已交付率」卡片同源：基于「我参与项目」（db.members），**不限在管三态**（与卡片 aggregateDeliverables 一致）。
+   */
+  async getWorkbenchDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>> {
+    await delay(150);
+    const db = getDb();
+    const me = currentUser(db);
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE));
+
+    const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+    const userNameById = new Map(db.users.map((u) => [u.openId, u.name]));
+
+    const rows: DashboardDeliverableRow[] = db.documents
+      .filter((d) => myProjectIds.has(d.projectId))
+      .filter((d) => (query.docStatus ? d.status === query.docStatus : true))
+      .map((d) => ({
+        id: d.id,
+        projectId: d.projectId,
+        projectName: projectNameById.get(d.projectId) ?? DASHBOARD_UNNAMED_PROJECT,
+        templateKey: d.templateKey,
+        name: d.name,
+        version: Number(d.version) || 1,
+        status: d.status,
+        baselineFlag: (Number(d.baselineFlag) || 0) === 1,
+        baselinedAt: d.baselinedAt || '',
+        baselinedByName: d.baselinedBy ? (userNameById.get(d.baselinedBy) ?? '') : '',
+        uploadedByName: d.uploadedBy ? (userNameById.get(d.uploadedBy) ?? '') : '',
+        uploadedAt: d.uploadedAt || '',
+      }))
+      .sort((a, b) => {
+        const c = a.projectName.localeCompare(b.projectName, 'zh-CN');
+        if (c !== 0) return c;
+        const ka = a.templateKey || '';
+        const kb = b.templateKey || '';
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      });
+
+    return deepClone({
+      items: rows.slice((page - 1) * pageSize, page * pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    });
+  }
+
+  /**
+   * 工作台下钻：周报闭环（feat/workbench-cards-fix）。
+   * 与「周报闭环率」卡片同源：基于「我参与项目」（db.members），限 status IN (已提交,已确认)。
+   */
+  async getWorkbenchReportClosure(): Promise<WorkbenchReportClosure> {
+    await delay(150);
+    const db = getDb();
+    const me = currentUser(db);
+
+    const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
+    const projectNameById = new Map(db.projects.map((p) => [p.id, p.name]));
+
+    const cntByProject = new Map<string, { submitted: number; confirmed: number }>();
+    myProjectIds.forEach((id) => cntByProject.set(id, { submitted: 0, confirmed: 0 }));
+    let submitted = 0;
+    let confirmed = 0;
+    db.reports
+      .filter((r) => myProjectIds.has(r.projectId) && (r.status === '已提交' || r.status === '已确认'))
+      .forEach((r) => {
+        const c = cntByProject.get(r.projectId);
+        if (!c) return;
+        if (r.status === '已提交') { c.submitted += 1; submitted += 1; }
+        else { c.confirmed += 1; confirmed += 1; }
+      });
+
+    const items: WorkbenchReportClosureItem[] = Array.from(myProjectIds)
+      .map((pid) => {
+        const c = cntByProject.get(pid) ?? { submitted: 0, confirmed: 0 };
+        const denom = c.submitted + c.confirmed;
+        return {
+          projectId: pid,
+          projectName: projectNameById.get(pid) ?? DASHBOARD_UNNAMED_PROJECT,
+          submitted: c.submitted,
+          confirmed: c.confirmed,
+          rate: denom ? Math.round((c.confirmed / denom) * 100) : 0,
+        };
+      })
+      .filter((it) => it.submitted + it.confirmed > 0)
+      .sort((a, b) => b.rate - a.rate);
+
+    const denom = submitted + confirmed;
+    return deepClone({
+      submitted,
+      confirmed,
+      closureRate: denom ? Math.round((confirmed / denom) * 100) : 0,
+      items,
     });
   }
 

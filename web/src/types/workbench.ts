@@ -71,6 +71,23 @@ export interface WorkbenchData {
   };
 }
 
+/** 工作台周报闭环下钻：各项目明细 + 汇总（feat/workbench-cards-fix） */
+export interface WorkbenchReportClosureItem {
+  projectId: string;
+  projectName: string;
+  submitted: number;
+  confirmed: number;
+  /** 闭环率（已确认 / (已提交+已确认)） */
+  rate: number;
+}
+
+export interface WorkbenchReportClosure {
+  submitted: number;
+  confirmed: number;
+  closureRate: number;
+  items: WorkbenchReportClosureItem[];
+}
+
 /** 登录会话 */
 export interface Session {
   token: string;

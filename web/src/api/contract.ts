@@ -28,7 +28,7 @@ import type { EffortReport } from '@/types/effort';
 import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
-import type { WorkbenchData, Session } from '@/types/workbench';
+import type { WorkbenchData, WorkbenchReportClosure, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
   DashboardDeliverablesQuery,
@@ -360,6 +360,11 @@ export interface ApiClient {
 
   /** 第二批：交付物明细（`GET /api/dashboard/deliverables`），docStatus 过滤 + 分页 */
   getDashboardDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>>;
+
+  /** 工作台下钻：交付物明细（与「交付物已交付率」卡片同源，基于 listMyProjectItems，任意状态） */
+  getWorkbenchDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>>;
+  /** 工作台下钻：周报闭环（与「周报闭环率」卡片同源，基于 listMyProjectItems） */
+  getWorkbenchReportClosure(): Promise<WorkbenchReportClosure>;
 
   /* 管理后台 */
   listUsers(): Promise<User[]>;
