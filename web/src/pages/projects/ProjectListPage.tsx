@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Box,
+  Button,
   Chip,
   FormControlLabel,
   InputAdornment,
@@ -31,8 +32,18 @@ import { PROJECT_STATUSES, PROJECT_TYPES, PROJECT_TYPE_LABEL, PROJECT_TYPE_SHORT
 import { ROUTES } from '@/config/routes';
 import { fmtDate } from '@/utils/date';
 import { fmtAmount } from '@/utils/format';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import { USE_MOCK } from '@/api/client';
+import { csvDateStamp, downloadCsv, fetchCsv, toCsv } from '@/utils/csv';
 
 const HEALTH_OPTIONS: Health[] = ['green', 'yellow', 'red'];
+
+/** 导出列（与后端 server/services/export.service.js 口径一致）。 */
+const PROJECT_CSV_HEADERS = [
+  '项目ID', '项目编码', '项目名称', '类别', '客户', '合同额_万元', '状态', '健康度',
+  '负责人', '计划开始', '计划结束', '实际结项', '进度(%)', '里程碑完成', '当前门控',
+  '门通过数', '门总数', '高风险数',
+];
 
 /**
  * 项目列表：多维筛选 + 分页 + 健康度红黄绿
@@ -61,6 +72,42 @@ export function ProjectListPage(): JSX.Element {
     fetchList().catch((e: unknown) => toast.error(e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
+
+  /** 导出项目清单 CSV（真实模式走服务端，mock 模式本地生成）。 */
+  const handleExportProjects = async (): Promise<void> => {
+    try {
+      let csv: string;
+      if (USE_MOCK) {
+        const rows = list.map((p) => ({
+          项目ID: p.id,
+          项目编码: p.code,
+          项目名称: p.name,
+          类别: p.type,
+          客户: p.customer,
+          合同额_万元: p.contractAmount, // 键名与表头数组保持一致，下方统一导出
+          状态: p.status,
+          健康度: p.health,
+          负责人: p.pmName,
+          计划开始: p.planStart,
+          计划结束: p.planEnd,
+          实际结项: p.actualEnd ?? '',
+          进度: p.progress,
+          里程碑完成: `${p.milestoneDone ?? 0}/${p.milestoneTotal ?? 0}`,
+          当前门控: p.currentGateCode,
+          门通过数: p.gatePassed,
+          门总数: p.gateTotal,
+          高风险数: p.highRiskCount,
+        }));
+        csv = toCsv(PROJECT_CSV_HEADERS, rows);
+      } else {
+        csv = await fetchCsv('/export/projects');
+      }
+      downloadCsv(`projects_${csvDateStamp()}.csv`, csv);
+      toast.success('项目清单已导出');
+    } catch (e) {
+      toast.error(e);
+    }
+  };
 
   const columns: Array<Column<ProjectListItem>> = [
     {
@@ -153,15 +200,25 @@ export function ProjectListPage(): JSX.Element {
         title="项目"
         subtitle={`共 ${total} 个项目 · A 类交付型 / B 类产品型 / C 类基建型 走不同生命周期`}
         actions={
-          <PermissionButton
-            action="project:create"
-            variant="contained"
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={() => navigate(ROUTES.projectCreate)}
-          >
-            新建项目
-          </PermissionButton>
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<FileDownloadIcon />}
+              onClick={handleExportProjects}
+            >
+              导出 CSV
+            </Button>
+            <PermissionButton
+              action="project:create"
+              variant="contained"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => navigate(ROUTES.projectCreate)}
+            >
+              新建项目
+            </PermissionButton>
+          </Stack>
         }
       />
 

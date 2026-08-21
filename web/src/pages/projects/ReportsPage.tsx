@@ -11,6 +11,7 @@ import {
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useLocation, useParams } from 'react-router-dom';
 
 import {
@@ -31,11 +32,18 @@ import { useProjectStore } from '@/stores/projectStore';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
-import { api } from '@/api/client';
+import { api, USE_MOCK } from '@/api/client';
 import { REPORT_SECTION_TITLE, REJECT_REASON_MAX } from '@/config/enums';
 import { fmtDateTime } from '@/utils/date';
+import { csvDateStamp, downloadCsv, fetchCsv, toCsv } from '@/utils/csv';
 import { memberNameOf } from '@/utils/member';
 import { tokens } from '@/theme/tokens';
+
+/** 导出列（与后端 server/services/export.service.js 口径一致）。 */
+const REPORT_CSV_HEADERS = [
+  '周报ID', '项目ID', '周次', '周开始', '周结束', '作者ID', '作者名', '状态',
+  '完成说明', '资源说明', '任务数', '风险数', '确认人', '确认时间', '驳回原因', '提交时间', '创建时间',
+];
 
 /**
  * 结构化周报：① 完成 ② 计划 ③ 风险 ④ 协调资源（P0-08）
@@ -54,6 +62,41 @@ export function ReportsPage(): JSX.Element {
   const fetchReports = useFlowStore((s) => s.fetchReports);
 
   const fetchWbs = useWbsStore((s) => s.fetchWbs);
+
+  /** 导出周报 CSV（真实模式走服务端，mock 模式本地生成）。 */
+  const handleExportReports = async (): Promise<void> => {
+    try {
+      let csv: string;
+      if (USE_MOCK) {
+        const rows = reports.map((r) => ({
+          周报ID: r.id,
+          项目ID: r.projectId,
+          周次: r.week,
+          周开始: r.weekStart,
+          周结束: r.weekEnd,
+          作者ID: r.author,
+          作者名: r.authorName,
+          状态: r.status,
+          完成说明: r.doneNote,
+          资源说明: r.resourceNote,
+          任务数: Array.isArray(r.tasks) ? r.tasks.length : 0,
+          风险数: Array.isArray(r.risks) ? r.risks.length : 0,
+          确认人: r.confirmedBy || '',
+          确认时间: r.confirmedAt || '',
+          驳回原因: r.rejectReason || '',
+          提交时间: r.submittedAt || '',
+          创建时间: r.createdAt,
+        }));
+        csv = toCsv(REPORT_CSV_HEADERS, rows);
+      } else {
+        csv = await fetchCsv(`/export/projects/${id}/reports`);
+      }
+      downloadCsv(`project_reports_${id}_${csvDateStamp()}.csv`, csv);
+      toast.success('周报已导出');
+    } catch (e) {
+      toast.error(e);
+    }
+  };
 
   const [open, setOpen] = useState(false);
   /** 详情查看（用户反馈⑤：列表可查看完整内容） */
@@ -297,16 +340,26 @@ export function ReportsPage(): JSX.Element {
         title="工作日志"
         subtitle="按周记录进展，可多次提交并连续跟踪每个任务进度；同周可提交多条"
         actions={
-          <PermissionButton
-            action="report:write"
-            disabledReason={archived ? '项目已归档' : ''}
-            variant="contained"
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={openCreate}
-          >
-            新建日志
-          </PermissionButton>
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<FileDownloadIcon />}
+              onClick={handleExportReports}
+            >
+              导出 CSV
+            </Button>
+            <PermissionButton
+              action="report:write"
+              disabledReason={archived ? '项目已归档' : ''}
+              variant="contained"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={openCreate}
+            >
+              新建日志
+            </PermissionButton>
+          </Stack>
         }
       />
 
