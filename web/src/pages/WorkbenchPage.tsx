@@ -13,6 +13,8 @@ import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
 import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+import AssignmentLateOutlinedIcon from '@mui/icons-material/AssignmentLateOutlined';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -36,6 +38,7 @@ import {
   PriorityDonut,
   ProgressDonut,
   OverdueTaskDrawer,
+  DeliverableDetailDrawer,
 } from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
@@ -56,6 +59,15 @@ import { alphaOf as alpha, tokens, colorOf } from '@/theme/tokens';
  *
  * @prd P0-13 / B11
  */
+
+/** 比率着色（与全局总览 MetricsPage 同源口径：≥100 成功 / ≥60 警告 / 否则危险） */
+function rateTone(rate?: number): 'success' | 'warning' | 'danger' {
+  const r = rate ?? 0;
+  if (r >= 100) return 'success';
+  if (r >= 60) return 'warning';
+  return 'danger';
+}
+
 export function WorkbenchPage(): JSX.Element {
   const navigate = useNavigate();
   const me = useAuthStore((s) => s.user);
@@ -76,6 +88,9 @@ export function WorkbenchPage(): JSX.Element {
     progress?: ProgressSegment;
     priority?: Priority;
   }>({ open: false });
+
+  /* 工作台快捷卡：交付物明细抽屉 */
+  const [deliverableDrawerOpen, setDeliverableDrawerOpen] = useState(false);
 
   /* D11-修复：多份待填周报时，点击指标卡滚动到「周报提醒」区块逐项目填写 */
   const reportRemindersRef = useRef<HTMLDivElement>(null);
@@ -131,6 +146,10 @@ export function WorkbenchPage(): JSX.Element {
   if (!data) return <EmptyState title="暂无工作台数据" />;
 
   const { stats, myProjects, myTasks, myApprovals, reportReminders } = data;
+  const deliverableRate =
+    data.deliverables && data.deliverables.total
+      ? Math.round((data.deliverables.delivered / data.deliverables.total) * 100)
+      : 0;
   const missing = reportReminders.filter((r) => !r.filled);
 
   return (
@@ -196,6 +215,24 @@ export function WorkbenchPage(): JSX.Element {
           hint="点击查看待决议门"
           icon={<VerifiedOutlinedIcon fontSize="small" />}
           onClick={() => navigate(gateTodos.length ? ROUTES.projectOverview(gateTodos[0].projectId) : ROUTES.metrics)}
+        />
+        <StatCard
+          label="交付物已交付率"
+          value={deliverableRate}
+          unit="%"
+          tone={rateTone(deliverableRate)}
+          hint={`待交付 ${data.deliverables?.pending ?? 0} · 已基线 ${data.deliverables?.baselined ?? 0}`}
+          icon={<Inventory2OutlinedIcon fontSize="small" />}
+          onClick={() => setDeliverableDrawerOpen(true)}
+        />
+        <StatCard
+          label="周报闭环率"
+          value={data.reportClosure?.closureRate ?? 0}
+          unit="%"
+          tone={rateTone(data.reportClosure?.closureRate)}
+          hint={`待确认 ${data.reportClosure?.submitted ?? 0} · 已确认 ${data.reportClosure?.confirmed ?? 0}`}
+          icon={<AssignmentLateOutlinedIcon fontSize="small" />}
+          onClick={() => navigate(ROUTES.metrics)}
         />
       </Box>
 
@@ -578,6 +615,12 @@ export function WorkbenchPage(): JSX.Element {
         initialProgress={myTasksDrawer.progress}
         initialPriority={myTasksDrawer.priority}
         onClose={() => setMyTasksDrawer((s) => ({ ...s, open: false }))}
+      />
+      <DeliverableDetailDrawer
+        open={deliverableDrawerOpen}
+        title="交付物明细"
+        query={{}}
+        onClose={() => setDeliverableDrawerOpen(false)}
       />
     </Box>
   );

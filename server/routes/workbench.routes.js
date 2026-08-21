@@ -25,6 +25,7 @@ const { ok, asyncHandler } = require('../lib/envelope');
 const { requireAuth } = require('../middleware/auth');
 const projectService = require('../services/project.service');
 const workbenchService = require('../services/workbench.service');
+const dashboardService = require('../services/dashboard.service');
 
 const router = express.Router();
 
@@ -38,6 +39,11 @@ router.get(
     const reportReminders = workbenchService.listReportReminders(db, req.user);
     const gateTodos = workbenchService.listGateTodos(db, req.user);
     const reportConfirmations = workbenchService.listReportConfirmations(db, req.user);
+
+    /* 工作台补「交付物已交付率 / 周报闭环率」两张快捷卡（范围=我的项目，与 myTasks/myApprovals 口径一致） */
+    const myProjectIds = myProjects.map(function (p) { return p.id; });
+    const deliverables = dashboardService.aggregateDeliverables(db, myProjectIds);
+    const reportClosure = dashboardService.countReportClosure(db, myProjectIds);
 
     res.json(
       ok({
@@ -56,6 +62,9 @@ router.get(
         reportReminders: reportReminders,
         gateTodos: gateTodos,
         reportConfirmations: reportConfirmations,
+        /* 工作台快捷卡数据（与全局总览同源聚合，复用 dashboard.service） */
+        deliverables: deliverables,
+        reportClosure: reportClosure,
       }),
     );
   }),
