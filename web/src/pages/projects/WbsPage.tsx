@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
   Chip,
   IconButton,
   MenuItem,
@@ -11,6 +12,7 @@ import {
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
@@ -37,7 +39,8 @@ import { useWbsStore } from '@/stores/wbsStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { usePermission, useToast } from '@/hooks';
-import { api } from '@/api/client';
+import { api, USE_MOCK } from '@/api/client';
+import { csvDateStamp, downloadCsv, fetchCsv, toCsv } from '@/utils/csv';
 import { allowedChildTypes, resolveWbsRules, validateWbsPlacement } from '@/api/mock/rules';
 import {
   DEFAULT_WBS_RULES,
@@ -87,6 +90,12 @@ const EMPTY_FORM: NodeForm = {
  * WBS 简化方案一（Q-3）：只保留「任务 / 子任务」两类，靠层级区分容器与叶子；
  * 任务可下挂任务或子任务，子任务恒为最底层。方案一中已无阶段实体，任务直接挂里程碑。
  */
+/** 导出列（与后端 server/services/export.service.js 口径一致）。 */
+const TASK_CSV_HEADERS = [
+  '节点ID', 'WBS编码', '层级', '类型', '名称', '描述', '负责人ID', '负责人名',
+  '估算_天', '实际_天', '开始', '截止', '状态', '进度(%)', '优先级', '关键路径', '里程碑ID', '父ID',
+];
+
 export function WbsPage(): JSX.Element {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -106,6 +115,42 @@ export function WbsPage(): JSX.Element {
   const createNode = useWbsStore((s) => s.createNode);
   const updateNode = useWbsStore((s) => s.updateNode);
   const deleteNode = useWbsStore((s) => s.deleteNode);
+
+  /** 导出 WBS 任务 CSV（真实模式走服务端，mock 模式本地生成）。 */
+  const handleExportTasks = async (): Promise<void> => {
+    try {
+      let csv: string;
+      if (USE_MOCK) {
+        const rows = nodes.map((n) => ({
+          节点ID: n.id,
+          WBS编码: n.wbsCode,
+          层级: n.level,
+          类型: n.nodeType,
+          名称: n.name,
+          描述: n.description,
+          负责人ID: n.owner,
+          负责人名: n.ownerName,
+          估算_天: n.estimateDays,
+          实际_天: n.actualDays,
+          开始: n.startDate,
+          截止: n.dueDate,
+          状态: n.status,
+          进度: n.progress,
+          优先级: n.priority,
+          关键路径: n.isCritical ? '是' : '否',
+          里程碑ID: n.milestoneId || '',
+          父ID: n.parentId || '',
+        }));
+        csv = toCsv(TASK_CSV_HEADERS, rows);
+      } else {
+        csv = await fetchCsv(`/export/projects/${id}/tasks`);
+      }
+      downloadCsv(`project_tasks_${id}_${csvDateStamp()}.csv`, csv);
+      toast.success('WBS 任务已导出');
+    } catch (e) {
+      toast.error(e);
+    }
+  };
 
   /* R3-5：工作日志数据源（徽标计数 / 详情聚合） */
   const reports = useFlowStore((s) => s.reports);
@@ -505,16 +550,26 @@ export function WbsPage(): JSX.Element {
         title="工作分解结构（WBS）"
         subtitle={`共 ${nodes.length} 个节点 · 展开/折叠点击节点左侧箭头`}
         actions={
-          <PermissionButton
-            action="wbs:edit"
-            disabledReason={archived ? '项目已归档' : ''}
-            variant="contained"
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={() => openCreate('')}
-          >
-            新建任务
-          </PermissionButton>
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<FileDownloadIcon />}
+              onClick={handleExportTasks}
+            >
+              导出 CSV
+            </Button>
+            <PermissionButton
+              action="wbs:edit"
+              disabledReason={archived ? '项目已归档' : ''}
+              variant="contained"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => openCreate('')}
+            >
+              新建任务
+            </PermissionButton>
+          </Stack>
         }
         flush
       >

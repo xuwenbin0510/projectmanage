@@ -1,15 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Box, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Box, Button, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 
 import { EmptyState, LoadingState, PageHeader, SectionCard } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
 import type { AuditLog } from '@/types/audit';
-import { api } from '@/api/client';
+import { api, USE_MOCK } from '@/api/client';
 import { useToast } from '@/hooks';
+import { useAuthStore } from '@/stores/authStore';
 import { AUDIT_ACTION_LABEL, AUDIT_ENTITY_LABEL } from '@/config/enums';
 import { fmtDateTime } from '@/utils/date';
 import { alphaOf as alpha, tokens, toneColor } from '@/theme/tokens';
+import { csvDateStamp, downloadCsv, fetchCsv, toCsv } from '@/utils/csv';
+
+/** 导出列（与后端 server/services/export.service.js 口径一致）。 */
+const AUDIT_CSV_HEADERS = [
+  '日志ID', '项目ID', '项目名称', '实体类型', '实体ID', '操作', '操作人ID', '操作人名', '摘要', '时间',
+];
+
+/** 审计导出权限：仅 admin / pmo / management（与后端 requireGlobalRole 守门一致）。 */
+const AUDIT_EXPORT_ROLES = ['admin', 'pmo', 'management'];
 
 const ACTION_TONE: Record<string, keyof typeof toneColor> = {
   create: 'success',
@@ -33,6 +44,37 @@ export function AdminAuditPage(): JSX.Element {
   const [entityType, setEntityType] = useState('');
   const [action, setAction] = useState('');
 
+  const me = useAuthStore((s) => s.user);
+  const canExportAudit = !!me && AUDIT_EXPORT_ROLES.indexOf(me.globalRole) >= 0;
+
+  /** 导出审计 CSV（真实模式走服务端，mock 模式本地生成）。 */
+  const handleExportAudit = async (): Promise<void> => {
+    try {
+      let csv: string;
+      if (USE_MOCK) {
+        const rows = logs.map((a) => ({
+          日志ID: a.id,
+          项目ID: a.projectId || '',
+          项目名称: a.projectName || '',
+          实体类型: a.entityType,
+          实体ID: a.entityId || '',
+          操作: a.action,
+          操作人ID: a.actorOpenId,
+          操作人名: a.actorName,
+          摘要: a.summary,
+          时间: a.createdAt,
+        }));
+        csv = toCsv(AUDIT_CSV_HEADERS, rows);
+      } else {
+        csv = await fetchCsv('/export/audits');
+      }
+      downloadCsv(`audits_${csvDateStamp()}.csv`, csv);
+      toast.success('审计日志已导出');
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+
   const load = (): void => {
     setLoading(true);
     api
@@ -54,7 +96,19 @@ export function AdminAuditPage(): JSX.Element {
         title="审计日志"
         subtitle="全平台关键操作的留痕查询；可按对象类型与动作过滤"
         actions={
-          <Chip size="small" label={`共 ${logs.length} 条`} sx={{ height: 22 }} />
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Chip size="small" label={`共 ${logs.length} 条`} sx={{ height: 22 }} />
+            {canExportAudit && (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<FileDownloadIcon />}
+                onClick={handleExportAudit}
+              >
+                导出 CSV
+              </Button>
+            )}
+          </Stack>
         }
       />
 
