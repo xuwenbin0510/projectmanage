@@ -40,5 +40,7 @@ export { GateDetailDrawer } from './GateDetailDrawer';
 export type { GateDetailDrawerProps } from './GateDetailDrawer';
 export { DeliverableDetailDrawer } from './DeliverableDetailDrawer';
 export type { DeliverableDetailDrawerProps } from './DeliverableDetailDrawer';
+export { ReportClosureDrawer } from './ReportClosureDrawer';
+export type { ReportClosureDrawerProps } from './ReportClosureDrawer';
 export { WeeklyProgressPanel } from './WeeklyProgressPanel';
 export type { WeeklyProgressPanelProps } from './WeeklyProgressPanel';

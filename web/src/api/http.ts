@@ -28,7 +28,7 @@ import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
-import type { WorkbenchData, Session } from '@/types/workbench';
+import type { WorkbenchData, WorkbenchReportClosure, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
   DashboardDeliverablesQuery,
@@ -406,6 +406,15 @@ export class HttpApiClient implements ApiClient {
 
   getDashboardDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>> {
     return get<Paged<DashboardDeliverableRow>>(`/dashboard/deliverables${qs(query as Record<string, unknown>)}`);
+  }
+
+  /* 工作台下钻（feat/workbench-cards-fix）：与工作台快捷卡同源，基于「我参与项目」 */
+  getWorkbenchDeliverables(query: DashboardDeliverablesQuery): Promise<Paged<DashboardDeliverableRow>> {
+    return get<Paged<DashboardDeliverableRow>>(`/workbench/deliverables${qs(query as Record<string, unknown>)}`);
+  }
+
+  getWorkbenchReportClosure(): Promise<WorkbenchReportClosure> {
+    return get<WorkbenchReportClosure>('/workbench/report-closure');
   }
 
   /* 管理后台 */

@@ -39,6 +39,7 @@ import {
   ProgressDonut,
   OverdueTaskDrawer,
   DeliverableDetailDrawer,
+  ReportClosureDrawer,
 } from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
@@ -91,6 +92,8 @@ export function WorkbenchPage(): JSX.Element {
 
   /* 工作台快捷卡：交付物明细抽屉 */
   const [deliverableDrawerOpen, setDeliverableDrawerOpen] = useState(false);
+  /* 工作台快捷卡：周报闭环下钻抽屉（feat/workbench-cards-fix，不再跳全局总览） */
+  const [closureDrawerOpen, setClosureDrawerOpen] = useState(false);
 
   /* D11-修复：多份待填周报时，点击指标卡滚动到「周报提醒」区块逐项目填写 */
   const reportRemindersRef = useRef<HTMLDivElement>(null);
@@ -232,7 +235,7 @@ export function WorkbenchPage(): JSX.Element {
           tone={rateTone(data.reportClosure?.closureRate)}
           hint={`待确认 ${data.reportClosure?.submitted ?? 0} · 已确认 ${data.reportClosure?.confirmed ?? 0}`}
           icon={<AssignmentLateOutlinedIcon fontSize="small" />}
-          onClick={() => navigate(ROUTES.metrics)}
+          onClick={() => setClosureDrawerOpen(true)}
         />
       </Box>
 
@@ -618,9 +621,14 @@ export function WorkbenchPage(): JSX.Element {
       />
       <DeliverableDetailDrawer
         open={deliverableDrawerOpen}
-        title="交付物明细"
+        title="交付物明细（我参与的项目）"
         query={{}}
+        projectIds={(data?.myProjects ?? []).map((p) => p.id)}
         onClose={() => setDeliverableDrawerOpen(false)}
+      />
+      <ReportClosureDrawer
+        open={closureDrawerOpen}
+        onClose={() => setClosureDrawerOpen(false)}
       />
     </Box>
   );

@@ -36,6 +36,11 @@ export interface DeliverableDetailDrawerProps {
   query: DashboardDeliverablesQuery;
   /** 关闭抽屉 */
   onClose: () => void;
+  /**
+   * 工作台模式：传入「我参与项目」id 列表时，走 getWorkbenchDeliverables（与工作台卡片同源，
+   * 不限在管三态）；不传则保持全局总览行为（getDashboardDeliverables）。feat/workbench-cards-fix。
+   */
+  projectIds?: string[];
 }
 
 /**
@@ -46,6 +51,7 @@ export function DeliverableDetailDrawer({
   title,
   query,
   onClose,
+  projectIds,
 }: DeliverableDetailDrawerProps): JSX.Element {
   const navigate = useNavigate();
 
@@ -60,7 +66,9 @@ export function DeliverableDetailDrawer({
       setLoading(true);
       setError(null);
       try {
-        const res = await api.getDashboardDeliverables({ ...query, page: pageToLoad, pageSize: PAGE_SIZE });
+        const res = projectIds && projectIds.length
+          ? await api.getWorkbenchDeliverables({ ...query, page: pageToLoad, pageSize: PAGE_SIZE })
+          : await api.getDashboardDeliverables({ ...query, page: pageToLoad, pageSize: PAGE_SIZE });
         setRows(res.items);
         setTotal(res.total);
       } catch (e) {
@@ -69,7 +77,7 @@ export function DeliverableDetailDrawer({
         setLoading(false);
       }
     },
-    [query],
+    [query, projectIds],
   );
 
   useEffect(() => {
