@@ -219,15 +219,72 @@ export function WorkbenchPage(): JSX.Element {
           icon={<VerifiedOutlinedIcon fontSize="small" />}
           onClick={() => navigate(gateTodos.length ? ROUTES.projectOverview(gateTodos[0].projectId) : ROUTES.metrics)}
         />
-        <StatCard
-          label="交付物已交付率"
-          value={deliverableRate}
-          unit="%"
-          tone={rateTone(deliverableRate)}
-          hint={`待交付 ${data.deliverables?.pending ?? 0} · 已基线 ${data.deliverables?.baselined ?? 0}`}
-          icon={<Inventory2OutlinedIcon fontSize="small" />}
+        {/* 交付物已交付率：大数字 + 细分 + 堆叠条 */}
+        <Paper
+          variant="outlined"
           onClick={() => setDeliverableDrawerOpen(true)}
-        />
+          sx={{
+            p: 2.25,
+            cursor: 'pointer',
+            transition: 'border-color .18s, transform .18s',
+            '&:hover': { borderColor: alpha(tokens.brand.primary, 0.65), transform: 'translateY(-2px)' },
+          }}
+        >
+          <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="caption" color="text.secondary">
+                交付物已交付率
+              </Typography>
+              <Stack direction="row" alignItems="baseline" spacing={0.5} sx={{ mt: 0.5 }}>
+                <Typography
+                  sx={{ fontSize: 30, fontWeight: 600, lineHeight: 1.1, color: tokens.status.success }}
+                >
+                  {deliverableRate}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">%</Typography>
+              </Stack>
+            </Box>
+            <Box
+              sx={{
+                width: 38, height: 38, borderRadius: 1.5, display: 'grid', placeItems: 'center',
+                bgcolor: alpha(tokens.status.success, 0.14), color: tokens.status.success,
+              }}
+            >
+              <Inventory2OutlinedIcon fontSize="small" />
+            </Box>
+          </Stack>
+
+          {(() => {
+            const total = data.deliverables?.total ?? 0;
+            const delivered = data.deliverables?.delivered ?? 0;
+            const pending = data.deliverables?.pending ?? 0;
+            const baseRate = total ? Math.round((delivered / total) * 100) : 0;
+            return (
+              <Box sx={{ mt: 1 }}>
+                {/* 堆叠条：已交付绿 / 待交付红 */}
+                <Box
+                  sx={{
+                    display: 'flex', height: 8, borderRadius: 1.5, overflow: 'hidden',
+                    bgcolor: alpha(tokens.status.danger, 0.18),
+                  }}
+                >
+                  <Box sx={{ width: `${baseRate}%`, bgcolor: tokens.status.success, transition: 'width .3s' }} />
+                </Box>
+                <Stack direction="row" spacing={1.5} sx={{ mt: 1, flexWrap: 'wrap' }}>
+                  <Typography variant="caption" sx={{ color: tokens.status.success, fontWeight: 600 }}>
+                    已交付 {delivered}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: tokens.status.danger, fontWeight: 600 }}>
+                    待交付 {pending}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    需交付 {total}
+                  </Typography>
+                </Stack>
+              </Box>
+            );
+          })()}
+        </Paper>
         <StatCard
           label="周报闭环率"
           value={data.reportClosure?.closureRate ?? 0}
