@@ -128,7 +128,8 @@ export function ReportFormModal({
   // planItems 为基础字符串数组，直接用本地状态管理（避免原始数组进入 useFieldArray 的类型约束）
   const [planItems, setPlanItems] = useState<string[]>(['']);
 
-  const weekOptions = useMemo(() => buildWeekOptions(weekCode(dayjs())), []);
+  // 周次选项：每次打开弹窗时重新计算，确保默认选中本周（避免组件不卸载导致默认值陈旧）
+  const [weekOptions, setWeekOptions] = useState<string[]>(() => buildWeekOptions(weekCode(dayjs())));
 
   /* ── R5-P0-3 派生值（叶子口径唯一入口 SK-4：只走 utils/wbs，禁止自写循环 / nodeType 判定） ── */
   /** 有子节点的父节点 id 集合（渲染层口径，与 tree 同源） */
@@ -150,6 +151,7 @@ export function ReportFormModal({
     handleSubmit,
     reset,
     watch,
+    setValue,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -164,6 +166,9 @@ export function ReportFormModal({
   // 打开时初始化表单（编辑态回填；新建态全不选 + lockNodeId 锁定勾选）
   useEffect(() => {
     if (!open) return;
+    // 每次打开重算周次选项，默认本周选中（修复「周次下拉为空需手选」）
+    const freshWeekOptions = buildWeekOptions(weekCode(dayjs()));
+    setWeekOptions(freshWeekOptions);
     if (editingReport) {
       reset({
         week: editingReport.week,
@@ -188,7 +193,7 @@ export function ReportFormModal({
       );
     } else {
       const latestNodes = latestNodesOf();
-      reset({ week: weekOptions[0], doneNote: '', resourceNote: '', planItems: [''], risks: [] });
+      reset({ week: freshWeekOptions[0], doneNote: '', resourceNote: '', planItems: [''], risks: [] });
       setPlanItems(['']);
       setTaskMap(
         Object.fromEntries(
@@ -290,6 +295,12 @@ export function ReportFormModal({
   const doSave = async (values: FormValues, submit: boolean): Promise<void> => {
     // B8（R2）：提交 / 编辑已提交日志时校验实际工时；存草稿允许任意值（同进度语义）
     if (submit) {
+      // 「本周完成内容」提交必填（草稿可空）：trim 后为空拦截
+      const doneTrim = (values.doneNote ?? '').trim();
+      if (!doneTrim) {
+        toast.warning('请填写本周完成内容后再提交');
+        return;
+      }
       const actualErr = validateActualDays();
       if (actualErr) {
         toast.warning(actualErr);
@@ -463,11 +474,19 @@ export function ReportFormModal({
         <>
           <input type="hidden" {...register('week')} />
           <Typography variant="body2" sx={{ py: 1 }}>
-            周次：{watch('week')}
+            周次：{editingReport.week}
           </Typography>
         </>
       ) : (
-        <TextField select label="周次" {...register('week')} fullWidth error={Boolean(errors.week)} helperText={errors.week?.message}>
+        <TextField
+          select
+          label="周次"
+          value={watch('week') ?? ''}
+          onChange={(e) => setValue('week', e.target.value, { shouldDirty: true })}
+          fullWidth
+          error={Boolean(errors.week)}
+          helperText={errors.week?.message}
+        >
           {weekOptions.map((w) => (
             <MenuItem key={w} value={w}>
               {w}

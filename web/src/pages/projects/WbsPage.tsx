@@ -356,8 +356,14 @@ export function WbsPage(): JSX.Element {
     };
     try {
       if (editingId) {
-        await updateNode(editingId, payload);
-        toast.success('节点已更新');
+        const saved = await updateNode(editingId, payload);
+        // 叶子且用户手动改了状态：若后端按进度引擎收敛后状态与意图不一致，提示真实结果
+        const isParent = Boolean(editingNode && editingNode.children.length > 0);
+        if (!isParent && payload.status && saved.status && saved.status !== payload.status) {
+          toast.warning(`状态已按进度自动调整为「${saved.status}」`);
+        } else {
+          toast.success('节点已更新');
+        }
       } else {
         await createNode(payload);
         toast.success('节点已创建');
@@ -688,6 +694,11 @@ export function WbsPage(): JSX.Element {
           value={form.owner}
           onChange={(e) => setForm({ ...form, owner: e.target.value })}
           fullWidth
+          helperText={
+            form.owner && !memberOptions.some((m) => m.value === form.owner)
+              ? '该负责人当前不在本项目成员列表，请确认是否正确'
+              : undefined
+          }
         >
           <MenuItem value="">（未指派）</MenuItem>
           {memberOptions.map((m) => (
@@ -695,6 +706,13 @@ export function WbsPage(): JSX.Element {
               {m.label}
             </MenuItem>
           ))}
+          {/* 兜底：form.owner 有值但不在本项目成员下拉中（导入数据/历史残留），
+              仍能回显真实姓名，避免下拉空白、且保存时后端会自动补为成员 */}
+          {form.owner && !memberOptions.some((m) => m.value === form.owner) && (
+            <MenuItem key={form.owner} value={form.owner}>
+              {editingNode?.ownerName ?? form.owner}（非项目成员）
+            </MenuItem>
+          )}
         </TextField>
         <TextField
           label="工时估算（人日）"
@@ -734,11 +752,16 @@ export function WbsPage(): JSX.Element {
         </TextField>
         <TextField
           select
-          label="状态"
+          label={editingNode && editingNode.children.length > 0 ? '状态（由子任务汇总·锁定）' : '状态'}
           value={form.status}
           onChange={(e) => setForm({ ...form, status: e.target.value })}
           fullWidth
-          helperText="进度达 100% 自动置为完成；0~100% 自动置为进行中（待评审/阻塞除外）"
+          disabled={Boolean(editingNode && editingNode.children.length > 0)}
+          helperText={
+            editingNode && editingNode.children.length > 0
+              ? '该节点含子任务，状态由子任务进度自动汇总，不可手动修改'
+              : '待办→进行中需先通过「写日志」填写进度；进度达 100% 自动置为完成；阻塞/待评审为人工态，需手动解除'
+          }
         >
           {TASK_STATUSES.map((s) => (
             <MenuItem key={s} value={s}>

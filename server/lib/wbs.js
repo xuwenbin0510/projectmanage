@@ -551,18 +551,29 @@ function validateWbsEstimate(input) {
  * ═══════════════════════════════════════════════════ */
 
 /**
- * R4-P0-3 任务状态自动流转（D2 规则**唯一实现**）：
- *  1. 强规则：`progress >= 100` → 完成（无条件，含 阻塞/待评审）
+ * R4-P0-3 任务状态自动流转（状态流转规则唯一实现）：
+ *
+ *  人工态（阻塞 / 待评审）= 冻结态：一旦处于人工态，**进度引擎不自动改写**，
+ *  必须责任人手动把状态切走（如切回「进行中」或「完成」）才解锁。
+ *  这样「阻塞」不会被子任务进度汇总 / 看板拖拽悄悄解除（用户 2026-08-21 拍板 4-B）。
+ *
+ *  非人工态（待办 / 进行中）按进度收敛：
+ *  1. 强规则：`progress >= 100` → 完成
  *  2. 弱规则：`progress === 0` 且当前 ∈ {进行中, 完成} → 待办
+ *     （即「待办」想手动转「进行中」必须伴随 progress>0，否则被拉回待办；
+ *      与用户拍板 2-A 一致：动手做了才算进行中）
  *  3. 弱规则：`0 < progress < 100` 且当前 ∈ {待办, 完成} → 进行中
- *  4. 人工态边界：当前为 待评审/阻塞 时，除规则 1 外不被覆盖
+ *  4. 其余保持原状态
  *
  * @param {string} status 当前状态
  * @param {number} progress 0~100
  * @returns {string} 收敛后的状态
  */
+const MANUAL_STATES = ['待评审', '阻塞'];
 function syncNodeStatusFromProgress(status, progress) {
   const p = Number.isFinite(Number(progress)) ? Number(progress) : 0;
+  // 人工态冻结：不被进度引擎改写（含 progress>=100 也不自动完成）
+  if (MANUAL_STATES.includes(status)) return status;
   if (p >= 100) return '完成';
   if (p === 0) return status === '进行中' || status === '完成' ? '待办' : status;
   return status === '待办' || status === '完成' ? '进行中' : status;

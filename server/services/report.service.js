@@ -87,6 +87,9 @@ function validateReportPayload(payload) {
   /** @type {string[]} */
   const messages = [];
 
+  // 「本周完成内容」提交必填（与前端 zod 文案一致）
+  if (!toStr(p.doneNote).trim()) messages.push('请填写本周完成内容');
+
   risks.forEach(function (r, i) {
     const row = r || {};
     const noDesc = !toStr(row.description).trim();
@@ -880,6 +883,12 @@ function updateReport(db, id, payload, me) {
 
   /* B8（R4）：冲正开关 —— 已提交日志编辑才先扣旧后加新；草稿编辑不触累计 */
   const wasSubmitted = toStr(row.status) === '已提交';
+  /* 已提交日志编辑：本周完成内容必填（与 createReport 提交校验一致，防清空完成内容） */
+  if (wasSubmitted && !toStr(p.doneNote).trim()) {
+    throw new AppError(ErrorCode.E_REPORT_RISK_INCOMPLETE, '请填写本周完成内容', {
+      messages: ['请填写本周完成内容'],
+    });
+  }
   /* 旧行在 delTasks 之前读出（week_actual_days 是冲正数据源） */
   const oldTaskRows = db
     .prepare('SELECT * FROM work_report_tasks WHERE report_id = ?')

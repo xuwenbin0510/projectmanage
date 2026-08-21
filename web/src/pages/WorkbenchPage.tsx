@@ -40,6 +40,7 @@ import {
   OverdueTaskDrawer,
   DeliverableDetailDrawer,
   ReportClosureDrawer,
+  GateDetailDrawer,
 } from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync, useToast } from '@/hooks';
@@ -94,6 +95,11 @@ export function WorkbenchPage(): JSX.Element {
   const [deliverableDrawerOpen, setDeliverableDrawerOpen] = useState(false);
   /* 工作台快捷卡：周报闭环下钻抽屉（feat/workbench-cards-fix，不再跳全局总览） */
   const [closureDrawerOpen, setClosureDrawerOpen] = useState(false);
+  /* D-修复：待决议质量门下钻抽屉（不再跳数据总览，改看与我相关的待决议门列表） */
+  const [gateDrawer, setGateDrawer] = useState<{ open: boolean; title: string }>({
+    open: false,
+    title: '待决议质量门明细',
+  });
 
   /* D11-修复：多份待填周报时，点击指标卡滚动到「周报提醒」区块逐项目填写 */
   const reportRemindersRef = useRef<HTMLDivElement>(null);
@@ -209,7 +215,7 @@ export function WorkbenchPage(): JSX.Element {
             }
           }}
         />
-        {/* D11：待决议质量门（= gateTodos.length，点击跳首个待决议门项目） */}
+        {/* D11：待决议质量门（= gateTodos.length，点击下钻待决议门列表，不再跳数据总览） */}
         <StatCard
           label="待决议质量门"
           value={stats.pendingGates}
@@ -217,7 +223,7 @@ export function WorkbenchPage(): JSX.Element {
           tone={stats.pendingGates > 0 ? 'warning' : 'success'}
           hint="点击查看待决议门"
           icon={<VerifiedOutlinedIcon fontSize="small" />}
-          onClick={() => navigate(gateTodos.length ? ROUTES.projectOverview(gateTodos[0].projectId) : ROUTES.metrics)}
+          onClick={() => setGateDrawer({ open: true, title: '待决议质量门明细' })}
         />
         {/* 交付物已交付率：大数字 + 细分 + 堆叠条 */}
         <Paper
@@ -454,8 +460,18 @@ export function WorkbenchPage(): JSX.Element {
         </SectionCard>
         </Box>
 
-        {/* ── 门控待办（D10：我有决议权限的未决议门，点击跳项目概览门区） ── */}
-        <SectionCard title="门控待办" subtitle={`${gateTodos.length} 道门待决议`}>
+        {/* ── 门控待办（D10：我有决议权限的未决议门，点击下钻列表 / 单条跳项目概览） ── */}
+        <SectionCard
+          title="门控待办"
+          subtitle={`${gateTodos.length} 道门待决议`}
+          actions={
+            gateTodos.length > 0 ? (
+              <Button size="small" onClick={() => setGateDrawer({ open: true, title: '待决议质量门明细' })}>
+                查看全部
+              </Button>
+            ) : undefined
+          }
+        >
           {gateTodos.length === 0 ? (
             <EmptyState title="没有待决议的质量门" description="有门里程碑到达决议时机时会出现在这里" dense />
           ) : (
@@ -686,6 +702,12 @@ export function WorkbenchPage(): JSX.Element {
       <ReportClosureDrawer
         open={closureDrawerOpen}
         onClose={() => setClosureDrawerOpen(false)}
+      />
+      <GateDetailDrawer
+        open={gateDrawer.open}
+        title={gateDrawer.title}
+        query={{ gateStatus: '待检查' }}
+        onClose={() => setGateDrawer((s) => ({ ...s, open: false }))}
       />
     </Box>
   );
