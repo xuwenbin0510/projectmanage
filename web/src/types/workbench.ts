@@ -55,6 +55,20 @@ export interface WorkbenchData {
   gateTodos: GateTodo[];
   /** D11：待我确认周报明细（点击跳项目周报确认） */
   reportConfirmations: ReportConfirmation[];
+  /** 工作台快捷卡：交付物已交付率（范围=我的项目，与全局总览同源聚合） */
+  deliverables?: {
+    total: number;
+    delivered: number;
+    pending: number;
+    baselined: number;
+    baselineRate: number;
+  };
+  /** 工作台快捷卡：周报闭环率（范围=我的项目，与全局总览同源聚合） */
+  reportClosure?: {
+    submitted: number;
+    confirmed: number;
+    closureRate: number;
+  };
 }
 
 /** 登录会话 */

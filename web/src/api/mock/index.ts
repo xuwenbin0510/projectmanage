@@ -2757,6 +2757,33 @@ export class MockApiClient implements ApiClient {
         submittedAt: r.submittedAt ?? '',
       }));
 
+    /* 工作台快捷卡：交付物已交付率 / 周报闭环率（与全局总览同源，范围=我的项目） */
+    const myDeliverableRows = db.documents.filter((d) => myProjectIds.has(d.projectId));
+    let dTotal = 0, dDelivered = 0, dPending = 0, dBaselined = 0;
+    myDeliverableRows.forEach((d) => {
+      dTotal += 1;
+      if (d.status === '已交付') dDelivered += 1;
+      else if (d.status === '待交付') dPending += 1;
+      if ((Number(d.baselineFlag) || 0) === 1) dBaselined += 1;
+    });
+    const deliverables = {
+      total: dTotal,
+      delivered: dDelivered,
+      pending: dPending,
+      baselined: dBaselined,
+      baselineRate: dTotal ? Math.round((dBaselined / dTotal) * 100) : 0,
+    };
+    const myClosureReports = db.reports.filter(
+      (r) => myProjectIds.has(r.projectId) && (r.status === '已提交' || r.status === '已确认'),
+    );
+    const rSubmitted = myClosureReports.filter((r) => r.status === '已提交').length;
+    const rConfirmed = myClosureReports.filter((r) => r.status === '已确认').length;
+    const reportClosure = {
+      submitted: rSubmitted,
+      confirmed: rConfirmed,
+      closureRate: rSubmitted + rConfirmed ? Math.round((rConfirmed / (rSubmitted + rConfirmed)) * 100) : 0,
+    };
+
     return deepClone({
       stats: {
         pendingApprovals: myApprovals.length,
@@ -2771,6 +2798,8 @@ export class MockApiClient implements ApiClient {
       reportReminders,
       gateTodos,
       reportConfirmations,
+      deliverables,
+      reportClosure,
     });
   }
 
