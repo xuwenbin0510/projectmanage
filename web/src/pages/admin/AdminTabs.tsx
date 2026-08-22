@@ -1,7 +1,7 @@
 /**
  * 管理后台二级导航（阶段一 · 统一入口）
  *
- * 管理后台各页顶部共用：用户与角色 / 权限矩阵 / 内置模板 / 审计日志。
+ * 管理后台各页顶部共用：用户与职位 / 权限矩阵 / 内置模板 / 审计日志。
  * 审批流配置（阶段二）与模板管理深化（阶段三）后续在此扩展 Tab。
  */
 import { useNavigate } from 'react-router-dom';
@@ -10,10 +10,11 @@ import { ROUTES } from '@/config/routes';
 import { useLocation } from 'react-router-dom';
 
 const ADMIN_TABS = [
-  { key: 'users', label: '用户与角色', path: ROUTES.adminUsers },
+  { key: 'users', label: '用户与职位', path: ROUTES.adminUsers },
   { key: 'permissions', label: '权限矩阵', path: ROUTES.adminPermissions },
   { key: 'reviewTemplates', label: '审批配置', path: ROUTES.adminReviewTemplates },
   { key: 'templates', label: '内置模板', path: ROUTES.adminTemplates },
+  { key: 'roles', label: '职位管理', path: ROUTES.adminRoles },
   { key: 'audit', label: '审计日志', path: ROUTES.adminAuditLog },
 ];
 

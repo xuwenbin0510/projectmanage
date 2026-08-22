@@ -21,12 +21,15 @@ const projectService = require('./project.service');
 const wbsService = require('./wbs.service');
 const reportService = require('./report.service');
 const auditService = require('./audit.service');
+const { resolveGlobalRoles } = require('../middleware/auth');
 
 const ADMIN_ROLES = ['admin', 'pmo', 'management'];
 
-/** 是否拥有全局管理角色（看全量 / 导出审计）。 */
+/** 是否拥有全局管理角色（看全量 / 导出审计）。E1.5：全局职位取并集。 */
 function isAdminRole(me) {
-  return !!me && ADMIN_ROLES.indexOf(me.global_role) >= 0;
+  if (!me) return false;
+  const roles = resolveGlobalRoles(me);
+  return roles.some(function (r) { return ADMIN_ROLES.indexOf(r) >= 0; });
 }
 
 /** 导出用日期戳（YYYYMMDD），用于文件名。 */

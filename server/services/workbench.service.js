@@ -23,6 +23,8 @@ const mappers = require('../lib/mappers');
 const wbs = require('../lib/wbs');
 const reviewService = require('./review.service');
 const reportService = require('./report.service');
+const { resolveGlobalRoles } = require('../middleware/auth');
+const { PERMISSIONS } = require('../config/permissions');
 
 /**
  * 我负责且未完成的真叶子任务（按 dueDate 升序，与 Mock L2069 一致）。
@@ -221,21 +223,25 @@ function countMissingReports(db, me) {
 function listGateTodos(db, me) {
   const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
   if (!openId) return [];
-  const globalRole = String((me && me.global_role) || '');
-  const gateRoles = ['admin', 'pmo', 'qa', 'tl'];
+  // E1.5：全局职位取并集，任一命中门控特权角色即可看全公司待决门
+  // 门控特权角色从权限矩阵动态取（单一权威源，避免硬编码漏判管理员调整的职位体系）
+  const globalRoles = resolveGlobalRoles(me);
+  const gateGlobalRoles = PERMISSIONS['gate:decide'].global; // 例：['admin','pmo','qa','tl']
+  const gateProjectRoles = PERMISSIONS['gate:decide'].project; // 例：['qa','tl','pmo']
 
   let projectIds = [];
-  if (gateRoles.indexOf(globalRole) >= 0) {
+  if (globalRoles.some(function (r) { return gateGlobalRoles.indexOf(r) >= 0; })) {
     projectIds = db
       .prepare("SELECT id FROM projects WHERE deleted_at IS NULL AND status NOT IN ('已结项', '已终止')")
       .all()
       .map(function (r) { return mappers.toStr(r.id); });
   } else {
+    const ph = gateProjectRoles.map(function () { return '?'; }).join(',');
     projectIds = db
       .prepare(
-        "SELECT DISTINCT pm.project_id AS pid FROM project_members pm WHERE pm.user_open_id = ? AND pm.project_role IN ('qa', 'tl', 'pmo')",
+        "SELECT DISTINCT pm.project_id AS pid FROM project_members pm WHERE pm.user_open_id = ? AND pm.project_role IN (" + ph + ")",
       )
-      .all(openId)
+      .all(openId, ...gateProjectRoles.map(function (r) { return String(r); }))
       .map(function (r) { return mappers.toStr(r.pid); });
   }
   if (projectIds.length === 0) return [];

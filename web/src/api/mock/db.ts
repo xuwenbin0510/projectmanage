@@ -13,7 +13,7 @@ import type { Review } from '@/types/review';
 import type { Change } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import { createSeedDb } from './fixtures';
-import type { ReviewTemplateConfig } from '@/types/project';
+import type { ReviewTemplateConfig, Role } from '@/types/project';
 
 /** D03：全量任务快照（mock 内存版，周报提交时采集，UNIQUE 语义由 mock 逻辑保证） */
 export interface ProgressSnapshotMock {
@@ -45,6 +45,22 @@ export const DEFAULT_REVIEW_TEMPLATES: ReviewTemplateConfig[] = [
 ];
 
 /**
+ * E1.5：默认职位目录 seed（与服务端 migrationV15 的默认职位逐条对齐）。
+ * role_key / name / scope / order_no 一致，保证 mock 与真实后端行为同构。
+ */
+export const DEFAULT_ROLES: Role[] = [
+  { roleKey: 'admin', name: '系统管理员', scope: 'global', enabled: true, description: '拥有全部权限，系统至少保留一名', orderNo: 1 },
+  { roleKey: 'management', name: '公司管理层', scope: 'global', enabled: true, description: '公司层面决策与跨项目审批', orderNo: 2 },
+  { roleKey: 'pmo', name: 'PMO', scope: 'global', enabled: true, description: '项目管理办公室，全局项目治理与审批', orderNo: 3 },
+  { roleKey: 'pm', name: '项目经理', scope: 'global', enabled: true, description: '可指派为全局或项目内项目经理', orderNo: 4 },
+  { roleKey: 'tl', name: '技术负责人', scope: 'global', enabled: true, description: '可指派为全局或项目内技术负责人', orderNo: 5 },
+  { roleKey: 'qa', name: '质量负责人', scope: 'global', enabled: true, description: '可指派为全局或项目内质量负责人', orderNo: 6 },
+  { roleKey: 'cm', name: '配置管理员', scope: 'global', enabled: true, description: '可指派为全局或项目内配置管理', orderNo: 7 },
+  { roleKey: 'po', name: '产品经理', scope: 'global', enabled: true, description: '可指派为全局或项目内产品经理', orderNo: 8 },
+  { roleKey: 'member', name: '普通成员', scope: 'global', enabled: true, description: '默认成员，仅项目内参与者视野', orderNo: 9 },
+];
+
+/**
  * 内存 Mock 数据库（S1 静态原型唯一数据源）
  * @prd 全局
  * - 支持读写，写入后持久化到 sessionStorage，刷新不丢
@@ -68,6 +84,8 @@ export interface MockDb {
   documents: ProjectDocument[];
   /** 阶段二：审批流程模板（管理后台可配置） */
   reviewTemplates: ReviewTemplateConfig[];
+  /** E1.5：职位目录（管理后台可配置，默认 seed 与后端一致） */
+  roles: Role[];
   /** D03：全量任务快照（周报提交时采集，供任务进度环比） */
   progressSnapshots: ProgressSnapshotMock[];
   /** 当前登录用户 openId（devlogin 写入） */
@@ -93,6 +111,10 @@ function load(): MockDb | null {
     /* 阶段二：旧缓存（v4）无 reviewTemplates → 兜底注入默认审批模板，避免运行时 undefined */
     if (!Array.isArray(parsed.reviewTemplates)) {
       parsed.reviewTemplates = DEFAULT_REVIEW_TEMPLATES.map((t) => ({ ...t }));
+    }
+    /* E1.5：旧缓存无 roles → 兜底注入默认职位目录 */
+    if (!Array.isArray(parsed.roles)) {
+      parsed.roles = DEFAULT_ROLES.map((r) => ({ ...r }));
     }
     return parsed;
   } catch {

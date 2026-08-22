@@ -186,6 +186,40 @@ function cleanupDirtyData(db, ts) {
     changed += gap.length;
   }
 
+  /* 4. 演示闭环打磨（非阻塞）：确保「pm 即 admin」的项目存在一名非 admin 本人的真实 TL。
+   *    周报确认人在「作者即 pm（或项目无 pm）」时会升级到 `tl ∪ admin`，
+   *    并恒剔除作者本人（禁止自确认，架构纪律）。
+   *    若作者恰为 sole-admin 兼 pm、且项目 TL 仅有作者自己（或无'别人'当 TL），
+   *    升级路径剔除作者后确认人会退化为空集 → 演示闭环断裂
+   *    （本项即 QA 复验观察到的 Pmslkpu9a00dx 7 条周报确认人空集：其 pm 与 tl 都是 ou_xuwenbin01）。
+   *    此处对「pm 为合法 admin、且不存在任何 tl 成员 ≠ 该 admin」的项目幂等补一名
+   *    真实非幻影、非 admin 成员（ou_wudi09，研发普通成员）作为 TL，
+   *    使升级路径至少落到一个真实确认人（目标态 tl={ou_xuwenbin01, ou_wudi09}，确认人=[ou_wudi09]）。
+   *    仅 INSERT OR IGNORE，不覆盖既有成员、不改动确认/打回逻辑与禁止自确认纪律。 */
+  const TL_FILLER = 'ou_wudi09';
+  const tlGap = db
+    .prepare(
+      `SELECT p.id AS pid FROM projects p
+       WHERE p.pm IS NOT NULL AND p.pm <> ''
+         AND p.pm IN (SELECT open_id FROM users WHERE global_role = 'admin')
+         AND NOT EXISTS (
+           SELECT 1 FROM project_members m
+           WHERE m.project_id = p.id AND m.project_role = 'tl'
+             AND m.user_open_id <> p.pm
+         )`
+    )
+    .all();
+  if (tlGap.length) {
+    const insTl = db.prepare(`
+      INSERT OR IGNORE INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at)
+      VALUES (?, ?, ?, 'tl', ?, ?)
+    `);
+    tlGap.forEach(function (p) {
+      insTl.run(p.pid + '-TL1', p.pid, TL_FILLER, TL_FILLER, ts);
+    });
+    changed += tlGap.length;
+  }
+
   return changed;
 }
 

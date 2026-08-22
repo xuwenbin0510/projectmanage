@@ -1181,6 +1181,85 @@ function migrationV14(db, now) {
   console.log('[migrations] v14 review_templates 表 + 10 条内置审批流 seed（审批流程可配置）');
 }
 
+/**
+ * v15：职位目录 + 用户多全局职位（E1.5）。
+ *
+ * 背景（E1.5 已签方案）：
+ *   公司存在「一人多职位」现实——例如某人既是 PMO 又是技术负责人，
+ *   既要看全公司 PMO 视野，又要以 TL 身份参与具体项目。原 `users.global_role`
+ *   单值无法表达，本迁移引入：
+ *
+ *   1. `roles` 职位目录表：所有职位集中管理（名称 / 视野 scope[global|project]
+ *      / 启停 / 排序 / 描述）。scope=global 的职位可被指派为用户的「全局职位」；
+ *      scope=project 的职位仅用于项目内成员角色（与 project_members 已支持的多角色结构呼应）。
+ *   2. `user_roles` 用户额外全局职位表：在 `users.global_role`（主职位，保留作兜底
+ *      与向后兼容）之外，挂接零到多个 scope=global 的职位。读取时合并为
+ *      `[主职位, ...额外职位]` 去重数组，权限判定取并集。
+ *
+ * 幂等：
+ *   - 表用 `CREATE TABLE IF NOT EXISTS`；
+ *   - 默认职位用 `INSERT OR IGNORE`（以 role_key 为主键），老库升级自动补齐，不覆盖用户后续改动；
+ *   - 不改动 `users` 表结构（global_role 单列保留）。
+ */
+function migrationV15(db, now) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS roles (
+      role_key   TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      scope      TEXT NOT NULL DEFAULT 'global',   -- global | project
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      description TEXT NOT NULL DEFAULT '',
+      order_no   INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_roles (
+      id           TEXT PRIMARY KEY,
+      user_open_id TEXT NOT NULL,
+      role_key     TEXT NOT NULL,
+      assigned_by  TEXT,
+      assigned_at  TEXT NOT NULL,
+      UNIQUE (user_open_id, role_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_open_id);
+    CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role_key);
+  `);
+
+  /**
+   * 默认职位目录（与 enums.GLOBAL_ROLES 对齐，标注视野 scope）。
+   * 说明：
+   *  - `member` 为最弱全局职位（普通成员，仅项目内参与者视野），scope=global 但无特殊全局权限；
+   *  - `admin` 恒为全局超级职位；
+   *  - `pm` / `tl` / `qa` / `cm` / `po` 等既可作全局职位（身兼管理视野）也可作项目内职位，
+   *    E1.5 仅把 scope 作为「该职位可被指派为哪种维度的角色」的元数据标记，判定仍由 PERMISSIONS 矩阵按 role key 命中。
+   * order_no 仅控制后台列表展示顺序。
+   */
+  const defaultRoles = [
+    ['admin', '系统管理员', 'global', '拥有全部权限，系统至少保留一名', 1],
+    ['management', '公司管理层', 'global', '公司层面决策与跨项目审批', 2],
+    ['pmo', 'PMO', 'global', '项目管理办公室，全局项目治理与审批', 3],
+    ['pm', '项目经理', 'global', '可指派为全局或项目内项目经理', 4],
+    ['tl', '技术负责人', 'global', '可指派为全局或项目内技术负责人', 5],
+    ['qa', '质量负责人', 'global', '可指派为全局或项目内质量负责人', 6],
+    ['cm', '配置管理员', 'global', '可指派为全局或项目内配置管理', 7],
+    ['po', '产品经理', 'global', '可指派为全局或项目内产品经理', 8],
+    ['member', '普通成员', 'global', '默认成员，仅项目内参与者视野', 9],
+  ];
+
+  const insRole = db.prepare(
+    'INSERT OR IGNORE INTO roles (role_key, name, scope, enabled, description, order_no) '
+    + 'VALUES (?, ?, ?, 1, ?, ?)',
+  );
+  const tx = db.transaction(function () {
+    defaultRoles.forEach(function (r) {
+      insRole.run(r[0], r[1], r[2], r[3], r[4]);
+    });
+  });
+  tx();
+  console.log('[migrations] v15 roles 职位目录 + user_roles 多职位表 + 默认职位 seed（E1.5）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1202,6 +1281,7 @@ const MIGRATIONS = [
   { version: 12, name: 'connect-v12-doc-baseline', up: migrationV12 },
   { version: 13, name: 'connect-v13-change-flow', up: migrationV13 },
   { version: 14, name: 'connect-v14-review-templates', up: migrationV14 },
+  { version: 15, name: 'connect-v15-roles-directory', up: migrationV15 },
 ];
 
 /**

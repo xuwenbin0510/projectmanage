@@ -85,20 +85,27 @@ const ACTION_KEY = {
 
 /**
  * 判定用户是否具备某 action。
- * 逻辑与前端 `canDo` 逐字一致：admin 全通过；命中全局角色或项目角色即通过。
+ * 逻辑与前端 `canDo` 逐字一致：admin 全通过；命中任一全局角色或任一项目角色即通过。
  *
- * @param {string} globalRole 用户全局角色
+ * **E1.5 多职位并集**：`globalRoles` 支持「用户全部全局职位」的数组
+ *   （主职位 `users.global_role` + 额外职位 `user_roles` 合并去重）。
+ *   任一全局职位命中规则即通过；为向后兼容，也接受单个字符串（自动包装为数组）。
+ *
+ * @param {string|string[]} globalRoles 用户全局职位（单值或数组；数组取并集）
  * @param {string} action 权限动作（已解析的 action key，或引擎别名）
  * @param {string[]} [projectRoles] 用户在目标项目中的角色集合
  * @returns {boolean}
  */
-function canDo(globalRole, action, projectRoles) {
-  if (!globalRole) return false;
-  if (globalRole === 'admin') return true;
+function canDo(globalRoles, action, projectRoles) {
+  if (!globalRoles) return false;
+  const list = Array.isArray(globalRoles) ? globalRoles : [globalRoles];
+  if (!list.length) return false;
+  // admin 全通过（任一全局职位为 admin 即通过）
+  if (list.indexOf('admin') >= 0) return true;
   const key = ACTION_KEY[action] || action;
   const rule = PERMISSIONS[key];
   if (!rule) return false;
-  if (rule.global.indexOf(globalRole) >= 0) return true;
+  if (list.some(function (g) { return rule.global.indexOf(g) >= 0; })) return true;
   const roles = projectRoles || [];
   return roles.some(function (r) {
     return rule.project.indexOf(r) >= 0;

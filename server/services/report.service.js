@@ -17,6 +17,7 @@ const enums = require('../config/enums');
 const wbsService = require('./wbs.service');
 const milestoneService = require('./milestone.service');
 const snapshotService = require('./snapshot.service');
+const { resolveGlobalRoles } = require('../middleware/auth');
 
 /* ── 小工具 ─────────────────────────────────────────── */
 
@@ -876,7 +877,7 @@ function updateReport(db, id, payload, me) {
 
   /* D-2 安全加固：仅作者本人或全局 admin 可编辑，防止越权改他人工作日志 */
   const isAuthor = toStr(row.author_open_id) === toStr(actor.open_id);
-  const isAdmin = toStr(actor.global_role) === 'admin';
+  const isAdmin = resolveGlobalRoles(actor).indexOf('admin') >= 0;
   if (!isAuthor && !isAdmin) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '只能编辑本人提交的工作日志', { id: reportId });
   }
@@ -994,7 +995,10 @@ function resolveConfirmers(db, projectId, authorOpenId) {
       if (v) result.add(v);
     });
     const adminRows = db
-      .prepare("SELECT open_id FROM users WHERE global_role = 'admin'")
+      .prepare(
+        "SELECT open_id FROM users WHERE global_role = 'admin' "
+        + "UNION SELECT user_open_id FROM user_roles WHERE role_key = 'admin'",
+      )
       .all();
     adminRows.forEach(function (r) {
       const v = toStr(r.open_id);

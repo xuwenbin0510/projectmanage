@@ -23,10 +23,32 @@ const projectService = require('../services/project.service');
 const router = express.Router();
 
 /**
+ * 取用户额外全局职位映射（E1.5）：open_id → role_key[]。
+ * @param {string[]} [openIds] 限定范围；省略则全量
+ * @returns {Object<string, string[]>}
+ */
+function loadExtraRoles(openIds) {
+  const map = {};
+  let rows;
+  if (Array.isArray(openIds) && openIds.length) {
+    const ph = openIds.map(function () { return '?'; }).join(',');
+    rows = db.prepare('SELECT user_open_id, role_key FROM user_roles WHERE user_open_id IN (' + ph + ')').all(openIds);
+  } else {
+    rows = db.prepare('SELECT user_open_id, role_key FROM user_roles').all();
+  }
+  rows.forEach(function (r) {
+    const k = String(r.user_open_id);
+    if (!map[k]) map[k] = [];
+    map[k].push(String(r.role_key));
+  });
+  return map;
+}
+
+/**
  * 用户列表。
  *
  * ⚠ 不限管理员：建项向导需要用它来挑成员，普通 PM 也必须能读。
- * 返回全字段 `User`（含 globalRole / dept），前端 `GLOBAL_ROLE_LABEL` 依赖之。
+ * 返回全字段 `User`（含 globalRole / globalRoles / dept），前端依赖之。
  */
 router.get(
   '/admin/users',
@@ -35,7 +57,8 @@ router.get(
     const rows = db
       .prepare('SELECT * FROM users ORDER BY id ASC')
       .all();
-    res.json(ok(rows.map(toApiUser)));
+    const extra = loadExtraRoles(rows.map(function (r) { return r.open_id; }));
+    res.json(ok(rows.map(function (r) { return toApiUser(r, extra[r.open_id] || []); })));
   }),
 );
 
@@ -70,8 +93,40 @@ router.patch(
     const sets = [];
     const args = [];
     const now = nowIso();
+    // E1.5：多全局职位写回缓存（UPDATE 后统一替换 user_roles）
+    let pendingExtraRoles = null;
+    let hasExtraRoles = false;
 
-    if (body.globalRole !== undefined) {
+    if (body.globalRoles !== undefined) {
+      // E1.5：多全局职位数组。首项作主职位（users.global_role），其余写入 user_roles。
+      const validRoleKeys = new Set(
+        db.prepare("SELECT role_key FROM roles WHERE enabled = 1").all().map(function (x) { return x.role_key; }),
+      );
+      const list = Array.isArray(body.globalRoles)
+        ? body.globalRoles.map(String).filter(function (r) { return validRoleKeys.has(r); })
+        : [];
+      if (!list.length) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'globalRoles', message: '至少需要一个全局职位' }],
+        });
+      }
+      const primary = list[0];
+      const extra = list.slice(1);
+      if (openId === String(req.user.open_id)) {
+        throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
+      }
+      if (target.global_role === 'admin' && primary !== 'admin') {
+        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR role_key = 'admin') AND user_open_id <> ?").get(openId);
+        if (!cnt || Number(cnt.n) <= 1) {
+          throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
+        }
+      }
+      sets.push('global_role = ?');
+      args.push(primary);
+      // 落库额外职位（事务内统一替换）
+      pendingExtraRoles = extra;
+      hasExtraRoles = true;
+    } else if (body.globalRole !== undefined) {
       const role = String(body.globalRole);
       if (GLOBAL_ROLES.indexOf(role) < 0) {
         throw new AppError(ErrorCode.E_VALIDATION, undefined, {
@@ -130,7 +185,22 @@ router.patch(
     args.push(openId);
     db.prepare('UPDATE users SET ' + sets.join(', ') + ' WHERE open_id = ?').run(args);
 
-    res.json(ok(toApiUser(db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId)), '已更新'));
+    // E1.5：多全局职位写回（先删后插，按主职位之外的集合重建）
+    if (hasExtraRoles) {
+      const tx = db.transaction(function () {
+        db.prepare('DELETE FROM user_roles WHERE user_open_id = ?').run(openId);
+        const ins = db.prepare(
+          'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at) VALUES (?, ?, ?, ?, ?)',
+        );
+        (pendingExtraRoles || []).forEach(function (role) {
+          ins.run(genId('UR'), openId, role, String(req.user.open_id || ''), now);
+        });
+      });
+      tx();
+    }
+
+    const extra = loadExtraRoles([openId])[openId] || [];
+    res.json(ok(toApiUser(db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId), extra), '已更新'));
   }),
 );
 
@@ -158,11 +228,29 @@ router.post(
         fields: [{ field: 'name', message: '姓名必填' }],
       });
     }
-    const role = String(body.globalRole || 'member');
-    if (GLOBAL_ROLES.indexOf(role) < 0) {
-      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-        fields: [{ field: 'globalRole', message: '全局角色不合法' }],
-      });
+    // E1.5：优先用 globalRoles 数组（首项主职位），否则回落单值 globalRole（默认 member）
+    let primary = 'member';
+    let extra = [];
+    if (Array.isArray(body.globalRoles) && body.globalRoles.length) {
+      const validRoleKeys = new Set(
+        db.prepare("SELECT role_key FROM roles WHERE enabled = 1").all().map(function (x) { return x.role_key; }),
+      );
+      const valid = body.globalRoles.map(String).filter(function (r) { return validRoleKeys.has(r); });
+      if (!valid.length) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'globalRoles', message: '全局角色不合法' }],
+        });
+      }
+      primary = valid[0];
+      extra = valid.slice(1);
+    } else {
+      const single = String(body.globalRole || 'member');
+      if (GLOBAL_ROLES.indexOf(single) < 0) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'globalRole', message: '全局角色不合法' }],
+        });
+      }
+      primary = single;
     }
     const exists = db.prepare('SELECT 1 FROM users WHERE open_id = ?').get(openId);
     if (exists) {
@@ -183,13 +271,24 @@ router.post(
         name.slice(0, 40),
         String(body.email || '').trim().slice(0, 80),
         String(body.dept || '').slice(0, 60),
-        role,
+        primary,
         'active',
         now,
         now,
       );
 
-    res.json(ok(toApiUser(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)), '用户已创建'));
+    // E1.5：写入额外全局职位
+    if (extra.length) {
+      const ins = db.prepare(
+        'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at) VALUES (?, ?, ?, ?, ?)',
+      );
+      extra.forEach(function (r) {
+        ins.run(genId('UR'), openId, r, String(req.user.open_id || ''), now);
+      });
+    }
+
+    const extraRoles = loadExtraRoles([openId])[openId] || [];
+    res.json(ok(toApiUser(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid), extraRoles), '用户已创建'));
   }),
 );
 
@@ -699,6 +798,139 @@ router.post(
     );
 
     res.json(ok(projectService.getTemplateById(db, newId), '已复制（副本默认停用）'));
+  }),
+);
+
+/* ── 职位目录管理（E1.5：职位可增删改 + 标注全局/项目级视野） ── */
+
+/**
+ * roles 行 → API 对象。
+ * @param {object} row
+ * @returns {object}
+ */
+function toApiRole(row) {
+  return {
+    roleKey: row.role_key,
+    name: row.name,
+    scope: row.scope, // global | project
+    enabled: Number(row.enabled) === 1,
+    description: row.description,
+    orderNo: Number(row.order_no) || 0,
+  };
+}
+
+/** 职位列表（仅 admin；按 order_no 升序） */
+router.get(
+  '/admin/roles',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function listRoles(req, res) {
+    const rows = db.prepare('SELECT * FROM roles ORDER BY order_no ASC, role_key ASC').all();
+    res.json(ok(rows.map(toApiRole)));
+  }),
+);
+
+/** 新增职位（仅 admin）。必填：roleKey（唯一）、name、scope（global/project）。 */
+router.post(
+  '/admin/roles',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function createRole(req, res) {
+    const body = req.body || {};
+    const roleKey = String(body.roleKey || '').trim();
+    const name = String(body.name || '').trim();
+    const scope = String(body.scope || 'global');
+    if (!roleKey) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, { fields: [{ field: 'roleKey', message: '职位标识必填' }] });
+    }
+    if (!/^[a-z0-9_]+$/.test(roleKey)) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: 'roleKey', message: '职位标识仅限小写字母/数字/下划线' }],
+      });
+    }
+    if (!name) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, { fields: [{ field: 'name', message: '职位名称必填' }] });
+    }
+    if (scope !== 'global' && scope !== 'project') {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, { fields: [{ field: 'scope', message: '视野必须为 global / project' }] });
+    }
+    if (db.prepare('SELECT 1 FROM roles WHERE role_key = ?').get(roleKey)) {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, { fields: [{ field: 'roleKey', message: '职位标识已存在' }] });
+    }
+    const now = nowIso();
+    /* 方案 A：新建职位序号自动取「当前最大序号 + 1」，始终追加到列表末尾，避免手动填且可能重复 */
+    const maxRow = db.prepare('SELECT MAX(order_no) AS m FROM roles').get();
+    const nextOrder = (maxRow && Number(maxRow.m) > 0 ? Number(maxRow.m) : 0) + 1;
+    db.prepare(
+      'INSERT INTO roles (role_key, name, scope, enabled, description, order_no) VALUES (?, ?, ?, 1, ?, ?)',
+    ).run(roleKey, name, scope, String(body.description || '').slice(0, 200), nextOrder);
+    res.json(ok(toApiRole(db.prepare('SELECT * FROM roles WHERE role_key = ?').get(roleKey)), '职位已创建'));
+  }),
+);
+
+/** 更新职位（仅 admin）。支持 { name?, scope?, enabled?, description?, orderNo? } 部分更新。 */
+router.put(
+  '/admin/roles/:roleKey',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function updateRole(req, res) {
+    const roleKey = String(req.params.roleKey || '');
+    const body = req.body || {};
+    const target = db.prepare('SELECT * FROM roles WHERE role_key = ?').get(roleKey);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '职位不存在', { roleKey: roleKey });
+
+    const sets = [];
+    const args = [];
+    if (body.name !== undefined) {
+      const name = String(body.name).trim();
+      if (!name) throw new AppError(ErrorCode.E_VALIDATION, undefined, { fields: [{ field: 'name', message: '职位名称必填' }] });
+      sets.push('name = ?');
+      args.push(name.slice(0, 40));
+    }
+    if (body.scope !== undefined) {
+      const scope = String(body.scope);
+      if (scope !== 'global' && scope !== 'project') {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, { fields: [{ field: 'scope', message: '视野必须为 global / project' }] });
+      }
+      sets.push('scope = ?');
+      args.push(scope);
+    }
+    if (body.enabled !== undefined) {
+      sets.push('enabled = ?');
+      args.push(body.enabled ? 1 : 0);
+    }
+    if (body.description !== undefined) {
+      sets.push('description = ?');
+      args.push(String(body.description).slice(0, 200));
+    }
+    if (body.orderNo !== undefined) {
+      sets.push('order_no = ?');
+      args.push(Number(body.orderNo) || 0);
+    }
+    if (!sets.length) throw new AppError(ErrorCode.E_VALIDATION, '没有可更新的字段', {});
+    args.push(roleKey);
+    db.prepare('UPDATE roles SET ' + sets.join(', ') + ' WHERE role_key = ?').run(args);
+    res.json(ok(toApiRole(db.prepare('SELECT * FROM roles WHERE role_key = ?').get(roleKey)), '已更新'));
+  }),
+);
+
+/** 删除职位（仅 admin）。存在用户引用（主职位或额外职位）时拒绝。 */
+router.delete(
+  '/admin/roles/:roleKey',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function deleteRole(req, res) {
+    const roleKey = String(req.params.roleKey || '');
+    const target = db.prepare('SELECT * FROM roles WHERE role_key = ?').get(roleKey);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '职位不存在', { roleKey: roleKey });
+
+    const refPrimary = db.prepare('SELECT COUNT(*) AS n FROM users WHERE global_role = ?').get(roleKey);
+    const refExtra = db.prepare('SELECT COUNT(*) AS n FROM user_roles WHERE role_key = ?').get(roleKey);
+    if ((refPrimary && Number(refPrimary.n) > 0) || (refExtra && Number(refExtra.n) > 0)) {
+      throw new AppError(ErrorCode.E_VALIDATION, '该职位仍被用户引用，无法删除，请先调整相关用户', { roleKey: roleKey });
+    }
+    db.prepare('DELETE FROM roles WHERE role_key = ?').run(roleKey);
+    res.json(ok({ roleKey: roleKey }, '已删除'));
   }),
 );
 

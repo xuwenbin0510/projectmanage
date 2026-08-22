@@ -175,10 +175,18 @@ function makeNameLookup(db) {
  * users 行 → API `User`。
  * ⚠ DB `global_role` → API `globalRole`（例外表）。
  * @param {object} row
+ * @param {string[]} [extraRoles] E1.5：额外全局职位（user_roles 表），
+ *   与 `global_role` 合并去重为 `globalRoles` 数组（权限判定取并集）。
  * @returns {object|null}
  */
-function toApiUser(row) {
+function toApiUser(row, extraRoles) {
   if (!row) return null;
+  const primary = toStr(row.global_role, 'member');
+  const set = {};
+  if (primary) set[primary] = true;
+  (Array.isArray(extraRoles) ? extraRoles : []).forEach(function (r) {
+    if (r) set[String(r)] = true;
+  });
   return {
     id: toNum(row.id, 0),
     openId: toStr(row.open_id),
@@ -187,7 +195,8 @@ function toApiUser(row) {
     email: toStr(row.email),
     dept: toStr(row.dept),
     avatarUrl: toStr(row.avatar_url),
-    globalRole: toStr(row.global_role, 'member'),
+    globalRole: primary,
+    globalRoles: Object.keys(set),
     status: toStr(row.status, 'active'),
     createdAt: toStr(row.created_at),
     updatedAt: toStr(row.updated_at),

@@ -5,6 +5,9 @@ import type {
   CreateUserPayload,
   UpdateUserPayload,
   GlobalRole,
+  Role,
+  CreateRolePayload,
+  UpdateRolePayload,
   Project,
   ProjectListItem,
   ProjectMember,
@@ -203,7 +206,7 @@ export class HttpApiClient implements ApiClient {
     return get<ProjectMember[]>(`/projects/${projectId}/members`);
   }
 
-  addMember(projectId: string, userOpenId: string, role: ProjectRole): Promise<ProjectMember> {
+  addMember(projectId: string, userOpenId: string, role: string): Promise<ProjectMember> {
     return post<ProjectMember>(`/projects/${projectId}/members`, { userOpenId, role });
   }
 
@@ -434,6 +437,23 @@ export class HttpApiClient implements ApiClient {
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin） */
   updateUser(openId: string, patchBody: UpdateUserPayload): Promise<User> {
     return patch<User>(`/admin/users/${openId}`, patchBody);
+  }
+
+  /* E1.5 职位目录管理（仅 admin） */
+  listRoles(): Promise<Role[]> {
+    return get<Role[]>('/admin/roles');
+  }
+
+  createRole(payload: CreateRolePayload): Promise<Role> {
+    return post<Role>('/admin/roles', payload);
+  }
+
+  updateRole(roleKey: string, patch: UpdateRolePayload): Promise<Role> {
+    return put<Role>(`/admin/roles/${roleKey}`, patch);
+  }
+
+  deleteRole(roleKey: string): Promise<{ roleKey: string }> {
+    return del<{ roleKey: string }>(`/admin/roles/${roleKey}`);
   }
 
   listTemplates(): Promise<LifecycleTemplate[]> {

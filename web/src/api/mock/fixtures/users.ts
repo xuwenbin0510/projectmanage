@@ -21,6 +21,8 @@ export function createUsers(): User[] {
     dept: a.dept,
     avatarUrl: '',
     globalRole: a.globalRole,
+    // E1.5：全局职位数组（默认含主职位；演示数据暂为单职位，后台可配置多职位）
+    globalRoles: [a.globalRole],
     status: 'active' as const,
     createdAt: ts,
     updatedAt: ts,

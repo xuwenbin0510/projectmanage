@@ -20,6 +20,7 @@ const enums = require('../config/enums');
 const classifyService = require('./classify.service');
 const milestoneService = require('./milestone.service');
 const documentService = require('./document.service');
+const { resolveGlobalRoles } = require('../middleware/auth');
 
 /** 无 PM 时列表页展示的占位（与前端 Mock `toListItem` 一致） */
 const NO_PM_PLACEHOLDER = '—';
@@ -82,8 +83,8 @@ function updateProjectBasic(db, req, id, payload) {
   const me = req.user || {};
   const p = requireProjectRow(db, id);
 
-  /* 权限：admin 恒放行；否则项目负责人或创建人 */
-  const isAdmin = me.global_role === 'admin';
+  /* 权限：admin 恒放行；否则项目负责人或创建人（E1.5：任一全局职位为 admin 即视为管理员） */
+  const isAdmin = resolveGlobalRoles(me).indexOf('admin') >= 0;
   const isOwner = p.pm === me.open_id || p.created_by === me.open_id;
   if (!isAdmin && !isOwner) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '仅项目负责人或管理员可编辑', { projectId: id });
