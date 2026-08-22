@@ -21,6 +21,7 @@ import { MAIN_MENU } from '@/config/routes';
 import type { MenuItem } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
 import { alphaOf as alpha, tokens } from '@/theme/tokens';
+import { USE_MOCK } from '@/api/client';
 
 const ICONS: Record<MenuItem['icon'], JSX.Element> = {
   workbench: <DashboardOutlinedIcon fontSize="small" />,
@@ -113,7 +114,7 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
       {!collapsed && (
         <Box sx={{ px: 2, py: 1.5, borderTop: `1px solid ${tokens.border.subtle}` }}>
           <Typography variant="caption" color="text.secondary">
-            S1 静态原型 · Mock 数据
+            {USE_MOCK ? 'S1 静态原型 · Mock 数据' : '已连接服务 · 数据持久化'}
           </Typography>
         </Box>
       )}
