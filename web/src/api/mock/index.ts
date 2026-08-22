@@ -3447,8 +3447,11 @@ export class MockApiClient implements ApiClient {
     const statusFilter =
       query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
     const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
+    const ownerRoles = PERMISSIONS['project:edit'].project; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
-      db.members.filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm').map((m) => m.projectId),
+      db.members
+        .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
+        .map((m) => m.projectId),
     );
     let items = db.projects
       .filter((p) => (statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status)))
@@ -3512,8 +3515,11 @@ export class MockApiClient implements ApiClient {
     const statusFilter =
       query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
     const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
+    const ownerRoles = PERMISSIONS['project:edit'].project; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
-      db.members.filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm').map((m) => m.projectId),
+      db.members
+        .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
+        .map((m) => m.projectId),
     );
     let items = db.projects
       .filter((p) => (statusFilter ? p.status === statusFilter : DASHBOARD_MANAGED_STATUSES.includes(p.status)))
