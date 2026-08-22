@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   AlertTitle,
@@ -47,7 +47,7 @@ import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useAsync, usePermission, useToast } from '@/hooks';
-import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectRole, ProjectStatus, ProjectType, QualityGate, User } from '@/types/project';
+import type { CloseBlocker, GateChecklistItem, LifecycleTemplate, MilestoneWithGate, ProjectRole, ProjectStatus, ProjectType, QualityGate, User } from '@/types/project';
 import {
   GATE_CONCLUSIONS,
   GATE_ICON,
@@ -109,22 +109,37 @@ export function ProjectOverviewPage(): JSX.Element {
     code: '',
     name: '',
     type: 'A' as ProjectType,
+    templateId: '' as string,
     customer: '',
     contractAmount: 0,
     background: '',
     goalText: '',
   });
+  const [editTemplateOptions, setEditTemplateOptions] = useState<LifecycleTemplate[]>([]);
+  const loadEditTemplateOptions = useCallback(
+    async (type: ProjectType): Promise<void> => {
+      try {
+        const opts = await api.listTemplateOptions(type);
+        setEditTemplateOptions(opts ?? []);
+      } catch {
+        setEditTemplateOptions([]);
+      }
+    },
+    [],
+  );
   const openEditProject = (): void => {
     if (!project) return;
     setEditForm({
       code: project.code ?? '',
       name: project.name ?? '',
       type: project.type ?? 'A',
+      templateId: project.templateId ?? '',
       customer: project.customer ?? '',
       contractAmount: project.contractAmount ?? 0,
       background: project.background ?? '',
       goalText: (project.goal ?? []).join('\n'),
     });
+    void loadEditTemplateOptions(project.type ?? 'A');
     setEditOpen(true);
   };
   const submitEditProject = async (): Promise<void> => {
@@ -139,6 +154,7 @@ export function ProjectOverviewPage(): JSX.Element {
         code: editForm.code.trim(),
         name: editForm.name.trim(),
         type: editForm.type,
+        templateId: editForm.templateId,
         customer: editForm.customer.trim(),
         contractAmount: Number(editForm.contractAmount) || 0,
         background: editForm.background,
@@ -1263,11 +1279,35 @@ export function ProjectOverviewPage(): JSX.Element {
             size="small"
             fullWidth
             value={editForm.type}
-            onChange={(e) => setEditForm((f) => ({ ...f, type: e.target.value as ProjectType }))}
+            onChange={(e) => {
+              const t = e.target.value as ProjectType;
+              setEditForm((f) => ({ ...f, type: t, templateId: '' }));
+              void loadEditTemplateOptions(t);
+            }}
           >
             {(['A', 'B', 'C'] as ProjectType[]).map((t) => (
               <MenuItem key={t} value={t}>
                 {PROJECT_TYPE_LABEL[t]}（{t} 类）
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            select
+            label="生命周期模板"
+            size="small"
+            fullWidth
+            value={editForm.templateId}
+            onChange={(e) => setEditForm((f) => ({ ...f, templateId: e.target.value }))}
+            helperText={
+              editTemplateOptions.length === 0
+                ? '该分类暂无启用模板，将使用系统默认'
+                : '选择该分类下的具体生命周期模板（含自定义模板）'
+            }
+          >
+            <MenuItem value="">系统默认（分类下生效模板）</MenuItem>
+            {editTemplateOptions.map((t) => (
+              <MenuItem key={t.id} value={t.id}>
+                {t.name} · v{t.version}
               </MenuItem>
             ))}
           </TextField>
