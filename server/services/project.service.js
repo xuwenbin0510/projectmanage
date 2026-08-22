@@ -64,6 +64,87 @@ function getProject(db, id) {
   return mappers.toApiProject(requireProjectRow(db, id));
 }
 
+/**
+ * 编辑项目基本信息（E1：管理员/项目负责人可改类型、成员等必要字段）。
+ *
+ * 权限：admin 恒放行；否则仅项目负责人（pm）或创建人。
+ * 与 legacy `PUT /projects/:id` 同源 SQL，但按 PATCH 语义只更新传入字段，
+ * 且支持 `code` / `type` 等本次放开的字段。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} req Express request（`req.user` 为 users 行）
+ * @param {string} id
+ * @param {object} payload 前端 UpdateProjectPayload + code/type
+ * @returns {object} API 形态 Project
+ * @throws {AppError} E_NOT_FOUND / E_FORBIDDEN / E_VALIDATION
+ */
+function updateProjectBasic(db, req, id, payload) {
+  const me = req.user || {};
+  const p = requireProjectRow(db, id);
+
+  /* 权限：admin 恒放行；否则项目负责人或创建人 */
+  const isAdmin = me.global_role === 'admin';
+  const isOwner = p.pm === me.open_id || p.created_by === me.open_id;
+  if (!isAdmin && !isOwner) {
+    throw new AppError(ErrorCode.E_FORBIDDEN, '仅项目负责人或管理员可编辑', { projectId: id });
+  }
+
+  const b = payload || {};
+  const fields = [];
+  const vals = [];
+
+  if (b.code !== undefined) {
+    fields.push('code = ?');
+    vals.push(String(b.code ?? '').trim());
+  }
+  if (b.name !== undefined) {
+    fields.push('name = ?');
+    vals.push(String(b.name ?? '').trim());
+  }
+  if (b.type !== undefined) {
+    if (enums.PROJECT_TYPES.indexOf(b.type) < 0) {
+      throw new AppError(ErrorCode.E_VALIDATION, '项目类型不合法', { type: b.type });
+    }
+    fields.push('type = ?');
+    vals.push(String(b.type));
+  }
+  if (b.customer !== undefined) {
+    fields.push('customer = ?');
+    vals.push(String(b.customer ?? '').trim());
+  }
+  if (b.contractAmount !== undefined) {
+    const amt = Number(b.contractAmount) || 0;
+    fields.push('amount = ?');
+    vals.push(amt);
+  }
+  if (b.background !== undefined) {
+    fields.push('background = ?');
+    vals.push(String(b.background ?? ''));
+  }
+  if (b.goal !== undefined) {
+    const goal = Array.isArray(b.goal) ? b.goal : [];
+    fields.push('goal = ?');
+    vals.push(JSON.stringify(goal));
+  }
+  if (b.planStart !== undefined) {
+    fields.push('plan_start = ?');
+    vals.push(String(b.planStart ?? ''));
+  }
+  if (b.planEnd !== undefined) {
+    fields.push('plan_end = ?');
+    vals.push(String(b.planEnd ?? ''));
+  }
+
+  if (!fields.length) return mappers.toApiProject(p);
+
+  fields.push('updated_at = ?');
+  vals.push(dates.nowIso());
+  vals.push(String(id));
+
+  db.prepare('UPDATE projects SET ' + fields.join(', ') + ' WHERE id = ?').run(...vals);
+  return mappers.toApiProject(requireProjectRow(db, id));
+}
+
 /* ── 成员 ───────────────────────────────────────────── */
 
 /**
@@ -780,4 +861,5 @@ module.exports = {
   assertCreatePayload,
   assertMemberCardinality,
   createProject,
+  updateProjectBasic,
 };
