@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  Autocomplete,
   Box,
   Button,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -18,26 +20,30 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard, UserAvatar } from '@/components/common';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
-import type { User, GlobalRole } from '@/types/project';
+import type { User } from '@/types/project';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/authStore';
 import { useToast } from '@/hooks';
-import { GLOBAL_ROLE_LABEL, GLOBAL_ROLES } from '@/config/enums';
+import { GLOBAL_ROLE_LABEL } from '@/config/enums';
+import type { Role } from '@/types/project';
 
-/** 新增用户弹窗表单值 */
+/** 新增用户弹窗表单值（E1.5：支持一人多全局职位） */
 interface NewUserForm {
   openId: string;
   name: string;
   employeeId: string;
   email: string;
   dept: string;
-  globalRole: GlobalRole;
+  /** 主职位（单值兜底），值为 role_key（含动态职位） */
+  primaryRole: string;
+  /** 额外职位（不含主职位），值为 role_key 数组 */
+  extraRoles: string[];
 }
 
-const EMPTY_FORM: NewUserForm = { openId: '', name: '', employeeId: '', email: '', dept: '', globalRole: 'member' };
+const EMPTY_FORM: NewUserForm = { openId: '', name: '', employeeId: '', email: '', dept: '', primaryRole: 'member', extraRoles: [] };
 
 /**
- * 管理后台 · 用户与角色（阶段一：用户 CRUD + 启停 + 部门）
+ * 管理后台 · 用户与职位（阶段一：用户 CRUD + 启停 + 部门；E1.5：一人可多公司职位）
  * @prd P0-12（用户管理后台） P0-10（角色体系与 RBAC）
  */
 export function AdminUsersPage(): JSX.Element {
@@ -45,17 +51,44 @@ export function AdminUsersPage(): JSX.Element {
   const me = useAuthStore((s) => s.user);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  /** 职位目录（动态，含职位管理页新加的职位），用于用户角色下拉 */
+  const [roles, setRoles] = useState<Role[]>([]);
 
   /* 新增用户弹窗状态 */
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
   const [creating, setCreating] = useState(false);
 
+  /** role_key → 中文名 映射（动态职位 + 预置兜底，保证旧数据也有名） */
+  const roleLabelMap: Record<string, string> = useMemo(() => {
+    const map: Record<string, string> = { ...GLOBAL_ROLE_LABEL };
+    roles.forEach((r) => {
+      if (r.name) map[r.roleKey] = r.name;
+    });
+    return map;
+  }, [roles]);
+
+  /** scope → 视野范围说明（便于管理员分配时判断该职位的数据可见范围） */
+  const scopeLabelMap: Record<string, string> = {
+    global: '全公司视野',
+    project: '仅项目内视野',
+  };
+  const scopeOf = (key: string): 'global' | 'project' =>
+    roles.find((r) => r.roleKey === key)?.scope ?? 'project';
+
+  /** 可指派的职位 = 职位管理里的全部职位（谁都能分配；视野维度由职位自身设定决定），按 orderNo 排序 */
+  const roleOptions: Role[] = useMemo(
+    () => roles.filter((r) => r.enabled).sort((a, b) => a.orderNo - b.orderNo),
+    [roles],
+  );
+
   const load = (): void => {
     setLoading(true);
-    api
-      .listUsers()
-      .then(setUsers)
+    Promise.all([api.listUsers(), api.listRoles()])
+      .then(([us, rs]) => {
+        setUsers(us);
+        setRoles(rs);
+      })
       .catch((e: unknown) => toast.error(e))
       .finally(() => setLoading(false));
   };
@@ -64,11 +97,19 @@ export function AdminUsersPage(): JSX.Element {
     load();
   }, [toast]);
 
-  const changeRole = async (u: User, role: GlobalRole): Promise<void> => {
+  /** 合并主职位 + 额外职位（去重，主职位在前） */
+  const mergeRoles = (primary: string, extra: string[]): string[] => {
+    const set = new Set<string>([primary]);
+    extra.forEach((r) => set.add(r));
+    return Array.from(set);
+  };
+
+  /** 保存某用户的多职位（首项为主职位） */
+  const saveRoles = async (u: User, roles: string[]): Promise<void> => {
     try {
-      const updated = await api.updateUserRole(u.openId, role);
+      const updated = await api.updateUser(u.openId, { globalRoles: roles });
       setUsers((list) => list.map((x) => (x.openId === u.openId ? updated : x)));
-      toast.success(`已将 ${u.name} 调整为 ${GLOBAL_ROLE_LABEL[role]}`);
+      toast.success(`已更新 ${u.name} 的职位`);
     } catch (e) {
       toast.error(e);
       load();
@@ -97,7 +138,7 @@ export function AdminUsersPage(): JSX.Element {
         employeeId: form.employeeId.trim() || undefined,
         email: form.email.trim() || undefined,
         dept: form.dept.trim() || undefined,
-        globalRole: form.globalRole,
+        globalRoles: mergeRoles(form.primaryRole, form.extraRoles),
       });
       setUsers((list) => [...list, created]);
       setCreateOpen(false);
@@ -110,15 +151,23 @@ export function AdminUsersPage(): JSX.Element {
     }
   };
 
-  /* 编辑用户资料弹窗（复用部分字段） */
+  /* 编辑用户资料弹窗（复用部分字段 + 多职位） */
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<User | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', dept: '', email: '', employeeId: '' });
+  const [editForm, setEditForm] = useState({ name: '', dept: '', email: '', employeeId: '', primaryRole: 'member', extraRoles: [] as string[] });
   const [editing, setEditing] = useState(false);
 
   const openEdit = (u: User): void => {
     setEditTarget(u);
-    setEditForm({ name: u.name ?? '', dept: u.dept ?? '', email: u.email ?? '', employeeId: u.employeeId ?? '' });
+    const all = u.globalRoles?.length ? u.globalRoles : [u.globalRole];
+    setEditForm({
+      name: u.name ?? '',
+      dept: u.dept ?? '',
+      email: u.email ?? '',
+      employeeId: u.employeeId ?? '',
+      primaryRole: all[0],
+      extraRoles: all.slice(1),
+    });
     setEditOpen(true);
   };
 
@@ -131,6 +180,7 @@ export function AdminUsersPage(): JSX.Element {
         dept: editForm.dept.trim() || undefined,
         email: editForm.email.trim() || undefined,
         employeeId: editForm.employeeId.trim() || undefined,
+        globalRoles: mergeRoles(editForm.primaryRole, editForm.extraRoles),
       });
       setUsers((list) => list.map((x) => (x.openId === updated.openId ? updated : x)));
       setEditOpen(false);
@@ -159,27 +209,28 @@ export function AdminUsersPage(): JSX.Element {
     { key: 'employeeId', label: '工号', width: 100, hideOnMobile: true, render: (u) => <Typography variant="caption">{u.employeeId || '—'}</Typography> },
     { key: 'email', label: '邮箱', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.email || '—'}</Typography> },
     {
-      key: 'globalRole',
-      label: '全局角色',
-      width: 200,
-      render: (u) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
-          <TextField
-            select
-            size="small"
-            value={u.globalRole}
-            onChange={(e) => void changeRole(u, e.target.value as GlobalRole)}
-            disabled={me?.openId === u.openId}
-            sx={{ minWidth: 140 }}
-          >
-            {GLOBAL_ROLES.map((r) => (
-              <MenuItem key={r} value={r}>
-                {GLOBAL_ROLE_LABEL[r]}
-              </MenuItem>
-            ))}
-          </TextField>
-        </PermissionButton>
-      ),
+      key: 'globalRoles',
+      label: '公司职位',
+      width: 260,
+      render: (u) => {
+        const all = u.globalRoles?.length ? u.globalRoles : [u.globalRole];
+        return (
+          <PermissionButton action="admin:user:role" fallback="disable">
+            <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+              {all.map((r, i) => (
+                <Chip
+                  key={r}
+                  size="small"
+                  label={roleLabelMap[r] ?? r}
+                  color={i === 0 ? 'primary' : 'default'}
+                  variant={i === 0 ? 'filled' : 'outlined'}
+                  title={i === 0 ? '主职位' : '额外职位'}
+                />
+              ))}
+            </Stack>
+          </PermissionButton>
+        );
+      },
     },
     {
       /* 阶段一：状态可操作（启停开关；不能停用自己） */
@@ -220,8 +271,8 @@ export function AdminUsersPage(): JSX.Element {
     <Stack spacing={2.5}>
       <AdminTabs />
       <PageHeader
-        title="用户与角色"
-        subtitle="管理全局角色与启停状态；系统至少保留一名管理员，且不可修改/停用自己"
+        title="用户与职位"
+        subtitle="管理公司职位与启停状态；系统至少保留一名管理员，且不可修改/停用自己"
         actions={
           <PermissionButton action="admin:user:role" fallback="disable">
             <Button variant="contained" size="small" startIcon={<PersonAddOutlinedIcon />} onClick={() => setCreateOpen(true)}>
@@ -283,20 +334,47 @@ export function AdminUsersPage(): JSX.Element {
               value={form.email}
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
             />
-            <TextField
-              select
-              label="全局角色"
-              size="small"
-              fullWidth
-              value={form.globalRole}
-              onChange={(e) => setForm((f) => ({ ...f, globalRole: e.target.value as GlobalRole }))}
-            >
-              {GLOBAL_ROLES.map((r) => (
-                <MenuItem key={r} value={r}>
-                  {GLOBAL_ROLE_LABEL[r]}
-                </MenuItem>
-              ))}
-            </TextField>
+            <Box>
+              <Typography variant="caption" color="text.secondary">主职位（必选 1 个，权限兜底）</Typography>
+              <TextField
+                select
+                size="small"
+                fullWidth
+                value={form.primaryRole}
+                onChange={(e) => setForm((f) => ({ ...f, primaryRole: e.target.value }))}
+              >
+                {roleOptions.map((r) => (
+                  <MenuItem key={r.roleKey} value={r.roleKey}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 1 }}>
+                      <span>{r.name}</span>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={scopeLabelMap[r.scope] ?? r.scope}
+                        sx={{ height: 20, fontSize: 11 }}
+                      />
+                    </Box>
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">额外职位（可多选，一人可兼多职）</Typography>
+              <Autocomplete<string, true>
+                multiple
+                size="small"
+                options={roleOptions.map((r) => r.roleKey).filter((k) => k !== form.primaryRole)}
+                getOptionLabel={(k) => `${roleLabelMap[k] ?? k}（${scopeLabelMap[scopeOf(k)] ?? scopeOf(k)}）`}
+                value={form.extraRoles}
+                onChange={(_, v) => setForm((f) => ({ ...f, extraRoles: v }))}
+                renderTags={(value, getTagProps) =>
+                  value.map((option, index) => (
+                    <Chip size="small" label={roleLabelMap[option] ?? option} {...getTagProps({ index })} key={option} />
+                  ))
+                }
+                renderInput={(params) => <TextField {...params} placeholder="选择额外职位" />}
+              />
+            </Box>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -309,9 +387,9 @@ export function AdminUsersPage(): JSX.Element {
         </DialogActions>
       </Dialog>
 
-      {/* 编辑用户资料弹窗 */}
+      {/* 编辑用户资料弹窗（含多职位编辑） */}
       <Dialog open={editOpen} onClose={() => !editing && setEditOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>编辑用户资料 · {editTarget?.name}</DialogTitle>
+        <DialogTitle>编辑用户 · {editTarget?.name}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <TextField
@@ -344,6 +422,47 @@ export function AdminUsersPage(): JSX.Element {
               value={editForm.email}
               onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
             />
+            <Box>
+              <Typography variant="caption" color="text.secondary">主职位（必选 1 个，权限兜底）</Typography>
+              <TextField
+                select
+                size="small"
+                fullWidth
+                value={editForm.primaryRole}
+                onChange={(e) => setEditForm((f) => ({ ...f, primaryRole: e.target.value }))}
+              >
+                {roleOptions.map((r) => (
+                  <MenuItem key={r.roleKey} value={r.roleKey}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 1 }}>
+                      <span>{r.name}</span>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={scopeLabelMap[r.scope] ?? r.scope}
+                        sx={{ height: 20, fontSize: 11 }}
+                      />
+                    </Box>
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">额外职位（可多选，一人可兼多职）</Typography>
+              <Autocomplete<string, true>
+                multiple
+                size="small"
+                options={roleOptions.map((r) => r.roleKey).filter((k) => k !== editForm.primaryRole)}
+                getOptionLabel={(k) => `${roleLabelMap[k] ?? k}（${scopeLabelMap[scopeOf(k)] ?? scopeOf(k)}）`}
+                value={editForm.extraRoles}
+                onChange={(_, v) => setEditForm((f) => ({ ...f, extraRoles: v }))}
+                renderTags={(value, getTagProps) =>
+                  value.map((option, index) => (
+                    <Chip size="small" label={roleLabelMap[option] ?? option} {...getTagProps({ index })} key={option} />
+                  ))
+                }
+                renderInput={(params) => <TextField {...params} placeholder="选择额外职位" />}
+              />
+            </Box>
           </Stack>
         </DialogContent>
         <DialogActions>

@@ -3,6 +3,9 @@ import type {
   User,
   CreateUserPayload,
   UpdateUserPayload,
+  CreateRolePayload,
+  UpdateRolePayload,
+  Role,
   GlobalRole,
   Project,
   ProjectListItem,
@@ -271,7 +274,7 @@ export interface ApiClient {
 
   /* 成员 */
   listMembers(projectId: string): Promise<ProjectMember[]>;
-  addMember(projectId: string, userOpenId: string, role: ProjectRole): Promise<ProjectMember>;
+  addMember(projectId: string, userOpenId: string, role: string): Promise<ProjectMember>;
   removeMember(projectId: string, memberId: string): Promise<void>;
 
   /* 质量门 P0-05 P0-06（挂在里程碑上 · 决策 D-A） */
@@ -377,6 +380,12 @@ export interface ApiClient {
   createUser(payload: CreateUserPayload): Promise<User>;
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin；只传需要更新的字段） */
   updateUser(openId: string, patch: UpdateUserPayload): Promise<User>;
+
+  /* E1.5 职位目录管理（仅 admin） */
+  listRoles(): Promise<Role[]>;
+  createRole(payload: CreateRolePayload): Promise<Role>;
+  updateRole(roleKey: string, patch: UpdateRolePayload): Promise<Role>;
+  deleteRole(roleKey: string): Promise<{ roleKey: string }>;
   listTemplates(): Promise<LifecycleTemplate[]>;
   resetDemoData(): Promise<void>;
 

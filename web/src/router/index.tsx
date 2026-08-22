@@ -29,6 +29,7 @@ import { AdminUsersPage } from '@/pages/admin/AdminUsersPage';
 import { AdminPermissionsPage } from '@/pages/admin/AdminPermissionsPage';
 import { AdminReviewTemplatesPage } from '@/pages/admin/AdminReviewTemplatesPage';
 import { AdminTemplatesPage } from '@/pages/admin/AdminTemplatesPage';
+import { AdminRolesPage } from '@/pages/admin/AdminRolesPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
 
 /**
@@ -114,6 +115,7 @@ export function AppRouter(): JSX.Element {
         <Route path="admin/permissions" element={<AdminPermissionsPage />} />
         <Route path="admin/review-templates" element={<AdminReviewTemplatesPage />} />
         <Route path="admin/templates" element={<AdminTemplatesPage />} />
+        <Route path="admin/roles" element={<AdminRolesPage />} />
         <Route path="admin/audit-logs" element={<AdminAuditPage />} />
 
         <Route path="*" element={<NotFoundPage />} />

@@ -13,6 +13,35 @@ const { verifyToken, bearerOf } = require('../lib/token');
 const { AppError, ErrorCode } = require('../lib/errors');
 
 const selectByOpenId = db.prepare('SELECT * FROM users WHERE open_id = ?');
+const selectExtraRoles = db.prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?');
+
+/**
+ * 取用户全部全局职位（主职位 `users.global_role` + 额外职位 `user_roles` 合并去重）。
+ * E1.5：权限判定按职位并集，任一命中即通过。
+ * @param {Object} userRow users 表行
+ * @returns {string[]}
+ */
+function resolveGlobalRoles(userRow) {
+  if (!userRow) return [];
+  const set = {};
+  if (userRow.global_role) set[String(userRow.global_role)] = true;
+  try {
+    const extra = selectExtraRoles.all(userRow.open_id || '');
+    extra.forEach(function (r) { if (r.role_key) set[String(r.role_key)] = true; });
+  } catch (e) {
+    // user_roles 表尚未创建（迁移前）时安全降级为仅主职位
+  }
+  return Object.keys(set);
+}
+
+/**
+ * 是否管理员（任一全局职位为 admin 即视为管理员，E1.5 并集语义）。
+ * @param {Object} userRow users 表行
+ * @returns {boolean}
+ */
+function isAdmin(userRow) {
+  return resolveGlobalRoles(userRow).indexOf('admin') >= 0;
+}
 
 /**
  * 解析当前请求的用户；解析不出来返回 null（不抛错）。
@@ -65,7 +94,9 @@ function requireGlobalRole() {
   const roles = Array.prototype.slice.call(arguments);
   return function guard(req, res, next) {
     if (!req.user) return next(new AppError(ErrorCode.E_UNAUTHORIZED));
-    if (roles.indexOf(req.user.global_role) < 0) {
+    // E1.5：用户的全部全局职位取并集，命中任一允许职位即通过
+    const myRoles = resolveGlobalRoles(req.user);
+    if (!myRoles.some(function (r) { return roles.indexOf(r) >= 0; })) {
       return next(new AppError(ErrorCode.E_FORBIDDEN, '需要以下角色之一：' + roles.join(' / ')));
     }
     next();
@@ -81,4 +112,4 @@ function isAdmin(userRow) {
   return !!userRow && userRow.global_role === 'admin';
 }
 
-module.exports = { requireAuth, optionalAuth, requireGlobalRole, resolveUser, isAdmin };
+module.exports = { requireAuth, optionalAuth, requireGlobalRole, resolveUser, isAdmin, resolveGlobalRoles };

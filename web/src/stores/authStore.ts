@@ -12,15 +12,15 @@ interface AuthState {
   user: User | null;
   loading: boolean;
   ready: boolean;
-  /** 当前项目内我的角色（进入项目详情时写入） */
-  projectRoles: ProjectRole[];
+  /** 当前项目内我的角色（进入项目详情时写入；值为职位 role_key，不再限定固定联合类型） */
+  projectRoles: string[];
   login: (openId: string) => Promise<User>;
   loginByCode: (code: string) => Promise<User>;
   /** 浏览器飞书 Web OAuth 回调登录（普通浏览器，不经过 JSSDK） */
   loginByFeishuWeb: (code: string) => Promise<User>;
   bootstrap: () => Promise<void>;
   logout: () => Promise<void>;
-  setProjectRoles: (roles: ProjectRole[]) => void;
+  setProjectRoles: (roles: string[]) => void;
   can: (action: string) => boolean;
 }
 
@@ -98,6 +98,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   can(action) {
     const { user, projectRoles } = get();
     if (!user) return false;
-    return canDo(user.globalRole, action, projectRoles);
+    // E1.5：取全部全局职位（并集）；后端未返回 globalRoles 时回落单值 globalRole
+    const globalRoles = Array.isArray(user.globalRoles) && user.globalRoles.length
+      ? user.globalRoles
+      : [user.globalRole];
+    return canDo(globalRoles, action, projectRoles);
   },
 }));

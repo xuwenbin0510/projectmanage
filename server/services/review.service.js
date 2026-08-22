@@ -33,6 +33,7 @@ const { AppError, ErrorCode } = require('../lib/errors');
 const { writeAudit, diffEntry } = require('../lib/audit');
 const enums = require('../config/enums');
 const milestoneService = require('./milestone.service');
+const { resolveGlobalRoles } = require('../middleware/auth');
 
 /* ── 行 → API 对象 ──────────────────────────────────── */
 
@@ -157,13 +158,14 @@ function listReviews(db, projectId) {
 function listMyApprovals(db, me) {
   const openId = mappers.toStr(me && (me.open_id !== undefined ? me.open_id : me.openId));
   if (!openId) return [];
-  const globalRole = mappers.toStr(me && (me.global_role !== undefined ? me.global_role : me.globalRole));
+  // E1.5：全局职位取并集传入
+  const globalRoles = resolveGlobalRoles(me);
   const rows = db
     .prepare("SELECT * FROM reviews WHERE status = '审批中' ORDER BY created_at DESC, id DESC")
     .all();
   return rows
     .map(function (r) { return toApiReview(db, r); })
-    .filter(function (r) { return canDecide(r, openId, globalRole) !== null; });
+    .filter(function (r) { return canDecide(r, openId, globalRoles) !== null; });
 }
 
 /**
@@ -231,13 +233,21 @@ function buildSteps(db, reviewId, projectId, chain, assignees) {
       if (role && membersByRole[role] === undefined) membersByRole[role] = mappers.toStr(m.user_open_id);
     });
 
-  /* 全局角色：每个 global_role 取第一个用户（与 Mock find 语义一致） */
+  /* 全局角色：每个 global_role 取第一个用户（与 Mock find 语义一致）。
+   * E1.5：除主职位 `users.global_role` 外，额外职位 `user_roles.role_key` 也参与绑定，
+   * 保证「身兼多职」的用户能被审批链正确选到。 */
   const globalByRole = {};
   db.prepare('SELECT open_id, global_role FROM users ORDER BY id ASC')
     .all()
     .forEach(function (u) {
       const role = mappers.toStr(u.global_role);
       if (role && globalByRole[role] === undefined) globalByRole[role] = mappers.toStr(u.open_id);
+    });
+  db.prepare('SELECT user_open_id, role_key FROM user_roles ORDER BY user_open_id ASC')
+    .all()
+    .forEach(function (r) {
+      const role = mappers.toStr(r.role_key);
+      if (role && globalByRole[role] === undefined) globalByRole[role] = mappers.toStr(r.user_open_id);
     });
 
   const nameStmt = db.prepare('SELECT name FROM users WHERE open_id = ?');
@@ -458,10 +468,12 @@ function createReview(db, payload, me) {
  * @param {string} [globalRole] 当前用户全局角色（传 'admin' 触发兜底）
  * @returns {object|null} ReviewStep 或 null
  */
-function canDecide(review, openId, globalRole) {
+function canDecide(review, openId, globalRoles) {
   if (!review || review.status !== '审批中') return null;
   const me = String(openId || '');
-  const isAdmin = globalRole === 'admin';
+  // E1.5：全局职位取并集，任一为 admin 即享 admin 兜底决议权
+  const roles = Array.isArray(globalRoles) ? globalRoles : [globalRoles];
+  const isAdmin = roles.indexOf('admin') >= 0;
   const steps = Array.isArray(review.steps) ? review.steps : [];
   const isCurrent = function (s) { return !!s && s.status === 'current'; };
 
@@ -502,11 +514,12 @@ function decide(db, id, action, payload, me) {
   if (row.status !== '审批中') throw new AppError(ErrorCode.E_REVIEW_CLOSED);
 
   const openId = mappers.toStr(me && (me.open_id !== undefined ? me.open_id : me.openId));
-  const globalRole = mappers.toStr(me && (me.global_role !== undefined ? me.global_role : me.globalRole));
+  // E1.5：全局职位取并集传入
+  const globalRoles = resolveGlobalRoles(me);
   const actorName = mappers.toStr(me && (me.name !== undefined ? me.name : ''));
 
   const review = toApiReview(db, row);
-  const step = canDecide(review, openId, globalRole);
+  const step = canDecide(review, openId, globalRoles);
   if (!step) throw new AppError(ErrorCode.E_NOT_APPROVER);
 
   const body = payload && typeof payload === 'object' ? payload : {};
@@ -655,8 +668,9 @@ function withdrawReview(db, id, payload, me) {
   if (row.status !== '审批中') throw new AppError(ErrorCode.E_REVIEW_CLOSED);
 
   const openId = mappers.toStr(me && (me.open_id !== undefined ? me.open_id : me.openId));
-  const globalRole = mappers.toStr(me && (me.global_role !== undefined ? me.global_role : me.globalRole));
-  if (row.initiator_open_id !== openId && globalRole !== 'admin') {
+  // E1.5：任一全局职位为 admin 即可强制撤回
+  const isAdmin = resolveGlobalRoles(me).indexOf('admin') >= 0;
+  if (row.initiator_open_id !== openId && !isAdmin) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '仅发起人可撤回');
   }
 

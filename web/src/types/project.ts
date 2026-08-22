@@ -54,10 +54,44 @@ export interface User {
   email: string;
   dept: string;
   avatarUrl: string;
-  globalRole: GlobalRole;
+  /** 主职位（兜底单值，与后端 users.global_role 一致）；值为 role_key（含动态职位） */
+  globalRole: string;
+  /** E1.5：用户全部全局职位（主职位 + 额外职位合并去重），权限判定取并集；值为 role_key（含动态职位） */
+  globalRoles: string[];
   status: 'active' | 'disabled';
   createdAt: string;
   updatedAt: string;
+}
+
+/** 职位目录（E1.5：职位可增删改 + 标注视野维度） */
+export type RoleScope = 'global' | 'project';
+
+export interface Role {
+  roleKey: string;
+  name: string;
+  /** global=可指派为全局职位（看全公司视野）；project=仅项目内角色 */
+  scope: RoleScope;
+  enabled: boolean;
+  description: string;
+  orderNo: number;
+}
+
+/** 新增职位入参 */
+export interface CreateRolePayload {
+  roleKey: string;
+  name: string;
+  scope: RoleScope;
+  description?: string;
+  orderNo?: number;
+}
+
+/** 更新职位入参（只传需要更新的字段） */
+export interface UpdateRolePayload {
+  name?: string;
+  scope?: RoleScope;
+  enabled?: boolean;
+  description?: string;
+  orderNo?: number;
 }
 
 /** 阶段一 · 新增用户入参（openId/name 必填，其余可选） */
@@ -67,12 +101,18 @@ export interface CreateUserPayload {
   employeeId?: string;
   email?: string;
   dept?: string;
+  /** 主职位（单值兜底，与后端 users.global_role 一致） */
   globalRole?: GlobalRole;
+  /** E1.5：用户全部全局职位（首项为主职位，其余额外职位）；不传时回落单值 globalRole；值为 role_key（含动态职位） */
+  globalRoles?: string[];
 }
 
 /** 阶段一 · 用户通用更新入参（只传需要更新的字段） */
 export interface UpdateUserPayload {
+  /** 主职位（单值兜底，与后端 users.global_role 一致） */
   globalRole?: GlobalRole;
+  /** E1.5：用户全部全局职位（首项为主职位，其余额外职位）；传此字段时服务端整体重写；值为 role_key（含动态职位） */
+  globalRoles?: string[];
   status?: 'active' | 'disabled';
   dept?: string;
   name?: string;
@@ -185,7 +225,8 @@ export interface ProjectMember {
   projectId: string;
   userOpenId: string;
   userName: string;
-  projectRole: ProjectRole;
+  /** 项目内角色 = 职位管理里的职位 role_key（视野维度由职位自身设定决定），不再限定为固定 ProjectRole 联合类型 */
+  projectRole: string;
   assignedBy: string;
   assignedAt: string;
 }

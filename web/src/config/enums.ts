@@ -20,7 +20,7 @@ import type { TodoType } from '@/types/todo';
 
 /* ── 角色 ─────────────────────────────────────────── */
 
-export const GLOBAL_ROLE_LABEL: Record<GlobalRole, string> = {
+export const GLOBAL_ROLE_LABEL: Record<GlobalRole, string> & Record<string, string> = {
   admin: '管理员',
   management: '管理层',
   pmo: 'PMO',
@@ -44,7 +44,7 @@ export const GLOBAL_ROLES: GlobalRole[] = [
   'member',
 ];
 
-export const PROJECT_ROLE_LABEL: Record<ProjectRole, string> = {
+export const PROJECT_ROLE_LABEL: Record<ProjectRole, string> & Record<string, string> = {
   pm: '项目经理 PM',
   tl: '技术负责人 TL',
   po: '产品负责人 PO',

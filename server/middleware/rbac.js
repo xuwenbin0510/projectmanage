@@ -36,6 +36,27 @@ function projectRolesOf(db, projectId, openId) {
 }
 
 /**
+ * 取用户的**全部全局职位**（主职位 `users.global_role` + 额外职位 `user_roles` 合并去重）。
+ * E1.5：权限判定按职位并集，任一命中即通过。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} openId
+ * @param {string} [primaryRole] 可选，直接传入以避免二次查 users（auth 阶段已加载 req.user 时）
+ * @returns {string[]}
+ */
+function globalRolesOf(db, openId, primaryRole) {
+  const primary = primaryRole || '';
+  const extra = db
+    .prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?')
+    .all(String(openId))
+    .map(function (r) { return String(r.role_key || ''); })
+    .filter(Boolean);
+  const set = {};
+  if (primary) set[primary] = true;
+  extra.forEach(function (r) { set[r] = true; });
+  return Object.keys(set);
+}
+
+/**
  * 取项目行；不存在抛 `E_NOT_FOUND`。
  * @param {import('better-sqlite3').Database} db
  * @param {string} projectId
@@ -74,8 +95,9 @@ function assertWritable(db, projectId) {
 function assertCan(db, req, action, projectId) {
   const me = req && req.user;
   if (!me) throw new AppError(ErrorCode.E_UNAUTHORIZED);
+  const globalRoles = globalRolesOf(db, me.open_id, me.global_role);
   const roles = projectId ? projectRolesOf(db, projectId, me.open_id) : [];
-  if (!canDo(me.global_role, action, roles)) {
+  if (!canDo(globalRoles, action, roles)) {
     throw new AppError(ErrorCode.E_FORBIDDEN);
   }
   return me;
@@ -98,6 +120,7 @@ function assertSameProjectMilestone(db, projectId, refId) {
 
 module.exports = {
   projectRolesOf,
+  globalRolesOf,
   loadProject,
   assertWritable,
   assertCan,

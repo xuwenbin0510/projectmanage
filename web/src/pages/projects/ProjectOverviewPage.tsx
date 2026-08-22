@@ -47,7 +47,7 @@ import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useAsync, usePermission, useToast } from '@/hooks';
-import type { CloseBlocker, GateChecklistItem, LifecycleTemplate, MilestoneWithGate, ProjectRole, ProjectStatus, ProjectType, QualityGate, User } from '@/types/project';
+import type { CloseBlocker, GateChecklistItem, LifecycleTemplate, MilestoneWithGate, ProjectMember, ProjectRole, ProjectStatus, ProjectType, QualityGate, Role, User } from '@/types/project';
 import {
   GATE_CONCLUSIONS,
   GATE_ICON,
@@ -174,8 +174,27 @@ export function ProjectOverviewPage(): JSX.Element {
   const [memberOpen, setMemberOpen] = useState<boolean>(false);
   const [memberSaving, setMemberSaving] = useState<boolean>(false);
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [roleOptions, setRoleOptions] = useState<Role[]>([]);
   const [addUserOpenId, setAddUserOpenId] = useState<string>('');
-  const [addRole, setAddRole] = useState<ProjectRole>('member');
+  const [addRole, setAddRole] = useState<string>('member');
+
+  /** 加载职位目录（项目内视野 + 启用）到 roleOptions，供卡片与弹窗统一映射角色中文名。
+   *  组件挂载即加载，避免「重新进概览时 roleOptions 为空 → 卡片走硬编码兜底显示错误角色」。 */
+  const loadRoleOptions = useCallback(async (): Promise<void> => {
+    try {
+      const rs = await api.listRoles();
+      setRoleOptions(
+        rs.filter((r) => r.enabled && r.scope === 'project').sort((a, b) => a.orderNo - b.orderNo),
+      );
+    } catch {
+      setRoleOptions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRoleOptions();
+  }, [loadRoleOptions]);
+
   const openManageMembers = async (): Promise<void> => {
     try {
       const list = await api.listUsers();
@@ -183,10 +202,21 @@ export function ProjectOverviewPage(): JSX.Element {
     } catch {
       setAllUsers([]);
     }
+    await loadRoleOptions();
     setAddUserOpenId('');
     setAddRole('member');
     setMemberOpen(true);
   };
+
+  /** 角色中文名：优先职位管理里的动态职位名，兜底预置标签（兼容旧数据 / 未启用职位） */
+  const roleName = useCallback(
+    (key: string): string => {
+      const fromOpt = roleOptions.find((r) => r.roleKey === key);
+      if (fromOpt) return fromOpt.name;
+      return PROJECT_ROLE_LABEL[key as ProjectRole] ?? key;
+    },
+    [roleOptions],
+  );
   const handleAddMember = async (): Promise<void> => {
     if (!project || !addUserOpenId) return;
     setMemberSaving(true);
@@ -209,8 +239,13 @@ export function ProjectOverviewPage(): JSX.Element {
       await api.removeMember(project.id, memberId);
       await fetchDetail(project.id);
       toast.success('成员已移除');
-    } catch (e) {
-      toast.error(e);
+    } catch (e: any) {
+      const msg = e && e.message ? e.message : '';
+      if (msg.indexOf('尚无接任者') >= 0 || msg.indexOf('悬空') >= 0) {
+        toast.error('该项目仅有这一名项目经理/技术负责人，不能直接删除。如需换人，请在上方直接给新成员添加该角色，系统会自动接任。');
+      } else {
+        toast.error(e);
+      }
     } finally {
       setMemberSaving(false);
     }
@@ -870,7 +905,7 @@ export function ProjectOverviewPage(): JSX.Element {
 
           <SectionCard
             title="项目团队"
-            subtitle={`${new Set(members.map((m) => m.userOpenId)).size} 人 · PM / TL 各 1 人`}
+            subtitle={`${new Set(members.map((m) => m.userOpenId)).size} 人`}
             actions={
               canManageMembers ? (
                 <Button size="small" startIcon={<EditOutlinedIcon />} onClick={() => void openManageMembers()}>
@@ -880,17 +915,48 @@ export function ProjectOverviewPage(): JSX.Element {
             }
           >
             <Stack spacing={1.25}>
-              {members.map((m) => (
-                <Stack key={m.id} direction="row" spacing={1.25} alignItems="center">
-                  <UserAvatar name={m.userName} />
-                  <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography sx={{ fontSize: 14 }}>{m.userName}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {PROJECT_ROLE_LABEL[m.projectRole]}
-                    </Typography>
-                  </Box>
-                </Stack>
-              ))}
+              {(() => {
+                /* 按用户归组：同一人可承担多个项目角色，合并为一行、角色用多个 chip 展示 */
+                const byUser = new Map<string, { userOpenId: string; userName: string; roles: string[] }>();
+                for (const m of members) {
+                  const cur = byUser.get(m.userOpenId) || {
+                    userOpenId: m.userOpenId,
+                    userName: m.userName,
+                    roles: [] as string[],
+                  };
+                  if (cur.roles.indexOf(m.projectRole) < 0) cur.roles.push(m.projectRole);
+                  byUser.set(m.userOpenId, cur);
+                }
+                const LEAD = ['pm', 'tl'];
+                const ordered = Array.from(byUser.values()).sort((a, b) => {
+                  const ra = a.roles.some((r) => LEAD.indexOf(r) >= 0) ? 0 : 1;
+                  const rb = b.roles.some((r) => LEAD.indexOf(r) >= 0) ? 0 : 1;
+                  return ra - rb;
+                });
+                return ordered.map((p) => (
+                  <Stack key={p.userOpenId} direction="row" spacing={1.25} alignItems="center">
+                    <UserAvatar name={p.userName} />
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{p.userName}</Typography>
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.25 }}>
+                        {p.roles.map((r) => {
+                          const isLead = LEAD.indexOf(r) >= 0;
+                          return (
+                            <Chip
+                              key={r}
+                              label={roleName(r)}
+                              size="small"
+                              variant={isLead ? 'filled' : 'outlined'}
+                              color={isLead ? 'primary' : 'default'}
+                              sx={{ height: 20, fontSize: 11 }}
+                            />
+                          );
+                        })}
+                      </Stack>
+                    </Box>
+                  </Stack>
+                ));
+              })()}
               {!members.length && <EmptyState title="暂无成员" dense />}
             </Stack>
           </SectionCard>
@@ -1354,29 +1420,41 @@ export function ProjectOverviewPage(): JSX.Element {
         <DialogContent dividers>
           <Stack spacing={1.5}>
             <Stack spacing={1} divider={<Divider flexItem />}>
-              {members.map((m) => (
-                <Stack key={m.id} direction="row" spacing={1.25} alignItems="center">
-                  <UserAvatar name={m.userName} />
-                  <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography sx={{ fontSize: 14 }}>{m.userName}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {PROJECT_ROLE_LABEL[m.projectRole]}
-                    </Typography>
-                  </Box>
-                  <PermissionButton action="project:member:assign" fallback="disable">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      disabled={memberSaving}
-                      onClick={() => void handleRemoveMember(m.id)}
-                      title="移除成员"
-                    >
-                      <DeleteOutlineIcon fontSize="small" />
-                    </IconButton>
-                  </PermissionButton>
-                </Stack>
-              ))}
-              {!members.length && <EmptyState title="暂无成员" dense />}
+              {(() => {
+                /* 按 userOpenId 归组：同一人可拥有多个项目角色，分组展示 */
+                const groups = new Map<string, ProjectMember[]>();
+                members.forEach((m) => {
+                  const arr = groups.get(m.userOpenId) ?? [];
+                  arr.push(m);
+                  groups.set(m.userOpenId, arr);
+                });
+                const list = Array.from(groups.values());
+                if (!list.length) return <EmptyState title="暂无成员" dense />;
+                return list.map((group) => (
+                  <Stack key={group[0].userOpenId} direction="row" spacing={1.25} alignItems="center">
+                    <UserAvatar name={group[0].userName} />
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography sx={{ fontSize: 14 }}>{group[0].userName}</Typography>
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.25 }}>
+                        {group.map((m) => (
+                          <Chip
+                            key={m.id}
+                            size="small"
+                            label={roleName(m.projectRole)}
+                            onDelete={
+                              canManageMembers
+                                ? () => void handleRemoveMember(m.id)
+                                : undefined
+                            }
+                            deleteIcon={<DeleteOutlineIcon fontSize="small" />}
+                            title="移除该角色"
+                          />
+                        ))}
+                      </Stack>
+                    </Box>
+                  </Stack>
+                ));
+              })()}
             </Stack>
             <Divider />
             <Stack direction="row" spacing={1} alignItems="center">
@@ -1389,13 +1467,11 @@ export function ProjectOverviewPage(): JSX.Element {
                 onChange={(e) => setAddUserOpenId(e.target.value)}
               >
                 <MenuItem value="">请选择用户</MenuItem>
-                {allUsers
-                  .filter((u) => !members.some((m) => m.userOpenId === u.openId))
-                  .map((u) => (
-                    <MenuItem key={u.openId} value={u.openId}>
-                      {u.name}（{u.dept || '—'}）
-                    </MenuItem>
-                  ))}
+                {allUsers.map((u) => (
+                  <MenuItem key={u.openId} value={u.openId}>
+                    {u.name}（{u.dept || '—'}）
+                  </MenuItem>
+                ))}
               </TextField>
               <TextField
                 select
@@ -1403,11 +1479,14 @@ export function ProjectOverviewPage(): JSX.Element {
                 size="small"
                 sx={{ width: 130 }}
                 value={addRole}
-                onChange={(e) => setAddRole(e.target.value as ProjectRole)}
+                onChange={(e) => setAddRole(e.target.value)}
               >
-                {PROJECT_ROLES.map((r) => (
-                  <MenuItem key={r} value={r}>
-                    {PROJECT_ROLE_LABEL[r]}
+                {roleOptions.length === 0 && (
+                  <MenuItem value="member">成员</MenuItem>
+                )}
+                {roleOptions.map((r) => (
+                  <MenuItem key={r.roleKey} value={r.roleKey}>
+                    {r.name}
                   </MenuItem>
                 ))}
               </TextField>

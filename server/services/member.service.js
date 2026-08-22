@@ -111,13 +111,26 @@ function addMember(db, req, projectId, payload) {
 
     const fields = [];
     if (!userOpenId) fields.push({ field: 'userOpenId', message: '请选择成员' });
-    if (enums.PROJECT_ROLES.indexOf(role) < 0) fields.push({ field: 'role', message: '项目角色不合法' });
+    /* 项目内角色合法集 = 职位管理里「项目视野（scope=project）」且启用的职位；
+       公司级职位在用户层分配，不在此处选 */
+    const roleRow = db
+      .prepare("SELECT role_key FROM roles WHERE role_key = ? AND scope = 'project' AND enabled = 1")
+      .get(role);
+    if (!roleRow) fields.push({ field: 'role', message: '该角色不是有效的项目内职位' });
     if (fields.length) throw new AppError(ErrorCode.E_VALIDATION, '成员参数不合法', { fields: fields });
 
     const user = findUserRow(db, userOpenId);
     if (!user) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { userOpenId: userOpenId });
 
-    assertRoleUnique(db, pid, role);
+    /* pm / tl 为单例角色：一个项目内只能有一名。
+       改派语义 —— 若该项目已有同角色成员，先让位（删旧）再插入新成员，
+       使「换项目经理」一步完成：直接给新人加 PM 即可，无需先删后加或先加后删。 */
+    if (SINGLETON_ROLES.indexOf(role) >= 0) {
+      db.prepare(
+        `DELETE FROM project_members
+          WHERE project_id = ? AND project_role = ? AND user_open_id <> ?`,
+      ).run(pid, role, userOpenId);
+    }
 
     /* 先查后插：UNIQUE(project_id,user_open_id,project_role) 冲突不能冒成 500 */
     const dup = db
@@ -178,11 +191,26 @@ function removeMember(db, req, projectId, memberId) {
     }
 
     const role = mappers.toStr(row.project_role);
+
+    /* PM / TL 是流程审批与质量门的核心责任人，删后若该项目该角色无人，
+       审批链解析与质量门决议会悬空 → 禁止「无替代删除」。
+       换人必须先添加接任者再移除现任（前端「管理成员」应提供此顺序引导）。 */
     if (SINGLETON_ROLES.indexOf(role) >= 0) {
-      throw new AppError(ErrorCode.E_ROLE_CARDINALITY, 'PM / TL 是必备角色，不能移除，请先指派新的负责人', {
-        role: role,
-        memberId: mid,
-      });
+      const remain = db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM project_members
+            WHERE project_id = ? AND project_role = ? AND id <> ?`,
+        )
+        .get(pid, role, mid);
+      if (!remain || remain.c <= 0) {
+        throw new AppError(
+          ErrorCode.E_ROLE_CARDINALITY,
+          (role === 'pm' ? '项目经理' : '技术负责人') + ' 不能移除：该项目尚无接任者，移除后将导致审批流与质量门悬空。请先添加接任的' +
+            (role === 'pm' ? '项目经理' : '技术负责人') +
+            '，再移除现任。',
+          { role: role },
+        );
+      }
     }
 
     db.prepare('DELETE FROM project_members WHERE id = ?').run(mid);

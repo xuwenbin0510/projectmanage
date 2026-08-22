@@ -4,6 +4,10 @@ import type {
   User,
   CreateUserPayload,
   UpdateUserPayload,
+  CreateRolePayload,
+  UpdateRolePayload,
+  Role,
+  RoleScope,
   GlobalRole,
   Project,
   ProjectListItem,
@@ -110,7 +114,7 @@ import {
   aggregateOverdueDuration,
   overdueBucketOf,
 } from '@/utils/dashboardAgg';
-import { canDo } from '@/config/permissions';
+import { canDo, PERMISSIONS } from '@/config/permissions';
 import { addDays, today, nowIso, diffDays, weekCode, weekRange, fitMilestoneDates } from '@/utils/date';
 import { genId, deepClone } from '@/utils/format';
 import {
@@ -234,7 +238,7 @@ function currentUser(db: MockDb): User {
 }
 
 /** 当前用户在指定项目的角色集合 */
-function projectRolesOf(db: MockDb, projectId: string, openId: string): ProjectRole[] {
+function projectRolesOf(db: MockDb, projectId: string, openId: string): string[] {
   return db.members.filter((m) => m.projectId === projectId && m.userOpenId === openId).map((m) => m.projectRole);
 }
 
@@ -262,10 +266,28 @@ function assertCan(db: MockDb, alias: string, projectId?: string): User {
   const action = ACTION_KEY[alias] ?? alias;
   const me = currentUser(db);
   const roles = projectId ? projectRolesOf(db, projectId, me.openId) : [];
-  if (!canDo(me.globalRole, action, roles)) {
+  // E1.5：全局职位取并集
+  const globalRoles = globalRoleSet(me);
+  if (!canDo(globalRoles, action, roles)) {
     throw new ApiError(ErrorCode.E_FORBIDDEN, undefined, undefined, 403);
   }
   return me;
+}
+
+/** E1.5：取用户全局职位数组（兜底单值）；值为 role_key（含动态职位） */
+function globalRoleSet(u: User): string[] {
+  if (Array.isArray(u.globalRoles) && u.globalRoles.length) return u.globalRoles;
+  return [u.globalRole];
+}
+
+/** E1.5：是否管理员（任一全局职位为 admin） */
+function isAdminUser(u: User): boolean {
+  return globalRoleSet(u).includes('admin');
+}
+
+/** E1.5：统计所有含 admin 职位的用户数（含主职位与额外职位） */
+function countAdmins(db: MockDb): number {
+  return db.users.filter((u) => isAdminUser(u)).length;
 }
 
 /** 已结项项目只读 */
@@ -496,12 +518,12 @@ function buildSteps(db: MockDb, reviewId: string, projectId: string, chain: stri
       openId = member?.userOpenId ?? '';
     }
     if (!openId) {
-      const byGlobal = db.users.find((u) => u.globalRole === (role as GlobalRole));
+      const byGlobal = db.users.find((u) => globalRoleSet(u).includes(role as GlobalRole));
       openId = byGlobal?.openId ?? '';
     }
     if (!openId) {
       for (const r of ROLE_FALLBACK_ORDER) {
-        const u = db.users.find((x) => x.globalRole === r);
+        const u = db.users.find((x) => globalRoleSet(x).includes(r));
         if (u) {
           openId = u.openId;
           break;
@@ -1059,7 +1081,7 @@ export class MockApiClient implements ApiClient {
     return deepClone(db.members.filter((m) => m.projectId === projectId));
   }
 
-  async addMember(projectId: string, userOpenId: string, role: ProjectRole): Promise<ProjectMember> {
+  async addMember(projectId: string, userOpenId: string, role: string): Promise<ProjectMember> {
     await delay();
     const db = getDb();
     assertWritable(db, projectId);
@@ -1091,7 +1113,20 @@ export class MockApiClient implements ApiClient {
     const idx = db.members.findIndex((m) => m.id === memberId);
     if (idx === -1) nf();
     const m = db.members[idx];
-    if (m.projectRole === 'pm' || m.projectRole === 'tl') throw new ApiError(ErrorCode.E_ROLE_CARDINALITY);
+    if (m.projectRole === 'pm' || m.projectRole === 'tl') {
+      const remain = db.members.filter(
+        (x) => x.projectId === projectId && x.projectRole === m.projectRole && x.id !== m.id,
+      ).length;
+      if (remain === 0) {
+        throw new ApiError(
+          ErrorCode.E_ROLE_CARDINALITY,
+          (m.projectRole === 'pm' ? '项目经理' : '技术负责人') +
+            ' 不能移除：该项目尚无接任者，移除后将导致审批流与质量门悬空。请先添加接任的' +
+            (m.projectRole === 'pm' ? '项目经理' : '技术负责人') +
+            '，再移除现任。',
+        );
+      }
+    }
     db.members.splice(idx, 1);
     audit(db, me, 'project', projectId, 'update', projectId, `移除项目成员「${m.userName}」`);
     saveDb();
@@ -2089,7 +2124,7 @@ export class MockApiClient implements ApiClient {
       const tl = db.members
         .filter((m) => m.projectId === projectId && m.projectRole === 'tl')
         .map((m) => m.userOpenId);
-      const admins = db.users.filter((u) => u.globalRole === 'admin').map((u) => u.openId);
+      const admins = db.users.filter((u) => isAdminUser(u)).map((u) => u.openId);
       result = [...tl, ...admins];
     } else {
       result = pm;
@@ -2388,7 +2423,7 @@ export class MockApiClient implements ApiClient {
     const review = db.reviews.find((r) => r.id === id) ?? nf();
     const me = currentUser(db);
     if (review.status !== '审批中') throw new ApiError(ErrorCode.E_REVIEW_CLOSED);
-    if (review.initiator !== me.openId && me.globalRole !== 'admin') {
+    if (review.initiator !== me.openId && !isAdminUser(me)) {
       throw new ApiError(ErrorCode.E_FORBIDDEN, '仅发起人可撤回');
     }
     review.status = '已撤回';
@@ -2719,12 +2754,14 @@ export class MockApiClient implements ApiClient {
 
     const overdueTasks = myTasks.filter((t) => diffDays(today(), t.dueDate) < 0).length;
 
-    /* D10：门控待办 = 我有决议权限（global admin/pmo/qa/tl 或项目成员 qa/tl/pmo）的未决议门 */
-    const gateRoles = ['admin', 'pmo', 'qa', 'tl'];
+    /* D10：门控待办 = 我有决议权限（global admin/pmo/qa/tl 或项目成员 qa/tl/pmo）的未决议门
+       门控特权角色从权限矩阵动态取（单一权威源，避免硬编码漏判管理员调整的职位体系） */
+    const gateRoles: GlobalRole[] = PERMISSIONS['gate:decide'].global as GlobalRole[];
+    const gateProjectRoles = PERMISSIONS['gate:decide'].project as ProjectRole[];
     const projectRoleOk = new Set(
-      db.members.filter((m) => m.userOpenId === me.openId && ['qa', 'tl', 'pmo'].includes(m.projectRole)).map((m) => m.projectId),
+      db.members.filter((m) => m.userOpenId === me.openId && gateProjectRoles.includes(m.projectRole as ProjectRole)).map((m) => m.projectId),
     );
-    const gateScopeProjects = gateRoles.includes(me.globalRole)
+    const gateScopeProjects = gateRoles.some((r) => globalRoleSet(me).includes(r))
       ? new Set(db.projects.filter((p) => p.status !== '已结项' && p.status !== '已终止').map((p) => p.id))
       : projectRoleOk;
     const gateTodos: GateTodo[] = db.gates
@@ -2824,7 +2861,7 @@ export class MockApiClient implements ApiClient {
     const me = currentUser(db);
 
     /* 1. 范围解析（决策 ① / ⑤） */
-    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const canSeeAll = canDo(globalRoleSet(me), 'dashboard:global');
     const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
 
     const page = Math.max(1, Number(query.page) || 1);
@@ -2841,9 +2878,10 @@ export class MockApiClient implements ApiClient {
     const myProjectIds = new Set(
       db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
     );
+    const ownerRoles = PERMISSIONS['project:edit'].project as ProjectRole[]; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
       db.members
-        .filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm')
+        .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
         .map((m) => m.projectId),
     );
 
@@ -3286,7 +3324,7 @@ export class MockApiClient implements ApiClient {
     const me = currentUser(db);
 
     /* 1. 范围解析（与服务端 resolveScope 同口径） */
-    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const canSeeAll = canDo(globalRoleSet(me), 'dashboard:global');
     const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
 
     const page = Math.max(1, Number(query.page) || 1);
@@ -3298,9 +3336,10 @@ export class MockApiClient implements ApiClient {
     const myProjectIds = new Set(
       db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
     );
+    const ownerRoles = PERMISSIONS['project:edit'].project as ProjectRole[]; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
       db.members
-        .filter((m) => m.userOpenId === me.openId && m.projectRole === 'pm')
+        .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
         .map((m) => m.projectId),
     );
     let items = db.projects
@@ -3400,7 +3439,7 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     const me = currentUser(db);
 
-    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const canSeeAll = canDo(globalRoleSet(me), 'dashboard:global');
     const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE));
@@ -3465,7 +3504,7 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     const me = currentUser(db);
 
-    const canSeeAll = canDo(me.globalRole, 'dashboard:global');
+    const canSeeAll = canDo(globalRoleSet(me), 'dashboard:global');
     const scope: DashboardScope = canSeeAll ? (query.scope === 'mine' ? 'mine' : 'all') : 'mine';
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(DASHBOARD_MAX_PAGE_SIZE, Math.max(1, Number(query.pageSize) || DASHBOARD_PAGE_SIZE));
@@ -3640,11 +3679,12 @@ export class MockApiClient implements ApiClient {
     if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
     const u = db.users.find((x) => x.openId === openId) ?? nf();
     if (u.globalRole === 'admin' && role !== 'admin') {
-      const admins = db.users.filter((x) => x.globalRole === 'admin').length;
-      if (admins <= 1) throw new ApiError(ErrorCode.E_LAST_ADMIN);
+      if (countAdmins(db) <= 1) throw new ApiError(ErrorCode.E_LAST_ADMIN);
     }
     const before = u.globalRole;
     u.globalRole = role;
+    // E1.5：单值角色变更同步主职位；额外职位保留
+    u.globalRoles = [role, ...(u.globalRoles || []).filter((r) => r !== role)];
     u.updatedAt = nowIso();
     audit(db, me, 'user', openId, 'update', '', `修改用户「${u.name}」全局角色`, [
       { field: 'globalRole', label: '全局角色', before, after: role },
@@ -3662,8 +3702,18 @@ export class MockApiClient implements ApiClient {
     const name = String(payload.name || '').trim();
     if (!openId) throw new ApiError(ErrorCode.E_VALIDATION, 'openId 必填');
     if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '姓名必填');
-    const role = payload.globalRole ?? 'member';
-    if (!GLOBAL_ROLES.includes(role)) throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
+    // E1.5：优先用 globalRoles 数组（首项主职位），否则回落单值 globalRole
+    // 动态职位（roles 表新增）不再强制在 GLOBAL_ROLES 内，仅校验非空，与真实后端同构
+    let primary: string = payload.globalRole ?? 'member';
+    let extra: string[] = [];
+    if (Array.isArray(payload.globalRoles) && payload.globalRoles.length) {
+      const valid = payload.globalRoles.map((r) => String(r).trim()).filter((r) => r.length > 0);
+      if (!valid.length) throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
+      primary = valid[0];
+      extra = valid.slice(1);
+    } else if (!primary) {
+      throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
+    }
     if (db.users.some((x) => x.openId === openId)) throw new ApiError(ErrorCode.E_VALIDATION, '该 openId 已存在');
     const now = nowIso();
     const u: User = {
@@ -3674,14 +3724,15 @@ export class MockApiClient implements ApiClient {
       email: payload.email ?? '',
       dept: payload.dept ?? '',
       avatarUrl: '',
-      globalRole: role,
+      globalRole: primary,
+      globalRoles: [primary, ...extra],
       status: 'active',
       createdAt: now,
       updatedAt: now,
     };
     db.users.push(u);
     audit(db, me, 'user', openId, 'create', '', `新增用户「${name}」`, [
-      { field: 'globalRole', label: '全局角色', before: '', after: role },
+      { field: 'globalRole', label: '全局角色', before: '', after: primary },
     ]);
     saveDb();
     return deepClone(u);
@@ -3693,14 +3744,27 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     const me = assertCan(db, 'user.manage');
     const u = db.users.find((x) => x.openId === openId) ?? nf();
-    if (patchBody.globalRole !== undefined) {
-      if (!GLOBAL_ROLES.includes(patchBody.globalRole)) throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
+    if (patchBody.globalRoles !== undefined) {
+      // E1.5：多全局职位数组（首项主职位，其余额外职位）；动态职位只校验非空，与真实后端同构
+      const list = (Array.isArray(patchBody.globalRoles) ? patchBody.globalRoles : [])
+        .map((r) => String(r).trim())
+        .filter((r) => r.length > 0);
+      if (!list.length) throw new ApiError(ErrorCode.E_VALIDATION, '至少需要一个全局职位');
+      const primary = list[0];
+      if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
+      if (isAdminUser(u) && primary !== 'admin' && countAdmins(db) <= 1) {
+        throw new ApiError(ErrorCode.E_LAST_ADMIN);
+      }
+      u.globalRole = primary;
+      u.globalRoles = list;
+    } else if (patchBody.globalRole !== undefined) {
+      if (!String(patchBody.globalRole).trim()) throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
       if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
       if (u.globalRole === 'admin' && patchBody.globalRole !== 'admin') {
-        const admins = db.users.filter((x) => x.globalRole === 'admin').length;
-        if (admins <= 1) throw new ApiError(ErrorCode.E_LAST_ADMIN);
+        if (countAdmins(db) <= 1) throw new ApiError(ErrorCode.E_LAST_ADMIN);
       }
       u.globalRole = patchBody.globalRole;
+      u.globalRoles = [patchBody.globalRole, ...(u.globalRoles || []).filter((r) => r !== patchBody.globalRole)];
     }
     if (patchBody.status !== undefined) {
       if (patchBody.status !== 'active' && patchBody.status !== 'disabled') {
@@ -3717,6 +3781,76 @@ export class MockApiClient implements ApiClient {
     audit(db, me, 'user', openId, 'update', '', `更新用户「${u.name}」`, []);
     saveDb();
     return deepClone(u);
+  }
+
+  /* ── E1.5 职位目录管理（仅 admin） ───────────── */
+
+  async listRoles(): Promise<Role[]> {
+    await delay(80);
+    const db = getDb();
+    currentUser(db);
+    return deepClone(db.roles).sort((a, b) => a.orderNo - b.orderNo || a.roleKey.localeCompare(b.roleKey));
+  }
+
+  async createRole(payload: CreateRolePayload): Promise<Role> {
+    await delay();
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    const roleKey = String(payload.roleKey || '').trim();
+    const name = String(payload.name || '').trim();
+    const scope = payload.scope === 'project' ? 'project' : 'global';
+    if (!roleKey) throw new ApiError(ErrorCode.E_VALIDATION, '职位标识必填');
+    if (!/^[a-z0-9_]+$/.test(roleKey)) throw new ApiError(ErrorCode.E_VALIDATION, '职位标识仅限小写字母/数字/下划线');
+    if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '职位名称必填');
+    if (db.roles.some((r) => r.roleKey === roleKey)) throw new ApiError(ErrorCode.E_VALIDATION, '职位标识已存在');
+    const role: Role = {
+      roleKey,
+      name,
+      scope,
+      enabled: true,
+      description: payload.description ?? '',
+      orderNo: Number(payload.orderNo) || 0,
+    };
+    db.roles.push(role);
+    saveDb();
+    return deepClone(role);
+  }
+
+  async updateRole(roleKey: string, patch: UpdateRolePayload): Promise<Role> {
+    await delay();
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    const role = db.roles.find((r) => r.roleKey === roleKey) ?? nf();
+    if (patch.name !== undefined) {
+      const name = String(patch.name).trim();
+      if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '职位名称必填');
+      role.name = name.slice(0, 40);
+    }
+    if (patch.scope !== undefined) {
+      if (patch.scope !== 'global' && patch.scope !== 'project') throw new ApiError(ErrorCode.E_VALIDATION, '视野必须为 global / project');
+      role.scope = patch.scope;
+    }
+    if (patch.enabled !== undefined) role.enabled = patch.enabled;
+    if (patch.description !== undefined) role.description = String(patch.description).slice(0, 200);
+    if (patch.orderNo !== undefined) role.orderNo = Number(patch.orderNo) || 0;
+    saveDb();
+    return deepClone(role);
+  }
+
+  async deleteRole(roleKey: string): Promise<{ roleKey: string }> {
+    await delay();
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    const idx = db.roles.findIndex((r) => r.roleKey === roleKey);
+    if (idx < 0) nf();
+    // 存在用户引用（主职位或额外职位）时拒绝
+    const refPrimary = db.users.some(
+      (u) => u.globalRole === roleKey || (u.globalRoles || []).some((r) => r === roleKey),
+    );
+    if (refPrimary) throw new ApiError(ErrorCode.E_VALIDATION, '该职位仍被用户引用，无法删除，请先调整相关用户');
+    db.roles.splice(idx, 1);
+    saveDb();
+    return { roleKey };
   }
 
   async listTemplates(): Promise<LifecycleTemplate[]> {

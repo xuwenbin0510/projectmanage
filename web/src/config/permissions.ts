@@ -57,20 +57,22 @@ export const PERMISSIONS: Record<string, PermRule> = {
 export const ALL_ACTIONS = Object.keys(PERMISSIONS);
 
 /**
- * 判定用户是否具备某 action（前端显隐用）
- * @param globalRole 用户全局角色
+ * 判定用户是否具备某 action（前端显隐用，与后端逐一一致）
+ * @param globalRoles 用户全部全局职位（数组，取并集）；也兼容单个字符串
  * @param action     权限动作
  * @param projectRoles 用户在当前项目中的角色集合
  */
 export function canDo(
-  globalRole: GlobalRole | undefined,
+  globalRoles: string | string[] | undefined,
   action: string,
-  projectRoles: ProjectRole[] = [],
+  projectRoles: string[] = [],
 ): boolean {
-  if (!globalRole) return false;
-  if (globalRole === 'admin') return true;
+  if (!globalRoles) return false;
+  const list = Array.isArray(globalRoles) ? globalRoles : [globalRoles];
+  if (!list.length) return false;
+  if (list.includes('admin')) return true;
   const rule = PERMISSIONS[action];
   if (!rule) return false;
-  if (rule.global.includes(globalRole)) return true;
-  return projectRoles.some((r) => rule.project.includes(r));
+  if (list.some((g) => rule.global.includes(g as GlobalRole))) return true;
+  return projectRoles.some((r) => rule.project.includes(r as ProjectRole));
 }

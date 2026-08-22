@@ -29,7 +29,8 @@ const mappers = require('../lib/mappers');
 const wbs = require('../lib/wbs');
 const agg = require('../lib/portfolioAgg');
 const enums = require('../config/enums');
-const { canDo } = require('../config/permissions');
+const { PERMISSIONS, canDo } = require('../config/permissions');
+const { resolveGlobalRoles } = require('../middleware/auth');
 const projectService = require('./project.service');
 
 /** 决策 ⑥：在管三态 —— 全局总览的统计基线 */
@@ -119,8 +120,9 @@ function normalizeQuery(query) {
  * @returns {'all'|'mine'}
  */
 function resolveScope(me, requested) {
-  const role = String((me && me.global_role) || '');
-  const canSeeAll = canDo(role, 'dashboard:global');
+  // E1.5：用户的全部全局职位取并集，任一命中 dashboard:global 即可看全量
+  const roles = resolveGlobalRoles(me);
+  const canSeeAll = canDo(roles, 'dashboard:global');
   if (!canSeeAll) return 'mine';
   return requested === 'mine' ? 'mine' : 'all';
 }
@@ -203,12 +205,22 @@ function listScopedRows(db, q, me, scope) {
   if (scope === 'mine') {
     const openId = String((me && me.open_id) || '');
     if (!openId) return [];
-    where.push(
-      q.onlyMine
-        ? "EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ? AND pm.project_role = 'pm')"
-        : 'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)',
-    );
-    args.push(openId);
+    if (q.onlyMine) {
+      // 「我负责的项目」= 我以「项目负责人」角色参与的项目；角色集从权限矩阵动态取，避免硬编码漏判
+      const ownerRoles = PERMISSIONS['project:edit'].project; // 例：['pm']
+      const ph = ownerRoles.map(function () { return '?'; }).join(',');
+      where.push(
+        'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ? '
+        + 'AND pm.project_role IN (' + ph + '))',
+      );
+      args.push(openId);
+      ownerRoles.forEach(function (r) { args.push(String(r)); });
+    } else {
+      where.push(
+        'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)',
+      );
+      args.push(openId);
+    }
   }
 
   return db
