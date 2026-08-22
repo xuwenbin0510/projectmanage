@@ -45,8 +45,9 @@ import {
 } from '@/components/common';
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
+import { useAuthStore } from '@/stores/authStore';
 import { useAsync, usePermission, useToast } from '@/hooks';
-import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectStatus, QualityGate } from '@/types/project';
+import type { CloseBlocker, GateChecklistItem, MilestoneWithGate, ProjectRole, ProjectStatus, ProjectType, QualityGate, User } from '@/types/project';
 import {
   GATE_CONCLUSIONS,
   GATE_ICON,
@@ -98,6 +99,106 @@ export function ProjectOverviewPage(): JSX.Element {
   const [transitionTo, setTransitionTo] = useState<ProjectStatus | ''>('');
   const [blockers, setBlockers] = useState<CloseBlocker[]>([]);
   const [gateBlockers, setGateBlockers] = useState<GateBlocker[] | null>(null);
+
+  /* E1-a：管理员编辑项目基本信息 */
+  const canEditProject = can('project:edit');
+  const canManageMembers = can('project:member:assign');
+  const [editOpen, setEditOpen] = useState<boolean>(false);
+  const [editSaving, setEditSaving] = useState<boolean>(false);
+  const [editForm, setEditForm] = useState({
+    code: '',
+    name: '',
+    type: 'A' as ProjectType,
+    customer: '',
+    contractAmount: 0,
+    background: '',
+    goalText: '',
+  });
+  const openEditProject = (): void => {
+    if (!project) return;
+    setEditForm({
+      code: project.code ?? '',
+      name: project.name ?? '',
+      type: project.type ?? 'A',
+      customer: project.customer ?? '',
+      contractAmount: project.contractAmount ?? 0,
+      background: project.background ?? '',
+      goalText: (project.goal ?? []).join('\n'),
+    });
+    setEditOpen(true);
+  };
+  const submitEditProject = async (): Promise<void> => {
+    if (!project) return;
+    setEditSaving(true);
+    try {
+      const goal = editForm.goalText
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await api.updateProject(project.id, {
+        code: editForm.code.trim(),
+        name: editForm.name.trim(),
+        type: editForm.type,
+        customer: editForm.customer.trim(),
+        contractAmount: Number(editForm.contractAmount) || 0,
+        background: editForm.background,
+        goal,
+      });
+      await fetchDetail(project.id);
+      toast.success('项目信息已更新');
+      setEditOpen(false);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  /* E1-a：管理员管理项目成员 */
+  const [memberOpen, setMemberOpen] = useState<boolean>(false);
+  const [memberSaving, setMemberSaving] = useState<boolean>(false);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [addUserOpenId, setAddUserOpenId] = useState<string>('');
+  const [addRole, setAddRole] = useState<ProjectRole>('member');
+  const openManageMembers = async (): Promise<void> => {
+    try {
+      const list = await api.listUsers();
+      setAllUsers(list);
+    } catch {
+      setAllUsers([]);
+    }
+    setAddUserOpenId('');
+    setAddRole('member');
+    setMemberOpen(true);
+  };
+  const handleAddMember = async (): Promise<void> => {
+    if (!project || !addUserOpenId) return;
+    setMemberSaving(true);
+    try {
+      await api.addMember(project.id, addUserOpenId, addRole);
+      await fetchDetail(project.id);
+      setAddUserOpenId('');
+      setAddRole('member');
+      toast.success('成员已添加');
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setMemberSaving(false);
+    }
+  };
+  const handleRemoveMember = async (memberId: string): Promise<void> => {
+    if (!project) return;
+    setMemberSaving(true);
+    try {
+      await api.removeMember(project.id, memberId);
+      await fetchDetail(project.id);
+      toast.success('成员已移除');
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setMemberSaving(false);
+    }
+  };
 
   const { data: nodes } = useAsync<WbsNode[]>(() => (id ? api.listWbs(id) : Promise.resolve([])), [id]);
 
@@ -667,7 +768,16 @@ export function ProjectOverviewPage(): JSX.Element {
 
         {/* 项目关键信息 */}
         <Stack spacing={2.5}>
-          <SectionCard title="项目信息">
+          <SectionCard
+            title="项目信息"
+            actions={
+              canEditProject ? (
+                <Button size="small" startIcon={<EditOutlinedIcon />} onClick={openEditProject}>
+                  编辑项目
+                </Button>
+              ) : undefined
+            }
+          >
             <Stack spacing={1.5}>
               <FieldRow label="整体进度">
                 <ProgressBar value={progress} tone={project.health === 'red' ? 'danger' : 'brand'} />
@@ -742,7 +852,17 @@ export function ProjectOverviewPage(): JSX.Element {
             </Stack>
           </SectionCard>
 
-          <SectionCard title="项目团队" subtitle={`${new Set(members.map((m) => m.userOpenId)).size} 人 · PM / TL 各 1 人`}>
+          <SectionCard
+            title="项目团队"
+            subtitle={`${new Set(members.map((m) => m.userOpenId)).size} 人 · PM / TL 各 1 人`}
+            actions={
+              canManageMembers ? (
+                <Button size="small" startIcon={<EditOutlinedIcon />} onClick={() => void openManageMembers()}>
+                  管理成员
+                </Button>
+              ) : undefined
+            }
+          >
             <Stack spacing={1.25}>
               {members.map((m) => (
                 <Stack key={m.id} direction="row" spacing={1.25} alignItems="center">
@@ -1112,6 +1232,164 @@ export function ProjectOverviewPage(): JSX.Element {
           )
         }
       />
+
+      {/* E1-a：编辑项目基本信息（管理员/项目负责人） */}
+      <FormDialog
+        open={editOpen}
+        title="编辑项目信息"
+        submitText="保存"
+        submitting={editSaving}
+        onClose={() => !editSaving && setEditOpen(false)}
+        onSubmit={() => void submitEditProject()}
+      >
+        <Stack spacing={2}>
+          <TextField
+            label="项目编号"
+            size="small"
+            fullWidth
+            value={editForm.code}
+            onChange={(e) => setEditForm((f) => ({ ...f, code: e.target.value }))}
+          />
+          <TextField
+            label="项目名称"
+            size="small"
+            fullWidth
+            value={editForm.name}
+            onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+          />
+          <TextField
+            select
+            label="项目类型"
+            size="small"
+            fullWidth
+            value={editForm.type}
+            onChange={(e) => setEditForm((f) => ({ ...f, type: e.target.value as ProjectType }))}
+          >
+            {(['A', 'B', 'C'] as ProjectType[]).map((t) => (
+              <MenuItem key={t} value={t}>
+                {PROJECT_TYPE_LABEL[t]}（{t} 类）
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            label="客户"
+            size="small"
+            fullWidth
+            value={editForm.customer}
+            onChange={(e) => setEditForm((f) => ({ ...f, customer: e.target.value }))}
+          />
+          <TextField
+            label="合同额（元）"
+            size="small"
+            type="number"
+            fullWidth
+            value={editForm.contractAmount}
+            onChange={(e) => setEditForm((f) => ({ ...f, contractAmount: Number(e.target.value) }))}
+          />
+          <TextField
+            label="项目背景"
+            size="small"
+            fullWidth
+            multiline
+            minRows={2}
+            value={editForm.background}
+            onChange={(e) => setEditForm((f) => ({ ...f, background: e.target.value }))}
+          />
+          <TextField
+            label="项目目标（每行一条）"
+            size="small"
+            fullWidth
+            multiline
+            minRows={3}
+            value={editForm.goalText}
+            onChange={(e) => setEditForm((f) => ({ ...f, goalText: e.target.value }))}
+            helperText="每条目标单独一行"
+          />
+        </Stack>
+      </FormDialog>
+
+      {/* E1-a：管理项目成员（管理员/项目负责人） */}
+      <Dialog open={memberOpen} onClose={() => !memberSaving && setMemberOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>管理项目成员</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            <Stack spacing={1} divider={<Divider flexItem />}>
+              {members.map((m) => (
+                <Stack key={m.id} direction="row" spacing={1.25} alignItems="center">
+                  <UserAvatar name={m.userName} />
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography sx={{ fontSize: 14 }}>{m.userName}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {PROJECT_ROLE_LABEL[m.projectRole]}
+                    </Typography>
+                  </Box>
+                  <PermissionButton action="project:member:assign" fallback="disable">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      disabled={memberSaving}
+                      onClick={() => void handleRemoveMember(m.id)}
+                      title="移除成员"
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </PermissionButton>
+                </Stack>
+              ))}
+              {!members.length && <EmptyState title="暂无成员" dense />}
+            </Stack>
+            <Divider />
+            <Stack direction="row" spacing={1} alignItems="center">
+              <TextField
+                select
+                label="添加成员"
+                size="small"
+                sx={{ flex: 1 }}
+                value={addUserOpenId}
+                onChange={(e) => setAddUserOpenId(e.target.value)}
+              >
+                <MenuItem value="">请选择用户</MenuItem>
+                {allUsers
+                  .filter((u) => !members.some((m) => m.userOpenId === u.openId))
+                  .map((u) => (
+                    <MenuItem key={u.openId} value={u.openId}>
+                      {u.name}（{u.dept || '—'}）
+                    </MenuItem>
+                  ))}
+              </TextField>
+              <TextField
+                select
+                label="角色"
+                size="small"
+                sx={{ width: 130 }}
+                value={addRole}
+                onChange={(e) => setAddRole(e.target.value as ProjectRole)}
+              >
+                {PROJECT_ROLES.map((r) => (
+                  <MenuItem key={r} value={r}>
+                    {PROJECT_ROLE_LABEL[r]}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <PermissionButton
+                action="project:member:assign"
+                fallback="disable"
+                size="small"
+                variant="contained"
+                disabled={!addUserOpenId || memberSaving}
+                onClick={() => void handleAddMember()}
+              >
+                添加
+              </PermissionButton>
+            </Stack>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setMemberOpen(false)} disabled={memberSaving} color="inherit">
+            关闭
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
   );
 }

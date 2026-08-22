@@ -172,18 +172,17 @@ router.get(
 );
 
 /**
- * 项目基本信息编辑。
+ * 项目基本信息编辑（E1：管理员/项目负责人可改类型、成员等必要信息）。
  *
- * 批次 3 仍不开放：项目编辑要连带**状态机流转 + 审批链**（`POST /projects/:id/transition`），
- * 与结项检查同属批次 4 的范围，单独放开 PATCH 会绕过流转约束。
- * 这里显式 501 而不是静默 404，便于前端区分「没实现」和「路由写错」。
+ * 仅更新基础字段（code/name/type/customer/contractAmount/background/goal/planStart/planEnd），
+ * 不动状态机与审批链（流转走 `POST /projects/:id/transition`）。
  */
 router.patch(
   '/projects/:id',
   requireAuth,
-  asyncHandler(async function updateProject(req) {
-    projectService.requireProjectRow(db, req.params.id);
-    throw new AppError(ErrorCode.E_NOT_IMPLEMENTED, '项目编辑功能尚未上线', { route: 'PATCH /api/projects/:id' });
+  asyncHandler(async function updateProject(req, res) {
+    const updated = projectService.updateProjectBasic(db, req, req.params.id, req.body || {});
+    res.json(ok(updated, '项目信息已更新'));
   }),
 );
 

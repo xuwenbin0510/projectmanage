@@ -81,7 +81,9 @@ export interface CreateProjectPayload {
 }
 
 export interface UpdateProjectPayload {
+  code?: string;
   name?: string;
+  type?: ProjectType;
   customer?: string;
   contractAmount?: number;
   background?: string;

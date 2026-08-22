@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@mui/material';
 import PersonAddOutlinedIcon from '@mui/icons-material/PersonAddOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 
 import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard, UserAvatar } from '@/components/common';
 import type { Column } from '@/components/common';
@@ -109,6 +110,38 @@ export function AdminUsersPage(): JSX.Element {
     }
   };
 
+  /* 编辑用户资料弹窗（复用部分字段） */
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<User | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', dept: '', email: '', employeeId: '' });
+  const [editing, setEditing] = useState(false);
+
+  const openEdit = (u: User): void => {
+    setEditTarget(u);
+    setEditForm({ name: u.name ?? '', dept: u.dept ?? '', email: u.email ?? '', employeeId: u.employeeId ?? '' });
+    setEditOpen(true);
+  };
+
+  const saveEdit = async (): Promise<void> => {
+    if (!editTarget) return;
+    setEditing(true);
+    try {
+      const updated = await api.updateUser(editTarget.openId, {
+        name: editForm.name.trim(),
+        dept: editForm.dept.trim() || undefined,
+        email: editForm.email.trim() || undefined,
+        employeeId: editForm.employeeId.trim() || undefined,
+      });
+      setUsers((list) => list.map((x) => (x.openId === updated.openId ? updated : x)));
+      setEditOpen(false);
+      toast.success(`已更新 ${updated.name} 的资料`);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setEditing(false);
+    }
+  };
+
   const columns: Array<Column<User>> = [
     {
       key: 'name',
@@ -166,6 +199,18 @@ export function AdminUsersPage(): JSX.Element {
               {u.status === 'active' ? '启用' : '停用'}
             </Typography>
           </Stack>
+        </PermissionButton>
+      ),
+    },
+    {
+      key: 'actions',
+      label: '操作',
+      width: 90,
+      render: (u) => (
+        <PermissionButton action="admin:user:role" fallback="disable">
+          <Button size="small" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(u)}>
+            编辑
+          </Button>
         </PermissionButton>
       ),
     },
@@ -260,6 +305,53 @@ export function AdminUsersPage(): JSX.Element {
           </Button>
           <Button size="small" variant="contained" onClick={() => void createUser()} disabled={creating || !form.openId.trim() || !form.name.trim()}>
             {creating ? '创建中…' : '创建'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 编辑用户资料弹窗 */}
+      <Dialog open={editOpen} onClose={() => !editing && setEditOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>编辑用户资料 · {editTarget?.name}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              label="姓名"
+              size="small"
+              fullWidth
+              value={editForm.name}
+              onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+            />
+            <Stack direction="row" spacing={1.5}>
+              <TextField
+                label="工号"
+                size="small"
+                fullWidth
+                value={editForm.employeeId}
+                onChange={(e) => setEditForm((f) => ({ ...f, employeeId: e.target.value }))}
+              />
+              <TextField
+                label="部门"
+                size="small"
+                fullWidth
+                value={editForm.dept}
+                onChange={(e) => setEditForm((f) => ({ ...f, dept: e.target.value }))}
+              />
+            </Stack>
+            <TextField
+              label="邮箱"
+              size="small"
+              fullWidth
+              value={editForm.email}
+              onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setEditOpen(false)} disabled={editing}>
+            取消
+          </Button>
+          <Button size="small" variant="contained" onClick={() => void saveEdit()} disabled={editing || !editForm.name.trim()}>
+            {editing ? '保存中…' : '保存'}
           </Button>
         </DialogActions>
       </Dialog>
