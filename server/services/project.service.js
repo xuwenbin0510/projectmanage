@@ -108,6 +108,30 @@ function updateProjectBasic(db, req, id, payload) {
     fields.push('type = ?');
     vals.push(String(b.type));
   }
+
+  /* 模板：归属「生效分类」且启用方可选（与建项向导同源校验） */
+  const effectiveType = b.type !== undefined ? String(b.type) : p.type;
+  if (b.templateId !== undefined) {
+    if (b.templateId === '' || b.templateId == null) {
+      fields.push('template_id = ?');
+      vals.push(null); // 清空为系统默认
+    } else {
+      const tplRow = db
+        .prepare(
+          'SELECT * FROM lifecycle_templates WHERE id = ? AND project_type = ? AND is_active = 1',
+        )
+        .get(String(b.templateId), effectiveType);
+      if (!tplRow) {
+        throw new AppError(
+          ErrorCode.E_VALIDATION,
+          '指定的生命周期模板不存在、已停用或不属于该项目分类',
+          { templateId: String(b.templateId), projectType: effectiveType },
+        );
+      }
+      fields.push('template_id = ?');
+      vals.push(String(b.templateId));
+    }
+  }
   if (b.customer !== undefined) {
     fields.push('customer = ?');
     vals.push(String(b.customer ?? '').trim());

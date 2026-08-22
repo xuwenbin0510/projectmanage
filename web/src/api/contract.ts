@@ -84,6 +84,8 @@ export interface UpdateProjectPayload {
   code?: string;
   name?: string;
   type?: ProjectType;
+  /** E1 修复：显式选生命周期模板（含自定义模板）；空串='系统默认' */
+  templateId?: string;
   customer?: string;
   contractAmount?: number;
   background?: string;
