@@ -17,7 +17,10 @@ const { requireAuth, requireGlobalRole } = require('../middleware/auth');
 const { toApiUser } = require('../lib/mappers');
 const { nowIso } = require('../lib/dates');
 const { genId } = require('../lib/ids');
-const { GLOBAL_ROLES, PROJECT_ROLES } = require('../config/enums');
+const { hashPassword } = require('../lib/password');
+const { DEFAULT_PASSWORD } = require('../dal/seed');
+const roleCatalog = require('../services/roleCatalog');
+const { refreshRoleCatalog } = roleCatalog;
 const projectService = require('../services/project.service');
 
 const router = express.Router();
@@ -128,9 +131,9 @@ router.patch(
       hasExtraRoles = true;
     } else if (body.globalRole !== undefined) {
       const role = String(body.globalRole);
-      if (GLOBAL_ROLES.indexOf(role) < 0) {
+      if (!roleCatalog.isEnabledRole(role)) {
         throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-          fields: [{ field: 'globalRole', message: '全局角色不合法' }],
+          fields: [{ field: 'globalRole', message: '角色不合法' }],
         });
       }
       if (openId === String(req.user.open_id)) {
@@ -177,6 +180,28 @@ router.patch(
       args.push(String(body.email).trim().slice(0, 80));
     }
 
+    // open_id / union_id 手动维护（用于重复号认回失败后的手工归并）：
+    // union_id 仅 users 表持有，直接 SET；open_id 被多张业务表引用，需级联改引用表，否则产生孤儿数据。
+    let newOpenId = null;
+    if (body.openId !== undefined) {
+      const next = String(body.openId).trim();
+      if (next && next !== openId) {
+        const clash = db.prepare('SELECT 1 FROM users WHERE open_id = ?').get(next);
+        if (clash) throw new AppError(ErrorCode.E_CONFLICT, '新的 open_id 已存在于其他账号', { openId: next });
+        if (openId === String(req.user.open_id)) {
+          throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
+        }
+        newOpenId = next;
+        sets.push('open_id = ?');
+        args.push(next);
+      }
+    }
+    if (body.unionId !== undefined) {
+      const next = String(body.unionId).trim() || null;
+      sets.push('union_id = ?');
+      args.push(next);
+    }
+
     if (!sets.length) {
       throw new AppError(ErrorCode.E_VALIDATION, '没有可更新的字段', {});
     }
@@ -185,22 +210,95 @@ router.patch(
     args.push(openId);
     db.prepare('UPDATE users SET ' + sets.join(', ') + ' WHERE open_id = ?').run(args);
 
+    // open_id 变更：级联更新所有业务引用表里的旧 open_id，避免孤儿数据
+    if (newOpenId) {
+      const tx = db.transaction(function () {
+        USER_REFERENCE_CHECKS.forEach(function (ref) {
+          db.prepare('UPDATE ' + ref.table + ' SET ' + ref.col + ' = ? WHERE ' + ref.col + ' = ?').run(newOpenId, openId);
+        });
+        db.prepare('UPDATE user_roles SET user_open_id = ? WHERE user_open_id = ?').run(newOpenId, openId);
+        // 已用新 open_id 做 WHERE 的后续逻辑，统一切换到 newOpenId
+      });
+      tx();
+    }
+
     // E1.5：多全局职位写回（先删后插，按主职位之外的集合重建）
     if (hasExtraRoles) {
+      const effectiveOpenId = newOpenId || openId;
       const tx = db.transaction(function () {
-        db.prepare('DELETE FROM user_roles WHERE user_open_id = ?').run(openId);
+        db.prepare('DELETE FROM user_roles WHERE user_open_id = ?').run(effectiveOpenId);
         const ins = db.prepare(
           'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at) VALUES (?, ?, ?, ?, ?)',
         );
         (pendingExtraRoles || []).forEach(function (role) {
-          ins.run(genId('UR'), openId, role, String(req.user.open_id || ''), now);
+          ins.run(genId('UR'), effectiveOpenId, role, String(req.user.open_id || ''), now);
         });
       });
       tx();
     }
 
-    const extra = loadExtraRoles([openId])[openId] || [];
-    res.json(ok(toApiUser(db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId), extra), '已更新'));
+    const effectiveOpenId = newOpenId || openId;
+    const extra = loadExtraRoles([effectiveOpenId])[effectiveOpenId] || [];
+    res.json(ok(toApiUser(db.prepare('SELECT * FROM users WHERE open_id = ?').get(effectiveOpenId), extra), '已更新'));
+  }),
+);
+
+/**
+ * 物理删除用户（仅 admin）。
+ *
+ * 删除前检查业务引用：project_members / tasks(author) / reports(author) /
+ * approvals(approver,initiator) / wbs_nodes(assignee,initiator) / audit_logs(actor) /
+ * reviews/review_steps/review_approvals / user_roles。
+ * 任意表引用该 open_id 则拒绝删除并返回引用详情，避免产生孤儿数据。
+ * 无引用才物理删 users + user_roles 行。
+ *
+ * 不能删除自己。
+ */
+const USER_REFERENCE_CHECKS = [
+  { table: 'project_members', col: 'user_open_id', label: '项目成员' },
+  { table: 'approvals', col: 'approver_open_id', label: '审批（审批人）' },
+  { table: 'audit_logs', col: 'actor_open_id', label: '审计日志' },
+  { table: 'reviews', col: 'initiator_open_id', label: '评审（发起人）' },
+  { table: 'review_steps', col: 'assignee_open_id', label: '评审步骤（处理人）' },
+  { table: 'review_approvals', col: 'actor_open_id', label: '评审审批（操作人）' },
+  { table: 'user_roles', col: 'user_open_id', label: '用户职位' },
+  { table: 'work_reports', col: 'author_open_id', label: '周报' },
+];
+
+function checkUserReferences(openId) {
+  const refs = [];
+  USER_REFERENCE_CHECKS.forEach(function (c) {
+    const n = db.prepare('SELECT COUNT(*) AS n FROM ' + c.table + ' WHERE ' + c.col + ' = ?').get(openId);
+    if (n && Number(n.n) > 0) refs.push({ table: c.table, col: c.col, label: c.label, count: Number(n.n) });
+  });
+  return refs;
+}
+
+router.delete(
+  '/admin/users/:openId',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function deleteUser(req, res) {
+    const openId = String(req.params.openId || '');
+    if (openId === String(req.user.open_id)) {
+      throw new AppError(ErrorCode.E_FORBIDDEN, '不能删除自己', { openId: openId });
+    }
+    const target = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { openId: openId });
+
+    const refs = checkUserReferences(openId);
+    if (refs.length) {
+      throw new AppError(ErrorCode.E_CONFLICT, '该用户存在关联业务数据，无法物理删除', {
+        references: refs,
+      });
+    }
+
+    const tx = db.transaction(function () {
+      db.prepare('DELETE FROM user_roles WHERE user_open_id = ?').run(openId);
+      db.prepare('DELETE FROM users WHERE open_id = ?').run(openId);
+    });
+    tx();
+    res.json(ok(null, '已删除用户 ' + (target.name || openId)));
   }),
 );
 
@@ -245,9 +343,9 @@ router.post(
       extra = valid.slice(1);
     } else {
       const single = String(body.globalRole || 'member');
-      if (GLOBAL_ROLES.indexOf(single) < 0) {
+      if (!roleCatalog.isEnabledRole(single)) {
         throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-          fields: [{ field: 'globalRole', message: '全局角色不合法' }],
+          fields: [{ field: 'globalRole', message: '角色不合法' }],
         });
       }
       primary = single;
@@ -292,12 +390,44 @@ router.post(
   }),
 );
 
+/**
+ * 管理员重置用户密码（仅 admin）。
+ * 将目标用户 password_hash 重置为默认密码（尊重 DEFAULT_USER_PASSWORD 环境变量），
+ * 并置 must_change_pwd=1 强制其下次登录改密。
+ * 守卫：
+ *  - `E_NOT_FOUND`  目标用户不存在
+ *  - `E_SELF_ROLE`  不能重置自己的密码（防误操作；自己改密走 /auth/change-password）
+ * 返回默认密码明文，便于管理员口述/发消息告知用户。
+ */
+router.post(
+  '/admin/users/:openId/reset-password',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function resetUserPassword(req, res) {
+    const openId = String(req.params.openId || '');
+    if (openId === String(req.user.open_id)) {
+      throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
+    }
+    const target = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { openId: openId });
+
+    const hashed = await hashPassword(DEFAULT_PASSWORD);
+    const now = nowIso();
+    db.prepare('UPDATE users SET password_hash = ?, must_change_pwd = 1, updated_at = ? WHERE open_id = ?').run(
+      hashed,
+      now,
+      openId,
+    );
+    res.json(ok({ defaultPassword: DEFAULT_PASSWORD, openId: openId }, '已重置密码，请通知用户使用默认密码登录并在首次登录时修改'));
+  }),
+);
+
 /* ── 审批流程模板管理（阶段二：审批流程可配置） ─────────────── */
 
 const REVIEW_SCOPES = ['project', 'business'];
 const REVIEW_MODES = ['serial', 'parallel_veto', 'single'];
 /** 审批链合法角色：全局角色 ∪ 项目角色 ∪ 客户代表（formal/ccb 模板用到） */
-const ALLOWED_CHAIN_ROLES = new Set([...GLOBAL_ROLES, ...PROJECT_ROLES, 'customer_rep']);
+const ALLOWED_CHAIN_ROLES = new Set(roleCatalog.allRoleKeys().filter(roleCatalog.isEnabledRole));
 
 /**
  * review_templates 行 → API 对象（chain JSON → 数组、active 0/1 → boolean）。
@@ -620,7 +750,7 @@ function validateTemplateDefinition(def) {
     wbsRules: d.wbsRules && typeof d.wbsRules === 'object' ? d.wbsRules : undefined,
     team: Array.isArray(d.team) && d.team.length ? d.team.map(function (r, i) {
       const role = String((r && r.role) || '').trim();
-      if (PROJECT_ROLES.indexOf(role) < 0) {
+      if (!roleCatalog.isProjectRole(role)) {
         throw new AppError(ErrorCode.E_VALIDATION, undefined, {
           fields: [{ field: `definition.team[${i}].role`, message: '团队约束角色不合法：' + role }],
         });
@@ -864,6 +994,7 @@ router.post(
     db.prepare(
       'INSERT INTO roles (role_key, name, scope, enabled, description, order_no) VALUES (?, ?, ?, 1, ?, ?)',
     ).run(roleKey, name, scope, String(body.description || '').slice(0, 200), nextOrder);
+    refreshRoleCatalog(db); // 刷新运行时角色视野缓存
     res.json(ok(toApiRole(db.prepare('SELECT * FROM roles WHERE role_key = ?').get(roleKey)), '职位已创建'));
   }),
 );
@@ -910,6 +1041,7 @@ router.put(
     if (!sets.length) throw new AppError(ErrorCode.E_VALIDATION, '没有可更新的字段', {});
     args.push(roleKey);
     db.prepare('UPDATE roles SET ' + sets.join(', ') + ' WHERE role_key = ?').run(args);
+    refreshRoleCatalog(db); // 刷新运行时角色视野缓存（scope 变更立即生效）
     res.json(ok(toApiRole(db.prepare('SELECT * FROM roles WHERE role_key = ?').get(roleKey)), '已更新'));
   }),
 );

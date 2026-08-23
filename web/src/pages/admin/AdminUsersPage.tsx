@@ -8,14 +8,23 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
+  Menu,
   MenuItem,
   Stack,
   Switch,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import PersonAddOutlinedIcon from '@mui/icons-material/PersonAddOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import LockResetOutlinedIcon from '@mui/icons-material/LockResetOutlined';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
+import DeleteOutlineOutlinedIcon from '@mui/icons-material/DeleteOutlineOutlined';
+import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
+import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined';
+import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
 
 import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard, UserAvatar } from '@/components/common';
 import type { Column } from '@/components/common';
@@ -26,6 +35,34 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToast } from '@/hooks';
 import { GLOBAL_ROLE_LABEL } from '@/config/enums';
 import type { Role } from '@/types/project';
+
+/** 详情弹窗里的单行字段（可选复制） */
+function DetailRow({ label, value, onCopy, mono }: { label: string; value: string; onCopy?: () => void; mono?: boolean }): JSX.Element {
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+      <Typography variant="caption" color="text.secondary" sx={{ minWidth: 72 }}>
+        {label}
+      </Typography>
+      <Box sx={{ flex: 1, textAlign: 'right', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            wordBreak: 'break-all',
+            fontFamily: mono ? 'monospace' : undefined,
+            fontSize: mono ? 12 : 14,
+          }}
+        >
+          {value}
+        </Typography>
+        {onCopy && (
+          <IconButton size="small" onClick={onCopy} title="复制">
+            <ContentCopyOutlinedIcon fontSize="small" />
+          </IconButton>
+        )}
+      </Box>
+    </Stack>
+  );
+}
 
 /** 新增用户弹窗表单值（E1.5：支持一人多全局职位） */
 interface NewUserForm {
@@ -129,6 +166,27 @@ export function AdminUsersPage(): JSX.Element {
     }
   };
 
+  /** 重置用户密码（仅 admin；不能重置自己） */
+  const [resetTarget, setResetTarget] = useState<User | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const openReset = (u: User): void => setResetTarget(u);
+  const closeReset = (): void => {
+    if (!resetting) setResetTarget(null);
+  };
+  const doReset = async (): Promise<void> => {
+    if (!resetTarget) return;
+    setResetting(true);
+    try {
+      const res = await api.resetUserPassword(resetTarget.openId);
+      setResetTarget(null);
+      toast.success(`已重置 ${resetTarget.name} 的密码，临时密码：${res.defaultPassword}（请通知其首次登录修改）`);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const createUser = async (): Promise<void> => {
     setCreating(true);
     try {
@@ -154,8 +212,15 @@ export function AdminUsersPage(): JSX.Element {
   /* 编辑用户资料弹窗（复用部分字段 + 多职位） */
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<User | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', dept: '', email: '', employeeId: '', primaryRole: 'member', extraRoles: [] as string[] });
+  const [editForm, setEditForm] = useState({ name: '', dept: '', email: '', employeeId: '', openId: '', unionId: '', primaryRole: 'member', extraRoles: [] as string[] });
   const [editing, setEditing] = useState(false);
+
+  /* 「更多」操作菜单（重置密码 / 删除） */
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; user: User } | null>(null);
+  const openMenu = (e: React.MouseEvent<HTMLElement>, u: User): void => {
+    setMenuAnchor({ el: e.currentTarget, user: u });
+  };
+  const closeMenu = (): void => setMenuAnchor(null);
 
   const openEdit = (u: User): void => {
     setEditTarget(u);
@@ -165,6 +230,8 @@ export function AdminUsersPage(): JSX.Element {
       dept: u.dept ?? '',
       email: u.email ?? '',
       employeeId: u.employeeId ?? '',
+      openId: u.openId ?? '',
+      unionId: u.unionId ?? '',
       primaryRole: all[0],
       extraRoles: all.slice(1),
     });
@@ -180,6 +247,8 @@ export function AdminUsersPage(): JSX.Element {
         dept: editForm.dept.trim() || undefined,
         email: editForm.email.trim() || undefined,
         employeeId: editForm.employeeId.trim() || undefined,
+        openId: editForm.openId.trim(),
+        unionId: editForm.unionId.trim(),
         globalRoles: mergeRoles(editForm.primaryRole, editForm.extraRoles),
       });
       setUsers((list) => list.map((x) => (x.openId === updated.openId ? updated : x)));
@@ -192,41 +261,129 @@ export function AdminUsersPage(): JSX.Element {
     }
   };
 
+  /* 详情弹窗（只读，展示完整字段 + open_id/union_id 可复制） */
+  const [detailTarget, setDetailTarget] = useState<User | null>(null);
+
+  /* 物理删除（带二次确认） */
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const openDelete = (u: User): void => {
+    if (me?.openId === u.openId) {
+      toast.error('不能删除自己');
+      return;
+    }
+    setDeleteTarget(u);
+  };
+  const doDelete = async (): Promise<void> => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.deleteUser(deleteTarget.openId);
+      setUsers((list) => list.filter((x) => x.openId !== deleteTarget.openId));
+      toast.success(`已删除用户 ${deleteTarget.name}`);
+      setDeleteTarget(null);
+    } catch (e: any) {
+      // 引用冲突时后端返回 references，提示用户先处理关联数据
+      const refs = e?.data?.references as Array<{ label: string; count: number }> | undefined;
+      if (refs && refs.length) {
+        toast.error(`无法删除：${deleteTarget.name} 仍关联 ${refs.map((r) => `${r.label}×${r.count}`).join('、')}，请先解绑`);
+      } else {
+        toast.error(e);
+      }
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  /** 复制文本到剪贴板 */
+  const copyText = (text: string, label: string): void => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text).then(
+      () => toast.success(`已复制${label}`),
+      () => toast.error('复制失败'),
+    );
+  };
+
+  /**
+   * 数据体检：同一 union_id 或同一邮箱（忽略大小写、非空）在库中出现 ≥2 次。
+   * 正常认回流程下不可能产生重复键（命中即 UPDATE 老号，不新建），此告警仅用于暴露
+   * 历史脏数据残留（如早期手改 DB / 飞书数据异常），提示管理员核查，非实时防重复手段。
+   */
+  const dupKeys = useMemo(() => {
+    const map = new Map<string, number>();
+    users.forEach((u) => {
+      if (u.unionId) {
+        const k = 'U:' + u.unionId;
+        map.set(k, (map.get(k) || 0) + 1);
+      }
+      if (u.email) {
+        const k = 'E:' + u.email.toLowerCase();
+        map.set(k, (map.get(k) || 0) + 1);
+      }
+    });
+    return map;
+  }, [users]);
+  /** 该账号是否命中重复键（数据异常，需人工核查） */
+  const isDataAnomaly = (u: User): boolean => {
+    if (u.unionId && (dupKeys.get('U:' + u.unionId) || 0) > 1) return true;
+    if (u.email && (dupKeys.get('E:' + u.email.toLowerCase()) || 0) > 1) return true;
+    return false;
+  };
+
   const columns: Array<Column<User>> = [
     {
       key: 'name',
       label: '用户',
+      width: 100,
+      align: 'center',
       render: (u) => (
         <Stack direction="row" spacing={1} alignItems="center">
           <UserAvatar name={u.name} size={28} />
           <Box>
-            <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{u.name}</Typography>
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              <Typography sx={{ fontSize: 14, fontWeight: 600, color: isDataAnomaly(u) ? 'error.main' : 'text.primary' }}>{u.name}</Typography>
+              {isDataAnomaly(u) && (
+                <Chip
+                  size="small"
+                  icon={<WarningAmberOutlinedIcon />}
+                  label="异常"
+                  color="error"
+                  variant="outlined"
+                  title="该 union_id 或邮箱在库中存在多份，属历史脏数据残留，请核查"
+                />
+              )}
+            </Stack>
             <Typography variant="caption" color="text.secondary">{u.dept || '—'}</Typography>
           </Box>
         </Stack>
       ),
     },
-    { key: 'employeeId', label: '工号', width: 100, hideOnMobile: true, render: (u) => <Typography variant="caption">{u.employeeId || '—'}</Typography> },
-    { key: 'email', label: '邮箱', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.email || '—'}</Typography> },
+    { key: 'employeeId', label: '工号', width: 90, align: 'center', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.employeeId || '—'}</Typography> },
+    { key: 'email', label: '邮箱', width: 180, align: 'center', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.email || '—'}</Typography> },
     {
       key: 'globalRoles',
       label: '公司职位',
-      width: 260,
+      width: 240,
+      align: 'center',
       render: (u) => {
-        const all = u.globalRoles?.length ? u.globalRoles : [u.globalRole];
+        const all = (u.globalRoles && u.globalRoles.length ? u.globalRoles : [u.globalRole]).filter(Boolean);
         return (
           <PermissionButton action="admin:user:role" fallback="disable">
             <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-              {all.map((r, i) => (
-                <Chip
-                  key={r}
-                  size="small"
-                  label={roleLabelMap[r] ?? r}
-                  color={i === 0 ? 'primary' : 'default'}
-                  variant={i === 0 ? 'filled' : 'outlined'}
-                  title={i === 0 ? '主职位' : '额外职位'}
-                />
-              ))}
+              {all.length === 0 ? (
+                <Chip size="small" label="未分配" variant="outlined" color="default" title="尚未分配公司职位" />
+              ) : (
+                all.map((r, i) => (
+                  <Chip
+                    key={r}
+                    size="small"
+                    label={roleLabelMap[r] ?? r}
+                    color={i === 0 ? 'primary' : 'default'}
+                    variant={i === 0 ? 'filled' : 'outlined'}
+                    title={i === 0 ? '主职位' : '额外职位'}
+                  />
+                ))
+              )}
             </Stack>
           </PermissionButton>
         );
@@ -236,7 +393,8 @@ export function AdminUsersPage(): JSX.Element {
       /* 阶段一：状态可操作（启停开关；不能停用自己） */
       key: 'status',
       label: '状态',
-      width: 100,
+      width: 90,
+      align: 'center',
       render: (u) => (
         <PermissionButton action="admin:user:role" fallback="disable">
           <Stack direction="row" spacing={0.75} alignItems="center">
@@ -256,12 +414,21 @@ export function AdminUsersPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 90,
+      width: 160,
+      align: 'center',
       render: (u) => (
         <PermissionButton action="admin:user:role" fallback="disable">
-          <Button size="small" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(u)}>
-            编辑
-          </Button>
+          <Stack direction="row" spacing={0.5} justifyContent="center" useFlexGap>
+            <Button size="small" startIcon={<VisibilityOutlinedIcon />} onClick={() => setDetailTarget(u)}>
+              详情
+            </Button>
+            <Button size="small" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(u)}>
+              编辑
+            </Button>
+            <IconButton size="small" onClick={(e) => openMenu(e, u)} title="更多操作">
+              <MoreVertOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Stack>
         </PermissionButton>
       ),
     },
@@ -290,6 +457,89 @@ export function AdminUsersPage(): JSX.Element {
           </Box>
         )}
       </SectionCard>
+
+      {/* 用户详情弹窗（只读，open_id/union_id 可复制） */}
+      <Dialog open={!!detailTarget} onClose={() => setDetailTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>用户详情 · {detailTarget?.name}</DialogTitle>
+        <DialogContent>
+          {detailTarget && (
+            <Stack spacing={1.5} sx={{ pt: 1 }}>
+              <DetailRow label="ID" value={String(detailTarget.id)} onCopy={() => copyText(String(detailTarget.id), 'ID')} />
+              <DetailRow label="姓名" value={detailTarget.name} />
+              <DetailRow label="open_id" value={detailTarget.openId} onCopy={() => copyText(detailTarget.openId, 'open_id')} mono />
+              <DetailRow
+                label="union_id"
+                value={detailTarget.unionId || '（未绑定飞书）'}
+                onCopy={detailTarget.unionId ? () => copyText(detailTarget.unionId as string, 'union_id') : undefined}
+                mono
+              />
+              <DetailRow label="邮箱" value={detailTarget.email || '—'} onCopy={detailTarget.email ? () => copyText(detailTarget.email, '邮箱') : undefined} />
+              <DetailRow label="工号" value={detailTarget.employeeId || '—'} />
+              <DetailRow label="部门" value={detailTarget.dept || '—'} />
+              <DetailRow label="公司职位" value={(detailTarget.globalRoles?.length ? detailTarget.globalRoles.map((r) => roleLabelMap[r] ?? r).join('、') : (roleLabelMap[detailTarget.globalRole ?? ''] ?? detailTarget.globalRole ?? '未分配'))} />
+              <DetailRow label="状态" value={detailTarget.status === 'active' ? '启用' : '停用'} />
+              <DetailRow label="创建时间" value={detailTarget.createdAt || '—'} />
+              <DetailRow label="更新时间" value={detailTarget.updatedAt || '—'} />
+              {isDataAnomaly(detailTarget) && (
+                <Chip size="small" icon={<WarningAmberOutlinedIcon />} label="数据异常：该 union_id 或邮箱在库中存在多份，请核查" color="error" variant="outlined" />
+              )}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDetailTarget(null)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 删除确认弹窗（带引用提示） */}
+      <Dialog open={!!deleteTarget} onClose={() => !deleting && setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>确认删除用户</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            确定要物理删除「{deleteTarget?.name}」吗？此操作不可恢复。
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            若该用户仍有项目成员、任务、周报等关联数据，系统将拒绝删除并提示。
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>取消</Button>
+          <Button color="error" variant="contained" onClick={() => void doDelete()} disabled={deleting}>
+            确认删除
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 「更多」操作菜单：重置密码 / 删除（收起低频危险操作） */}
+      <Menu
+        anchorEl={menuAnchor?.el}
+        open={!!menuAnchor}
+        onClose={closeMenu}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem
+          disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+          onClick={() => {
+            if (menuAnchor) openReset(menuAnchor.user);
+            closeMenu();
+          }}
+        >
+          <LockResetOutlinedIcon fontSize="small" style={{ marginRight: 8 }} />
+          重置密码
+        </MenuItem>
+        <MenuItem
+          disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+          onClick={() => {
+            if (menuAnchor) openDelete(menuAnchor.user);
+            closeMenu();
+          }}
+          sx={{ color: 'error.main' }}
+        >
+          <DeleteOutlineOutlinedIcon fontSize="small" style={{ marginRight: 8 }} />
+          删除
+        </MenuItem>
+      </Menu>
 
       {/* 新增用户弹窗 */}
       <Dialog open={createOpen} onClose={() => !creating && setCreateOpen(false)} maxWidth="xs" fullWidth>
@@ -392,6 +642,37 @@ export function AdminUsersPage(): JSX.Element {
         <DialogTitle>编辑用户 · {editTarget?.name}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
+            <Box>
+              <Typography variant="caption" color="text.secondary">飞书标识（重复号认回失败时可手动粘贴新号值覆盖到本账号）</Typography>
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  label="open_id"
+                  size="small"
+                  fullWidth
+                  value={editForm.openId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, openId: e.target.value }))}
+                />
+                <Tooltip title="复制当前 open_id">
+                  <IconButton size="small" onClick={() => copyText(editForm.openId, 'open_id')}>
+                    <ContentCopyOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Stack>
+              <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                <TextField
+                  label="union_id"
+                  size="small"
+                  fullWidth
+                  value={editForm.unionId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, unionId: e.target.value }))}
+                />
+                <Tooltip title="复制当前 union_id">
+                  <IconButton size="small" onClick={() => copyText(editForm.unionId, 'union_id')}>
+                    <ContentCopyOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Stack>
+            </Box>
             <TextField
               label="姓名"
               size="small"
@@ -471,6 +752,24 @@ export function AdminUsersPage(): JSX.Element {
           </Button>
           <Button size="small" variant="contained" onClick={() => void saveEdit()} disabled={editing || !editForm.name.trim()}>
             {editing ? '保存中…' : '保存'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 重置密码确认弹窗（仅 admin；不能重置自己） */}
+      <Dialog open={Boolean(resetTarget)} onClose={closeReset} maxWidth="xs" fullWidth>
+        <DialogTitle>重置密码 · {resetTarget?.name}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            将 {resetTarget?.name} 的密码重置为系统默认密码，并强制其在下次登录时修改。该操作不会影响其姓名、职位与项目归属。
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={closeReset} disabled={resetting}>
+            取消
+          </Button>
+          <Button size="small" variant="contained" color="warning" onClick={() => void doReset()} disabled={resetting}>
+            {resetting ? '重置中…' : '确认重置'}
           </Button>
         </DialogActions>
       </Dialog>

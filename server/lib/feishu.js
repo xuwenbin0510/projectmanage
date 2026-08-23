@@ -36,7 +36,25 @@ async function code2session(code, appToken) {
   });
   const d = await r.json();
   if (d.code !== 0) throw new Error('code2session failed: ' + d.msg);
-  return d.data;
+  const userToken = d.data && d.data.access_token;
+  if (!userToken) throw new Error('code2session failed: empty access_token');
+
+  // v1 网页授权换 token 不直接返回 open_id，需用用户 access_token 再调 user_info 获取
+  const infoR = await fetch(FS_API + '/authen/v1/user_info', {
+    headers: { Authorization: 'Bearer ' + userToken },
+  });
+  const info = await infoR.json();
+  if (info.code !== 0) throw new Error('feishu user_info failed: ' + info.msg);
+  const u = (info.data && info.data.user) || info.data || {};
+  return {
+    access_token: userToken,
+    open_id: u.open_id || (info.data && info.data.open_id) || '',
+    union_id: u.union_id || (info.data && info.data.union_id) || '',
+    user_id: u.user_id || (info.data && info.data.user_id) || '',
+    name: u.name || '',
+    email: u.email || '',
+    avatar_url: u.avatar_url || '',
+  };
 }
 
 /**
@@ -71,20 +89,51 @@ async function code2sessionV2(code, appToken) {
 }
 
 /**
- * 取用户姓名；失败静默回退 open_id（登录不应因通讯录权限缺失而中断）。
+ * 取用户姓名与邮箱；失败静默回退 open_id（登录不应因通讯录权限缺失而中断）。
+ * 邮箱需要应用开通「获取用户邮箱信息」权限；未开通时返回空字符串。
  * @param {string} accessToken 用户级 access_token
  * @param {string} openId
- * @returns {Promise<string>}
+ * @returns {Promise<{name: string, email: string}>}
  */
-async function getUserName(accessToken, openId) {
+async function getUserProfile(accessToken, openId, fallback) {
+  // fallback：user_info 已取到的 {name,email,union_id}，通讯录查不到时用它兜底
+  const f = fallback || {};
   try {
     const r = await fetch(FS_API + '/contact/v3/users/' + openId + '?user_id_type=open_id', {
       headers: { Authorization: 'Bearer ' + accessToken },
     });
     const d = await r.json();
-    if (d.code === 0 && d.data && d.data.user) return d.data.user.name || openId;
-  } catch (e) { /* 忽略，回退 open_id */ }
-  return openId;
+    if (d.code === 0 && d.data && d.data.user) {
+      return {
+        name: d.data.user.name || f.name || openId,
+        email: d.data.user.email || f.email || '',
+        union_id: d.data.user.union_id || f.union_id || '',
+      };
+    }
+  } catch (e) { /* 忽略，回退 fallback */ }
+  return { name: f.name || openId, email: f.email || '', union_id: f.union_id || '' };
+}
+
+/**
+ * 兼容旧接口：仅取姓名。
+ * @param {string} accessToken
+ * @param {string} openId
+ * @returns {Promise<string>}
+ */
+async function getUserName(accessToken, openId) {
+  const p = await getUserProfile(accessToken, openId);
+  return p.name;
+}
+
+/**
+ * 仅取邮箱（用于后台批量回填）。
+ * @param {string} accessToken
+ * @param {string} openId
+ * @returns {Promise<string>}
+ */
+async function getUserEmail(accessToken, openId) {
+  const p = await getUserProfile(accessToken, openId);
+  return p.email;
 }
 
 /* ── D02 · 飞书文档链接解析 + 标题抓取（文档关联） ────── */
@@ -151,7 +200,9 @@ module.exports = {
   getAppAccessToken,
   code2session,
   code2sessionV2,
+  getUserProfile,
   getUserName,
+  getUserEmail,
   parseFeishuUrl,
   fetchDocTitle,
 };

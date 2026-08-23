@@ -131,6 +131,12 @@ export class HttpApiClient implements ApiClient {
     return res && typeof res.appId === 'string' ? res.appId : '';
   }
 
+  async login(email: string, password: string): Promise<Session> {
+    const s = await post<Session>('/auth/login', { email, password });
+    setToken(s.token);
+    return s;
+  }
+
   async devLogin(openId: string): Promise<Session> {
     const s = await post<Session>('/auth/devlogin', { openId });
     setToken(s.token);
@@ -148,6 +154,10 @@ export class HttpApiClient implements ApiClient {
     const r = await post<{ token: string; user: User }>('/auth/feishu/web', { code });
     setToken(r.token);
     return r;
+  }
+
+  async changePassword(oldPassword: string, newPassword: string): Promise<void> {
+    await post<void>('/auth/change-password', { oldPassword, newPassword });
   }
 
   me(): Promise<User> {
@@ -437,6 +447,16 @@ export class HttpApiClient implements ApiClient {
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin） */
   updateUser(openId: string, patchBody: UpdateUserPayload): Promise<User> {
     return patch<User>(`/admin/users/${openId}`, patchBody);
+  }
+
+  /** 管理员重置用户密码（仅 admin）：重置为默认密码并强制下次改密 */
+  resetUserPassword(openId: string): Promise<{ defaultPassword: string; openId: string }> {
+    return post<{ defaultPassword: string; openId: string }>(`/admin/users/${openId}/reset-password`, {});
+  }
+
+  /** 物理删除用户（仅 admin） */
+  deleteUser(openId: string): Promise<null> {
+    return del<null>(`/admin/users/${openId}`);
   }
 
   /* E1.5 职位目录管理（仅 admin） */

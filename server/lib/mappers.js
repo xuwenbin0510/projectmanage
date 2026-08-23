@@ -181,7 +181,8 @@ function makeNameLookup(db) {
  */
 function toApiUser(row, extraRoles) {
   if (!row) return null;
-  const primary = toStr(row.global_role, 'member');
+  // 不臆造角色：global_role 为空（飞书新建号未分配）时返回 null，由前端显示「未分配」
+  const primary = row.global_role ? toStr(row.global_role) : null;
   const set = {};
   if (primary) set[primary] = true;
   (Array.isArray(extraRoles) ? extraRoles : []).forEach(function (r) {
@@ -190,6 +191,7 @@ function toApiUser(row, extraRoles) {
   return {
     id: toNum(row.id, 0),
     openId: toStr(row.open_id),
+    unionId: row.union_id ? toStr(row.union_id) : null,
     employeeId: toStr(row.employee_id),
     name: toStr(row.name),
     email: toStr(row.email),
