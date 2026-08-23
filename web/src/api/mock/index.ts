@@ -103,8 +103,6 @@ import {
   normalizePriority,
   REJECT_REASON_MAX,
   TASK_STATUSES,
-  GLOBAL_ROLES,
-  PROJECT_ROLES,
 } from '@/config/enums';
 import {
   aggregateHealth,
@@ -115,6 +113,7 @@ import {
   overdueBucketOf,
 } from '@/utils/dashboardAgg';
 import { canDo, PERMISSIONS } from '@/config/permissions';
+import { isGlobalRole, isProjectRole, allRoleKeys } from '@/config/roles-catalog';
 import { addDays, today, nowIso, diffDays, weekCode, weekRange, fitMilestoneDates } from '@/utils/date';
 import { genId, deepClone } from '@/utils/format';
 import {
@@ -352,7 +351,12 @@ function audit(
 
 /* ── 阶段二：审批模板校验（白名单与服务端 admin.routes 一致） ───── */
 
-const ALLOWED_CHAIN_ROLES = new Set<string>([...GLOBAL_ROLES, ...PROJECT_ROLES, 'customer_rep']);
+const ALLOWED_CHAIN_ROLES = new Set<string>([...allRoleKeys(), 'customer_rep']);
+
+/** 「项目负责人」角色集：project:edit 允许的、且 scope=project 的角色（例：['pm']），动态从 catalog 取 */
+const PROJECT_OWNER_ROLES: string[] = (PERMISSIONS['project:edit'].roles as string[]).filter((r) =>
+  isProjectRole(r),
+);
 
 function validateChain(chain: string[]): void {
   if (!chain.length) throw new ApiError(ErrorCode.E_VALIDATION, '审批链至少一个角色');
@@ -659,6 +663,19 @@ export class MockApiClient implements ApiClient {
     return '';
   }
 
+  /** 邮箱密码登录 Mock：邮箱匹配任意用户密码为默认密码即可 */
+  async login(email: string, password: string): Promise<Session> {
+    await delay();
+    const db = getDb();
+    const user = db.users.find((u) => u.email && u.email.toLowerCase() === email.toLowerCase());
+    if (!user) throw new ApiError(ErrorCode.E_UNAUTHORIZED, '邮箱或密码错误');
+    if (user.status === 'disabled') throw new ApiError(ErrorCode.E_FORBIDDEN, '该账号已停用');
+    if (password !== 'AstrBytes@2026') throw new ApiError(ErrorCode.E_UNAUTHORIZED, '邮箱或密码错误');
+    db.sessionOpenId = user.openId;
+    saveDb();
+    return { token: MOCK_TOKEN_PREFIX + user.openId, user: deepClone(user), mustChangePwd: true };
+  }
+
   /** @prd P0-11 开发态免飞书登录 */
   async devLogin(openId: string): Promise<Session> {
     await delay();
@@ -687,6 +704,11 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     const me = currentUser(db);
     return { token: MOCK_TOKEN_PREFIX + me.openId, user: deepClone(me) };
+  }
+
+  async changePassword(_oldPassword: string, _newPassword: string): Promise<void> {
+    await delay();
+    // mock 下无需持久化密码
   }
 
   async me(): Promise<User> {
@@ -2756,8 +2778,10 @@ export class MockApiClient implements ApiClient {
 
     /* D10：门控待办 = 我有决议权限（global admin/pmo/qa/tl 或项目成员 qa/tl/pmo）的未决议门
        门控特权角色从权限矩阵动态取（单一权威源，避免硬编码漏判管理员调整的职位体系） */
-    const gateRoles: GlobalRole[] = PERMISSIONS['gate:decide'].global as GlobalRole[];
-    const gateProjectRoles = PERMISSIONS['gate:decide'].project as ProjectRole[];
+    const gateRoles: string[] = (PERMISSIONS['gate:decide'].roles as string[]).filter((r) => isGlobalRole(r));
+    const gateProjectRoles: string[] = (PERMISSIONS['gate:decide'].roles as string[]).filter((r) =>
+      isProjectRole(r),
+    );
     const projectRoleOk = new Set(
       db.members.filter((m) => m.userOpenId === me.openId && gateProjectRoles.includes(m.projectRole as ProjectRole)).map((m) => m.projectId),
     );
@@ -2878,7 +2902,7 @@ export class MockApiClient implements ApiClient {
     const myProjectIds = new Set(
       db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
     );
-    const ownerRoles = PERMISSIONS['project:edit'].project as ProjectRole[]; // 动态取「项目负责人」角色集（例：['pm']）
+    const ownerRoles = PROJECT_OWNER_ROLES; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
       db.members
         .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
@@ -3336,7 +3360,7 @@ export class MockApiClient implements ApiClient {
     const myProjectIds = new Set(
       db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId),
     );
-    const ownerRoles = PERMISSIONS['project:edit'].project as ProjectRole[]; // 动态取「项目负责人」角色集（例：['pm']）
+    const ownerRoles = PROJECT_OWNER_ROLES; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
       db.members
         .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
@@ -3447,7 +3471,7 @@ export class MockApiClient implements ApiClient {
     const statusFilter =
       query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
     const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
-    const ownerRoles = PERMISSIONS['project:edit'].project; // 动态取「项目负责人」角色集（例：['pm']）
+    const ownerRoles = PROJECT_OWNER_ROLES; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
       db.members
         .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
@@ -3515,7 +3539,7 @@ export class MockApiClient implements ApiClient {
     const statusFilter =
       query.status && DASHBOARD_MANAGED_STATUSES.includes(query.status) ? query.status : '';
     const myProjectIds = new Set(db.members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectId));
-    const ownerRoles = PERMISSIONS['project:edit'].project; // 动态取「项目负责人」角色集（例：['pm']）
+    const ownerRoles = PROJECT_OWNER_ROLES; // 动态取「项目负责人」角色集（例：['pm']）
     const myPmProjectIds = new Set(
       db.members
         .filter((m) => m.userOpenId === me.openId && ownerRoles.includes(m.projectRole as ProjectRole))
@@ -3709,7 +3733,7 @@ export class MockApiClient implements ApiClient {
     if (!openId) throw new ApiError(ErrorCode.E_VALIDATION, 'openId 必填');
     if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '姓名必填');
     // E1.5：优先用 globalRoles 数组（首项主职位），否则回落单值 globalRole
-    // 动态职位（roles 表新增）不再强制在 GLOBAL_ROLES 内，仅校验非空，与真实后端同构
+    // 动态职位（roles 表新增）仅校验非空，与真实后端同构
     let primary: string = payload.globalRole ?? 'member';
     let extra: string[] = [];
     if (Array.isArray(payload.globalRoles) && payload.globalRoles.length) {
@@ -3730,6 +3754,7 @@ export class MockApiClient implements ApiClient {
       email: payload.email ?? '',
       dept: payload.dept ?? '',
       avatarUrl: '',
+      unionId: null,
       globalRole: primary,
       globalRoles: [primary, ...extra],
       status: 'active',
@@ -3783,10 +3808,43 @@ export class MockApiClient implements ApiClient {
     if (patchBody.name !== undefined && String(patchBody.name).trim()) u.name = String(patchBody.name).trim().slice(0, 40);
     if (patchBody.employeeId !== undefined) u.employeeId = String(patchBody.employeeId).slice(0, 40);
     if (patchBody.email !== undefined) u.email = String(patchBody.email).trim().slice(0, 80);
+    if (patchBody.openId !== undefined) {
+      const next = String(patchBody.openId).trim();
+      if (next && next !== u.openId) {
+        if (next === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
+        if (db.users.some((x) => x.openId === next)) throw new ApiError(ErrorCode.E_VALIDATION, '新的 open_id 已存在于其他账号');
+        u.openId = next;
+      }
+    }
+    if (patchBody.unionId !== undefined) u.unionId = String(patchBody.unionId).trim() || null;
     u.updatedAt = nowIso();
     audit(db, me, 'user', openId, 'update', '', `更新用户「${u.name}」`, []);
     saveDb();
     return deepClone(u);
+  }
+
+  async resetUserPassword(openId: string): Promise<{ defaultPassword: string; openId: string }> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
+    const u = db.users.find((x) => x.openId === openId) ?? nf();
+    u.updatedAt = nowIso();
+    audit(db, me, 'user', openId, 'reset-password', '', `重置用户「${u.name}」密码`, []);
+    saveDb();
+    return { defaultPassword: 'AstrBytes@2026', openId };
+  }
+
+  async deleteUser(openId: string): Promise<null> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'user.manage');
+    if (openId === me.openId) throw new ApiError(ErrorCode.E_FORBIDDEN, '不能删除自己');
+    const idx = db.users.findIndex((x) => x.openId === openId);
+    if (idx < 0) throw nf();
+    db.users.splice(idx, 1);
+    saveDb();
+    return null;
   }
 
   /* ── E1.5 职位目录管理（仅 admin） ───────────── */

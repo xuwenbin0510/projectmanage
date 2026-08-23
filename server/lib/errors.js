@@ -40,6 +40,8 @@ const ErrorCode = {
   E_SELF_ROLE: 'E_SELF_ROLE',
   E_LAST_ADMIN: 'E_LAST_ADMIN',
   E_CHANGE_ROUTE: 'E_CHANGE_ROUTE',
+  /* 用户合并/删除：源用户存在关联业务数据，无法物理删除（409） */
+  E_CONFLICT: 'E_CONFLICT',
   E_PROJECT_ARCHIVED: 'E_PROJECT_ARCHIVED',
   E_CLOSE_BLOCKED: 'E_CLOSE_BLOCKED',
   /* D05：门通过时交付物未齐备 / 基线项变更缺原因 */
@@ -96,6 +98,7 @@ const CODE_HTTP = {
   [ErrorCode.E_REPORT_DUPLICATE]: 409,
   [ErrorCode.E_REVIEW_CLOSED]: 409,
   [ErrorCode.E_LAST_ADMIN]: 409,
+  [ErrorCode.E_CONFLICT]: 409,
   [ErrorCode.E_PROJECT_ARCHIVED]: 403,
   [ErrorCode.E_CLOSE_BLOCKED]: 409,
 
@@ -143,6 +146,7 @@ const ERROR_MESSAGE_ZH = {
   E_PROXY_EVIDENCE_REQUIRED: '客户代表代录须填写意见或凭证链接',
   E_SELF_ROLE: '不能修改自己的角色',
   E_LAST_ADMIN: '系统至少保留一名管理员',
+  E_CONFLICT: '操作冲突，存在关联数据',
   E_CHANGE_ROUTE: '变更审批路径不匹配',
   E_PROJECT_ARCHIVED: '项目已结项，处于只读归档状态',
   E_CLOSE_BLOCKED: '结项被阻塞，请先处理阻塞项',

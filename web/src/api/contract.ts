@@ -243,9 +243,11 @@ export interface ApiClient {
   /**
    * 取服务端下发的飞书 AppID（`GET /api/appid`，免鉴权）。
    * 供 JSSDK `requestAuthCode(appId)` 使用——**不得**用前端环境变量顶替。
-   * 服务端未配置 FEISHU_APP_ID 时返回空串，调用方据此回落到开发登录。
+   * 服务端未配置 FEISHU_APP_ID 时返回空串，调用方据此回落到邮箱密码登录。
    */
   getAppId(): Promise<string>;
+  /** 邮箱 + 密码登录；首次登录返回 mustChangePwd=true，前端需跳转改密页。 */
+  login(email: string, password: string): Promise<Session>;
   devLogin(openId: string): Promise<Session>;
   feishuLogin(code: string): Promise<Session>;
   /**
@@ -253,6 +255,8 @@ export interface ApiClient {
    * @prd P0-11 / B4-T03 对应 `POST /api/auth/feishu/web`；返回内联 `{token,user}`（与 `Session` 同构）。
    */
   loginByFeishuCode(code: string): Promise<{ token: string; user: User }>;
+  /** 修改密码；首次登录后 oldPassword 传空字符串即可。 */
+  changePassword(oldPassword: string, newPassword: string): Promise<void>;
   me(): Promise<User>;
   logout(): Promise<void>;
 
@@ -380,6 +384,10 @@ export interface ApiClient {
   createUser(payload: CreateUserPayload): Promise<User>;
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin；只传需要更新的字段） */
   updateUser(openId: string, patch: UpdateUserPayload): Promise<User>;
+  /** 管理员重置用户密码（仅 admin）：重置为默认密码并强制下次改密，返回默认密码明文 */
+  resetUserPassword(openId: string): Promise<{ defaultPassword: string; openId: string }>;
+  /** 物理删除用户（仅 admin）：删前校验业务引用，有则拒绝 */
+  deleteUser(openId: string): Promise<null>;
 
   /* E1.5 职位目录管理（仅 admin） */
   listRoles(): Promise<Role[]>;

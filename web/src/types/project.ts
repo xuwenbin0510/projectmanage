@@ -3,18 +3,27 @@
 import type { WbsRules } from '@/types/wbs';
 import type { ReviewMode } from '@/types/review';
 
-export type GlobalRole =
+export type RoleKey =
   | 'admin'
+  | 'cpo'
+  | 'cto'
   | 'management'
   | 'pmo'
-  | 'pm'
-  | 'tl'
-  | 'qa'
   | 'cm'
+  | 'dev'
+  | 'member'
+  | 'ops'
+  | 'pm'
   | 'po'
-  | 'member';
+  | 'qa'
+  | 'sale'
+  | 'tl'
+  | 'ued';
 
-export type ProjectRole = 'pm' | 'tl' | 'po' | 'qa' | 'cm' | 'pmo' | 'member';
+/** 用户主职位（职位管理里的职位 key；视野维度由职位自身设定决定）。等同于 RoleKey，保留别名以兼容存量代码。 */
+export type GlobalRole = RoleKey;
+
+export type ProjectRole = RoleKey;
 
 export type ProjectType = 'A' | 'B' | 'C';
 
@@ -49,6 +58,8 @@ export type MilestoneOverride = '未开始' | '进行中' | '已逾期';
 export interface User {
   id: number;
   openId: string;
+  /** 飞书 union_id（跨应用不变），未绑定飞书时为 null */
+  unionId: string | null;
   employeeId: string;
   name: string;
   email: string;
@@ -118,6 +129,10 @@ export interface UpdateUserPayload {
   name?: string;
   employeeId?: string;
   email?: string;
+  /** 飞书 open_id（手动维护：重复号认回失败时可把新号 open_id 粘贴覆盖到本账号；改动会级联更新业务引用表） */
+  openId?: string;
+  /** 飞书 union_id（手动维护：同上，无业务引用风险） */
+  unionId?: string;
 }
 
 /* ── 阶段二 · 审批流程模板（管理配置） ─────────────── */
