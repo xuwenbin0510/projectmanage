@@ -201,7 +201,7 @@ function cleanupDirtyData(db, ts) {
     .prepare(
       `SELECT p.id AS pid FROM projects p
        WHERE p.pm IS NOT NULL AND p.pm <> ''
-         AND p.pm IN (SELECT open_id FROM users WHERE global_role = 'admin')
+         AND p.pm IN (SELECT open_id FROM users WHERE global_role = 'admin' UNION SELECT user_open_id FROM user_roles WHERE role_key = 'admin')
          AND NOT EXISTS (
            SELECT 1 FROM project_members m
            WHERE m.project_id = p.id AND m.project_role = 'tl'

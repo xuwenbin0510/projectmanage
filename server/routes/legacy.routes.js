@@ -103,8 +103,28 @@ function approvalTemplate(p) {
  * @param {string} role
  * @returns {Array<object>}
  */
+/**
+ * 取用户全部全局职位（主职位 users.global_role + 额外职位 user_roles，合并去重）。
+ * 与 rbac.globalRolesOf / auth.resolveGlobalRoles 语义一致：任一职位命中即通过。
+ */
+function mergedGlobalRoles(u) {
+  if (!u) return [];
+  const set = {};
+  if (u.global_role) set[String(u.global_role)] = true;
+  db.prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?')
+    .all(u.open_id)
+    .forEach(function (r) { if (r.role_key) set[String(r.role_key)] = true; });
+  return Object.keys(set);
+}
+function isAdminUser(u) {
+  return mergedGlobalRoles(u).indexOf('admin') >= 0;
+}
+
 function usersByRole(role) {
-  return db.prepare('SELECT * FROM users WHERE global_role = ? ORDER BY name').all(String(role || ''));
+  const r = String(role || '');
+  return db.prepare(
+    'SELECT * FROM users WHERE global_role = ? OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = ?) ORDER BY name'
+  ).all(r, r);
 }
 
 /**
@@ -115,7 +135,7 @@ function usersByRole(role) {
  */
 function canEditProject(u, p) {
   if (!u || !p) return false;
-  if (u.global_role === 'admin') return true;
+  if (isAdminUser(u)) return true;
   return p.pm === u.open_id || p.created_by === u.open_id;
 }
 
@@ -130,8 +150,8 @@ function canApproveStep(u, p) {
   const tpl = approvalTemplate(p);
   const step = p.approval_step;
   if (step === null || step === undefined || step < 0 || step >= tpl.length) return false;
-  if (u.global_role === 'admin') return true;
-  return u.global_role === tpl[step];
+  if (isAdminUser(u)) return true;
+  return mergedGlobalRoles(u).indexOf(tpl[step]) >= 0;
 }
 
 /**
@@ -256,14 +276,16 @@ router.get('/users', requireAuth, function legacyUsers(req, res) {
 
 /** @deprecated 用 `PATCH /api/admin/users/:openId` */
 router.put('/users/:id/role', requireAuth, function legacySetRole(req, res) {
-  if (req.user.global_role !== 'admin') return res.status(403).json({ error: '仅管理员可分配角色' });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: '仅管理员可分配角色' });
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return res.status(404).json({ error: '用户不存在' });
   if (u.id === req.user.id) return res.status(403).json({ error: '不能修改自己的角色' });
   const validRoles = Object.keys(cfg.ROLES);
   const role = (req.body && validRoles.indexOf(req.body.role) >= 0) ? req.body.role : 'member';
-  if (u.global_role === 'admin' && role !== 'admin') {
-    const remain = db.prepare('SELECT COUNT(*) c FROM users WHERE global_role = ? AND id != ?').get('admin', u.id).c;
+  if (isAdminUser(u) && role !== 'admin') {
+    const remain = db.prepare(
+      'SELECT COUNT(*) c FROM users WHERE (global_role = ? OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = ?)) AND id != ?'
+    ).get('admin', 'admin', u.id).c;
     if (remain === 0) return res.status(403).json({ error: '至少需要保留一名管理员' });
   }
   db.prepare('UPDATE users SET global_role = ?, updated_at = ? WHERE id = ?').run(role, nowIso(), u.id);
@@ -360,7 +382,7 @@ router.put('/projects/:id', requireAuth, function legacyUpdateProject(req, res) 
 
 /** 保留：新契约无「删除项目」方法，不冲突 */
 router.delete('/projects/:id', requireAuth, function legacyDeleteProject(req, res) {
-  if (req.user.global_role !== 'admin') return res.status(403).json({ error: '仅管理员可删除项目' });
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: '仅管理员可删除项目' });
   const p = projectById(req.params.id);
   if (!p) return res.status(404).json({ error: '项目不存在' });
   db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
@@ -511,7 +533,7 @@ router.put('/tasks/:id', requireAuth, function legacyUpdateTask(req, res) {
   const t = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '任务不存在' });
   const p = projectById(t.project_id);
-  const editable = req.user.global_role === 'admin' || t.owner === req.user.open_id || canEditProject(req.user, p);
+  const editable = isAdminUser(req.user) || t.owner === req.user.open_id || canEditProject(req.user, p);
   if (!editable) return res.status(403).json({ error: '仅任务负责人、项目负责人或管理员可编辑' });
   const b = req.body || {};
   db.prepare(
@@ -537,7 +559,7 @@ router.delete('/tasks/:id', requireAuth, function legacyDeleteTask(req, res) {
   const t = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '任务不存在' });
   const p = projectById(t.project_id);
-  const editable = req.user.global_role === 'admin' || t.owner === req.user.open_id || canEditProject(req.user, p);
+  const editable = isAdminUser(req.user) || t.owner === req.user.open_id || canEditProject(req.user, p);
   if (!editable) return res.status(403).json({ error: '仅任务负责人、项目负责人或管理员可删除' });
   db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
@@ -605,7 +627,7 @@ router.post('/reports', requireAuth, function legacyCreateReport(req, res) {
 router.put('/reports/:id', requireAuth, function legacyUpdateReport(req, res) {
   const r = db.prepare('SELECT * FROM reports WHERE id = ?').get(req.params.id);
   if (!r) return res.status(404).json({ error: '周报不存在' });
-  if (req.user.global_role !== 'admin' && r.author !== req.user.open_id) {
+  if (!isAdminUser(req.user) && r.author !== req.user.open_id) {
     return res.status(403).json({ error: '仅报告人或管理员可编辑' });
   }
   const b = req.body || {};
@@ -627,7 +649,7 @@ router.put('/reports/:id', requireAuth, function legacyUpdateReport(req, res) {
 router.delete('/reports/:id', requireAuth, function legacyDeleteReport(req, res) {
   const r = db.prepare('SELECT * FROM reports WHERE id = ?').get(req.params.id);
   if (!r) return res.status(404).json({ error: '周报不存在' });
-  if (req.user.global_role !== 'admin' && r.author !== req.user.open_id) {
+  if (!isAdminUser(req.user) && r.author !== req.user.open_id) {
     return res.status(403).json({ error: '仅报告人或管理员可删除' });
   }
   db.prepare('DELETE FROM reports WHERE id = ?').run(req.params.id);
