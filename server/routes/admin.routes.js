@@ -115,7 +115,7 @@ router.patch(
       if (openId === String(req.user.open_id)) {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
-      if (target.global_role === 'admin' && primary !== 'admin') {
+      if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id)) && primary !== 'admin') {
         const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR role_key = 'admin') AND user_open_id <> ?").get(openId);
         if (!cnt || Number(cnt.n) <= 1) {
           throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
@@ -136,8 +136,8 @@ router.patch(
       if (openId === String(req.user.open_id)) {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
-      if (target.global_role === 'admin' && role !== 'admin') {
-        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE global_role = 'admin'").get();
+      if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id)) && role !== 'admin') {
+        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = 'admin')) AND open_id <> ?").get(openId);
         if (!cnt || Number(cnt.n) <= 1) {
           throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
         }

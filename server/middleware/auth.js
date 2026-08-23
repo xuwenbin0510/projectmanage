@@ -104,12 +104,8 @@ function requireGlobalRole() {
 }
 
 /**
- * 是否管理员。
- * @param {Object} userRow users 表行
- * @returns {boolean}
+ * 是否管理员：`isAdmin` 已在上方基于 `resolveGlobalRoles`（主职位 + 额外职位并集）定义，
+ * 此处旧定义（仅认主职位 global_role）已移除，避免重复定义覆盖正确实现。
  */
-function isAdmin(userRow) {
-  return !!userRow && userRow.global_role === 'admin';
-}
 
 module.exports = { requireAuth, optionalAuth, requireGlobalRole, resolveUser, isAdmin, resolveGlobalRoles };
