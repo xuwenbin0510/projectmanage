@@ -24,7 +24,7 @@ const wbs = require('../lib/wbs');
 const reviewService = require('./review.service');
 const reportService = require('./report.service');
 const { resolveGlobalRoles } = require('../middleware/auth');
-const { PERMISSIONS } = require('../config/permissions');
+const permissionCatalog = require('../services/permissionCatalog');
 
 /**
  * 我负责且未完成的真叶子任务（按 dueDate 升序，与 Mock L2069 一致）。
@@ -226,22 +226,24 @@ function listGateTodos(db, me) {
   // E1.5：全局职位取并集，任一命中门控特权角色即可看全公司待决门
   // 门控特权角色从权限矩阵动态取（单一权威源，避免硬编码漏判管理员调整的职位体系）
   const globalRoles = resolveGlobalRoles(me);
-  const gateGlobalRoles = PERMISSIONS['gate:decide'].global; // 例：['admin','pmo','qa','tl']
-  const gateProjectRoles = PERMISSIONS['gate:decide'].project; // 例：['qa','tl','pmo']
+  // 门控特权角色从权限矩阵动态取（单一权威源，与 B19 RBAC 同口径；后台改矩阵即时跟随）
+  const gateAllowed = permissionCatalog.rolesFor('gate:decide').roles || [];
 
   let projectIds = [];
-  if (globalRoles.some(function (r) { return gateGlobalRoles.indexOf(r) >= 0; })) {
+  if (gateAllowed.length > 0 && globalRoles.some(function (r) { return gateAllowed.indexOf(r) >= 0; })) {
+    // 用户持有 gate:decide 的全局角色 → 看全公司未结项项目的待决门
     projectIds = db
       .prepare("SELECT id FROM projects WHERE deleted_at IS NULL AND status NOT IN ('已结项', '已终止')")
       .all()
       .map(function (r) { return mappers.toStr(r.id); });
-  } else {
-    const ph = gateProjectRoles.map(function () { return '?'; }).join(',');
+  } else if (gateAllowed.length > 0) {
+    // 项目视角：按用户在该项目内持有的 gate:decide 角色过滤
+    const ph = gateAllowed.map(function () { return '?'; }).join(',');
     projectIds = db
       .prepare(
         "SELECT DISTINCT pm.project_id AS pid FROM project_members pm WHERE pm.user_open_id = ? AND pm.project_role IN (" + ph + ")",
       )
-      .all(openId, ...gateProjectRoles.map(function (r) { return String(r); }))
+      .all(openId, ...gateAllowed.map(function (r) { return String(r); }))
       .map(function (r) { return mappers.toStr(r.pid); });
   }
   if (projectIds.length === 0) return [];

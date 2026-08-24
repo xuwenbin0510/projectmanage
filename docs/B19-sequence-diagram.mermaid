@@ -1,0 +1,158 @@
+%% B19 权限矩阵可配置化（真·RBAC）· 时序图
+%% 覆盖 5 条关键流程：启动预热 / 业务判定 / 管理员保存 / 恢复默认 / 降级兜底
+sequenceDiagram
+    autonumber
+    actor Admin as 管理员
+    actor User as 业务用户
+    participant Page as AdminPermissionsPage
+    participant WebPerm as web/config/permissions.ts
+    participant Api as api(http/mock)
+    participant AdminR as admin.routes.js
+    participant MetaR as meta.routes.js
+    participant Biz as 业务 service/route
+    participant Rbac as middleware/rbac.js
+    participant Perm as config/permissions.js  canDo
+    participant Cat as services/permissionCatalog.js
+    participant RoleCat as services/roleCatalog.js
+    participant DB as SQLite
+    participant Audit as lib/audit.js
+
+    %% ══════════ 流程 1：服务启动预热 ══════════
+    rect rgb(232, 245, 233)
+    note over DB, Cat: 流程 1 · 服务启动（db.js）
+    DB->>DB: migrations.run() 执行至 v18
+    note right of DB: v18 建 permission_rules + permission_actions；<br/>种子源 = DEFAULT_PERMISSIONS + ACTION_META；<br/>INSERT OR IGNORE 幂等，不覆盖管理员改动；<br/>reconcile：补代码新增 action，标记 orphan
+    DB->>RoleCat: refreshRoleCatalog(db)
+    RoleCat->>DB: SELECT role_key, name, scope, order_no, enabled FROM roles
+    RoleCat-->>DB: Map<role_key, RoleDef> 就绪
+    DB->>Cat: refreshPermissionCatalog(db)
+    Cat->>DB: SELECT action, role_key FROM permission_rules WHERE granted = 1
+    Cat->>DB: SELECT * FROM permission_actions ORDER BY group_key, order_no
+    Cat-->>DB: Map<action, Set<role_key>> + ActionMeta[] 就绪，loaded = true
+    end
+
+    %% ══════════ 流程 2：业务接口权限判定（33 个调用点零改动） ══════════
+    rect rgb(255, 243, 224)
+    note over User, DB: 流程 2 · 业务写操作鉴权（例：PATCH /wbs/:id）
+    User->>Biz: PATCH /api/wbs/:id  (requireAuth 已挂 req.user)
+    Biz->>DB: 查节点拿 projectId
+    Biz->>Rbac: assertWritable(db, projectId)
+    Rbac->>DB: SELECT * FROM projects WHERE id=?
+    alt 项目已结项 / 已终止
+        Rbac--xUser: E_PROJECT_ARCHIVED (403)
+    end
+    Biz->>Rbac: assertCan(db, req, 'wbs:edit', projectId)
+    Rbac->>DB: SELECT role_key FROM user_roles WHERE user_open_id=?
+    Rbac->>DB: SELECT project_role FROM project_members WHERE project_id=? AND user_open_id=?
+    Rbac->>Perm: canDo(globalRoles[], 'wbs:edit', projectRoles[])
+
+    Perm->>Perm: ① globalRoles 为空 → false
+    Perm->>Perm: ② admin 短路：含 'admin' → true
+    note right of Perm: ★ 早于任何缓存/DB 读取，<br/>配置写坏也不锁死后台
+    Perm->>Perm: ③ key = ACTION_KEY[action] ?? action（保留引擎别名）
+    Perm->>Cat: isLoaded() && 规则非空 ?
+    alt 缓存就绪
+        Cat-->>Perm: getActionRoles('wbs:edit') → Set{admin,pmo,pm,tl}
+    else 缓存未就绪 / 规则为空（降级）
+        Perm->>Perm: 回落 DEFAULT_PERMISSIONS['wbs:edit'].roles
+        note right of Perm: 最坏退回今日行为，<br/>而非全员 403
+    end
+    Perm->>RoleCat: isGlobalRole(r) 逐个判定
+    RoleCat-->>Perm: scope
+    Perm->>Perm: ⑤ global 角色跨项目命中？<br/>⑥ project 角色项目内命中？
+    Perm-->>Rbac: boolean
+
+    alt 未通过
+        Rbac--xUser: E_FORBIDDEN (403)
+    else 通过
+        Rbac-->>Biz: req.user
+        Biz->>DB: 业务写入
+        Biz-->>User: {code, data, message}
+    end
+    end
+
+    %% ══════════ 流程 3：管理员编辑并保存矩阵 ══════════
+    rect rgb(227, 242, 253)
+    note over Admin, Audit: 流程 3 · 管理员保存权限矩阵（核心新增能力）
+    Admin->>Page: 打开「权限矩阵」
+    Page->>Api: listRoles()
+    Api->>AdminR: GET /api/admin/roles
+    AdminR-->>Page: Role[]（列头，按 order_no）
+    Page->>Api: listPermissionActions()
+    Api->>AdminR: GET /api/admin/permission-actions
+    AdminR->>Cat: getActionMeta()
+    AdminR-->>Page: PermissionAction[]（行 + 分组 + orphan 标记）
+    Page->>Api: getPermissionMatrix()
+    Api->>AdminR: GET /api/admin/permissions
+    AdminR->>Cat: snapshot()
+    AdminR-->>Page: { matrix: {action: roleKey[]}, updatedAt }
+    note right of Page: admin 列强制 ✔ 且禁用；<br/>project:edit / report:write 行显示 ⓘ 归属约束
+
+    Admin->>Page: 勾选/取消若干单元格
+    Page->>Page: 累积 dirty 变更集（不立即提交）
+    Admin->>Page: 点「保存」
+    alt 存在某 action 授权角色为空
+        Page->>Admin: 弹窗确认「该权限将仅 admin 可用」
+    end
+    Page->>Api: savePermissions({ changes: [{action, roleKey, granted}] })
+    Api->>AdminR: PUT /api/admin/permissions
+    AdminR->>AdminR: requireGlobalRole('admin') 闸门
+    AdminR->>AdminR: 校验 action / roleKey 存在
+    alt roleKey === 'admin' && granted === false
+        AdminR--xPage: E_VALIDATION「系统管理员权限不可取消」
+        note right of AdminR: ★ 防锁死护栏
+    end
+    AdminR->>DB: BEGIN
+    loop 每条 change
+        AdminR->>DB: INSERT INTO permission_rules ... ON CONFLICT(action, role_key) DO UPDATE
+    end
+    AdminR->>DB: COMMIT
+    AdminR->>Cat: refreshPermissionCatalog(db)
+    Cat-->>AdminR: 缓存已刷新（无需重启即生效）
+    AdminR->>Audit: permission.rule.update {action, roleKey, from, to} 逐条
+    AdminR-->>Page: 回写后矩阵快照
+    Page->>Api: getEffectivePermissions()
+    Api->>MetaR: GET /api/meta/permissions
+    MetaR->>Cat: snapshot()
+    MetaR-->>Page: { matrix }
+    Page->>WebPerm: hydratePermissions(matrix)
+    note right of WebPerm: 当前会话按钮显隐立即跟随
+    Page-->>Admin: toast「已保存」
+    end
+
+    %% ══════════ 流程 4：恢复默认（R1 自救手段） ══════════
+    rect rgb(255, 235, 238)
+    note over Admin, Audit: 流程 4 · 恢复默认（配置写错时的自救）
+    Admin->>Page: 点「恢复默认」→ 二次确认
+    Page->>Api: resetPermissions()
+    Api->>AdminR: POST /api/admin/permissions/reset
+    AdminR->>AdminR: requireGlobalRole('admin')
+    AdminR->>DB: BEGIN
+    AdminR->>DB: DELETE FROM permission_rules
+    loop DEFAULT_PERMISSIONS 每个 action x 每个授权角色
+        AdminR->>DB: INSERT INTO permission_rules (granted=1, updated_by='system:reset')
+    end
+    AdminR->>DB: COMMIT
+    AdminR->>Cat: refreshPermissionCatalog(db)
+    AdminR->>Audit: permission.reset {changedCount}
+    AdminR-->>Page: 默认矩阵快照
+    Page-->>Admin: 「已恢复出厂配置」
+    end
+
+    %% ══════════ 流程 5：前端登录 hydrate 与降级 ══════════
+    rect rgb(243, 229, 245)
+    note over User, MetaR: 流程 5 · 登录后前端权限镜像注入
+    User->>Api: 登录成功
+    Api->>MetaR: GET /api/meta/permissions (requireAuth)
+    alt 拉取成功
+        MetaR->>Cat: snapshot()
+        MetaR-->>WebPerm: hydratePermissions(matrix)
+        note right of WebPerm: RUNTIME_PERMISSIONS 生效
+    else 拉取失败 / mock 模式无后端
+        WebPerm->>WebPerm: 保持 RUNTIME_PERMISSIONS = null
+        note right of WebPerm: canDo 回落 DEFAULT_PERMISSIONS；<br/>仅影响按钮显隐，安全边界仍在后端
+    end
+    User->>WebPerm: canDo(myRoles, 'wbs:edit', projectRoles)
+    WebPerm-->>User: boolean（按钮显隐）
+    note over User, Perm: ⚠ 前端结果仅供显隐；<br/>任何写操作服务端必再判一次（流程 2）
+    end

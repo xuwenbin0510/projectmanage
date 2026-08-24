@@ -9,8 +9,9 @@
  *        （A/C 三级 serial、B 二级），`templateKey='project:'+type`；其余类型 →
  *        `enums.REVIEW_TEMPLATES[reviewType]`，`templateKey=tpl.key`。
  *  - D3：角色绑定优先级 `assignees[idx]` 覆盖 > 项目成员 `project_role===role` >
- *        全局用户 `global_role===role` > `REVIEW_ROLE_FALLBACK_ORDER` 兜底；
- *        `customer_rep` 走兜底；绑不到人 `assigneeName='待指派'`、`assigneeOpenId=null`。
+ *        全局用户 `global_role===role`（仅全局视角角色可跨项目兜底，池取自 `roles`
+ *        表 scope=global 的启用角色，按 order_no）；项目视角角色缺成员即「待指派」，
+ *        绝不从全局拉人；绑不到人 `assigneeName='待指派'`、`assigneeOpenId=null`。
  *  - D4：**admin 兜底可批/驳任意当前步骤**（serial=steps[currentStep]、
  *        parallel_veto=首个 current step）——与 Mock `canDecide`（仅按 assignee 匹配）
  *        有差异，属预期，见 `canDecide` 注释。
@@ -34,6 +35,7 @@ const { writeAudit, diffEntry } = require('../lib/audit');
 const enums = require('../config/enums');
 const milestoneService = require('./milestone.service');
 const { resolveGlobalRoles } = require('../middleware/auth');
+const roleCatalog = require('./roleCatalog');
 
 /* ── 行 → API 对象 ──────────────────────────────────── */
 
@@ -259,14 +261,18 @@ function buildSteps(db, reviewId, projectId, chain, assignees) {
   return roleList.map(function (role, idx) {
     let openId = mappers.toStr(assigneeList[idx] || '');
     if (!openId) openId = membersByRole[role] || '';
-    if (!openId) openId = globalByRole[role] || '';
-    if (!openId) {
-      /* 兜底（含 customer_rep 等虚拟角色） */
-      for (let i = 0; i < enums.REVIEW_ROLE_FALLBACK_ORDER.length; i += 1) {
-        const candidate = enums.REVIEW_ROLE_FALLBACK_ORDER[i];
-        if (globalByRole[candidate]) {
-          openId = globalByRole[candidate];
-          break;
+    /* 全局视角角色：项目成员里不会有（项目成员是 project scope），只能从全局用户兜底；
+       项目视角角色：仅项目内有效，缺成员则「待指派」，绝不从全局拉人。 */
+    if (!openId && roleCatalog.isGlobalRole(role)) {
+      openId = globalByRole[role] || '';
+      if (!openId) {
+        // 全局兜底池（scope=global 的启用角色，按 order_no），从 roles 表实时取
+        const fallbacks = roleCatalog.globalFallbacks();
+        for (let i = 0; i < fallbacks.length; i += 1) {
+          if (globalByRole[fallbacks[i]]) {
+            openId = globalByRole[fallbacks[i]];
+            break;
+          }
         }
       }
     }
