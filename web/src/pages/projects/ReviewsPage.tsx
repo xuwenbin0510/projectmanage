@@ -16,6 +16,7 @@ import { ReviewStepper } from '@/components/review/ReviewStepper';
 import { DecisionDialog } from '@/components/review/DecisionDialog';
 import type { DecisionAction } from '@/components/review/DecisionDialog';
 import type { Review, ReviewType } from '@/types/review';
+import type { Role } from '@/types/project';
 import type { CreateReviewPayload, DecisionPayload } from '@/api/contract';
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
@@ -46,6 +47,17 @@ export function ReviewsPage(): JSX.Element {
   const [title, setTitle] = useState('');
   const [target, setTarget] = useState<Review | null>(null);
   const [action, setAction] = useState<DecisionAction>('approve');
+  const [roles, setRoles] = useState<Role[]>([]);
+
+  const roleNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    roles.forEach((r) => { if (r.enabled) map[r.roleKey] = r.name; });
+    return map;
+  }, [roles]);
+
+  useEffect(() => {
+    api.listRoles().then(setRoles).catch(() => {});
+  }, []);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -183,7 +195,7 @@ export function ReviewsPage(): JSX.Element {
                     borderTop: `1px solid ${tokens.border.subtle}`,
                   }}
                 >
-                  <ReviewStepper review={r} />
+                  <ReviewStepper review={r} roleNameMap={roleNameMap} />
                 </Box>
               </Paper>
             );

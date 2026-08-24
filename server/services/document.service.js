@@ -137,23 +137,25 @@ function deriveTemplateDocs(db, projectId, tplRow) {
 }
 
 /**
- * 懒派生守卫：项目无任何模板清单项时按模板补派生（幂等）。
+ * 懒派生守卫：当前生效模板的交付物尚未派生时按模板补派生（幂等）。
  * @param {import('better-sqlite3').Database} db
  * @param {string} projectId
  * @returns {number} 本次派生的条目数（0 = 无需派生）
  */
 function ensureTemplateDerived(db, projectId) {
-  /* D06：只对模板派生项（TPL- 前缀）判重——项目自定义必交付项（CUS-）不干扰模板懒派生 */
-  const has = db
-    .prepare("SELECT COUNT(*) c FROM project_documents WHERE project_id = ? AND template_key LIKE 'TPL-%'")
-    .get(projectId).c;
-  if (has > 0) return 0;
-  const p = db.prepare('SELECT type FROM projects WHERE id = ?').get(projectId);
+  const p = db.prepare('SELECT type, template_id FROM projects WHERE id = ?').get(projectId);
   if (!p) return 0;
   const tpl = db
     .prepare('SELECT * FROM lifecycle_templates WHERE project_type = ? AND is_active = 1 ORDER BY version DESC LIMIT 1')
     .get(String(p.type));
   if (!tpl) return 0;
+  /* 修复 D-BUG：按「当前生效模板 id」判重，而非笼统的 'TPL-%' 前缀。
+     旧逻辑只要有任何 TPL- 前缀记录就认为“已派生”，导致切换类型后
+     旧类型残留的自动交付物（如 TPL-B-*）让新类型永远补不上、质量门失控。 */
+  const has = db
+    .prepare("SELECT COUNT(*) c FROM project_documents WHERE project_id = ? AND template_key LIKE ?")
+    .get(projectId, String(tpl.id) + '-%').c;
+  if (has > 0) return 0;
   return deriveTemplateDocs(db, projectId, tpl);
 }
 

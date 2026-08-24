@@ -77,4 +77,46 @@ router.get(
   }),
 );
 
+const permissionCatalog = require('../services/permissionCatalog');
+
+/**
+ * GET /api/meta/permissions —— 权限矩阵只读元数据（角色 + 权限点分组），
+ * 供后台「权限矩阵」页渲染列头 / 行分组。仅 requireAuth（矩阵本身只读展示）。
+ * 真实授权由后端 canDo 把关，前端矩阵只控制按钮显隐。
+ */
+router.get(
+  '/meta/permissions',
+  requireAuth,
+  asyncHandler(async function getMetaPermissions(req, res) {
+    res.json(ok({
+      roles: db.prepare('SELECT role_key AS roleKey, name, scope, enabled FROM roles WHERE enabled = 1 ORDER BY order_no ASC').all(),
+      actions: permissionCatalog.allActions().filter(function (a) { return a.enabled; }),
+    }));
+  }),
+);
+
+/**
+ * GET /api/meta/permission-matrix —— 当前生效矩阵（所有登录用户可读，用于前端按钮显隐 hydrate）。
+ * 不含写接口；仅返回 action → { roleKey: granted }（启用角色 + 启用 action），
+ * 与后端 permissionCatalog.rolesFor 同源，确保前端 canDo 与后端一致。
+ */
+router.get(
+  '/meta/permission-matrix',
+  requireAuth,
+  asyncHandler(async function getMetaPermissionMatrix(req, res) {
+    const enabledRoles = new Set(db.prepare('SELECT role_key FROM roles WHERE enabled = 1').all().map(function (x) { return x.role_key; }));
+    const enabledActions = new Set(
+      db.prepare('SELECT action FROM permission_actions WHERE enabled = 1').all().map(function (x) { return x.action; }),
+    );
+    const rules = db.prepare('SELECT action, role_key, granted FROM permission_rules').all();
+    const matrix = {};
+    rules.forEach(function (r) {
+      if (!enabledActions.has(r.action) || !enabledRoles.has(r.role_key) || !r.granted) return;
+      if (!matrix[r.action]) matrix[r.action] = {};
+      matrix[r.action][r.role_key] = true;
+    });
+    res.json(ok({ matrix: matrix }));
+  }),
+);
+
 module.exports = router;

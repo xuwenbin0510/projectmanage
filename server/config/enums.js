@@ -10,25 +10,8 @@
  */
 
 /* ── 角色 ─────────────────────────────────────────── */
-
-/** 全局角色（9 个） */
-const GLOBAL_ROLES = [
-  'admin',
-  'management',
-  'pmo',
-  'pm',
-  'tl',
-  'qa',
-  'cm',
-  'po',
-  'member',
-];
-
-/** 项目角色（7 个） */
-const PROJECT_ROLES = ['pm', 'tl', 'po', 'qa', 'cm', 'pmo', 'member'];
-
-/** 评审链里出现的角色（含虚拟的客户代表） */
-const CHAIN_ROLES = PROJECT_ROLES.concat(['management', 'customer_rep']);
+// 注意：角色目录与视野(scope)的单一来源是 DB `roles` 表（+ server/config/roles-catalog.js 出生种子），
+// 运行时一律读表（server/services/roleCatalog.js），此处不再写死角色清单。
 
 /* ── 项目 ─────────────────────────────────────────── */
 
@@ -168,12 +151,8 @@ const REVIEW_STATUSES = ['草稿', '审批中', '已通过', '已驳回', '已�
 
 const REVIEW_STEP_STATUSES = ['pending', 'current', 'approved', 'rejected', 'skipped'];
 
-/**
- * 审批链角色兜底顺序（B10 D3）：某步骤绑不到「项目成员角色 / 全局角色」时，
- * 按此顺序取第一个有用户可绑的全局角色；`customer_rep` 等虚拟角色也走兜底。
- * ⚠ 与 `web/src/api/mock/index.ts#ROLE_FALLBACK_ORDER`（L98）逐字一致。
- */
-const REVIEW_ROLE_FALLBACK_ORDER = ['pmo', 'management', 'tl', 'qa', 'cm', 'po', 'pm'];
+// 审批链角色兜底顺序不再写死：运行时由 server/services/roleCatalog.js 按 roles 表
+// scope=global 的启用角色动态生成（globalFallbacks）。
 
 /** 评审模板（服务端为准，GET /api/meta 直接下发给前端） */
 const REVIEW_TEMPLATES = {
@@ -181,8 +160,8 @@ const REVIEW_TEMPLATES = {
     key: 'formal',
     label: '正式评审',
     mode: 'parallel_veto',
-    chain: ['pmo', 'tl', 'management', 'customer_rep'],
-    description: '立项/需求/设计/验收 → 管理层 + PMO + TL + 客户代表，一票否决',
+    chain: ['pmo', 'tl', 'management'],
+    description: '立项/需求/设计/验收 → 管理层 + PMO + TL，一票否决',
   },
   technical: {
     key: 'technical',
@@ -202,8 +181,8 @@ const REVIEW_TEMPLATES = {
     key: 'ccb',
     label: 'CCB 变更评审',
     mode: 'serial',
-    chain: ['pm', 'tl', 'po', 'customer_rep'],
-    description: '基线变更 → PM → TL → PO → 客户代表 串行逐级',
+    chain: ['pm', 'tl', 'po'],
+    description: '基线变更 → PM → TL → PO 串行逐级',
   },
   pm_only: {
     key: 'pm_only',
@@ -265,9 +244,6 @@ const AUDIT_ENTITY_TYPES = [
 const USER_STATUSES = ['active', 'disabled'];
 
 module.exports = {
-  GLOBAL_ROLES,
-  PROJECT_ROLES,
-  CHAIN_ROLES,
   PROJECT_TYPES,
   PROJECT_STATUSES,
   PROJECT_TRANSITIONS,
@@ -293,7 +269,6 @@ module.exports = {
   REVIEW_STATUSES,
   REVIEW_STEP_STATUSES,
   REVIEW_TEMPLATES,
-  REVIEW_ROLE_FALLBACK_ORDER,
   CHANGE_TYPES,
   CHANGE_ROUTES,
   CHANGE_STATUSES,

@@ -51,7 +51,6 @@ import type { CloseBlocker, GateChecklistItem, LifecycleTemplate, MilestoneWithG
 import {
   GATE_CONCLUSIONS,
   GATE_ICON,
-  PROJECT_ROLES,
   PROJECT_ROLE_LABEL,
   PROJECT_TRANSITIONS,
   PROJECT_TYPE_LABEL,
@@ -1052,9 +1051,9 @@ export function ProjectOverviewPage(): JSX.Element {
           onChange={(e) => setItemForm((f) => ({ ...f, ownerRole: e.target.value }))}
           fullWidth
         >
-          {PROJECT_ROLES.map((r) => (
-            <MenuItem key={r} value={r}>
-              {r.toUpperCase()}（{PROJECT_ROLE_LABEL[r]}）
+          {roleOptions.map((r) => (
+            <MenuItem key={r.roleKey} value={r.roleKey}>
+              {r.name}
             </MenuItem>
           ))}
         </TextField>
@@ -1132,9 +1131,9 @@ export function ProjectOverviewPage(): JSX.Element {
               onChange={(e) => setGateForm((f) => ({ ...f, ownerRole: e.target.value }))}
               fullWidth
             >
-              {PROJECT_ROLES.map((r) => (
-                <MenuItem key={r} value={r}>
-                  {r.toUpperCase()}（{PROJECT_ROLE_LABEL[r]}）
+              {roleOptions.map((r) => (
+                <MenuItem key={r.roleKey} value={r.roleKey}>
+                  {r.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -1162,9 +1161,9 @@ export function ProjectOverviewPage(): JSX.Element {
                       setGateItems((arr) => arr.map((x, j) => (j === i ? { ...x, ownerRole: e.target.value } : x)))
                     }
                   >
-                    {PROJECT_ROLES.map((r) => (
-                      <MenuItem key={r} value={r}>
-                        {r.toUpperCase()}
+                    {roleOptions.map((r) => (
+                      <MenuItem key={r.roleKey} value={r.roleKey}>
+                        {r.name}
                       </MenuItem>
                     ))}
                   </TextField>
@@ -1210,9 +1209,9 @@ export function ProjectOverviewPage(): JSX.Element {
           onChange={(e) => setEditGateForm((f) => ({ ...f, ownerRole: e.target.value }))}
           fullWidth
         >
-          {PROJECT_ROLES.map((r) => (
-            <MenuItem key={r} value={r}>
-              {r.toUpperCase()}（{PROJECT_ROLE_LABEL[r]}）
+          {roleOptions.map((r) => (
+            <MenuItem key={r.roleKey} value={r.roleKey}>
+              {r.name}
             </MenuItem>
           ))}
         </TextField>

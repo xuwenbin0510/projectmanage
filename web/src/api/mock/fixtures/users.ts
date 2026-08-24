@@ -20,6 +20,7 @@ export function createUsers(): User[] {
     email: `${a.employeeId.toLowerCase()}@astrbytes.com`,
     dept: a.dept,
     avatarUrl: '',
+    unionId: null,
     globalRole: a.globalRole,
     // E1.5：全局职位数组（默认含主职位；演示数据暂为单职位，后台可配置多职位）
     globalRoles: [a.globalRole],

@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { ROUTES } from '@/config/routes';
 
 import { LoginPage } from '@/pages/LoginPage';
+import { ChangePasswordPage } from '@/pages/ChangePasswordPage';
 import { WorkbenchPage } from '@/pages/WorkbenchPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
 import { MetricsPage } from '@/pages/MetricsPage';
@@ -75,6 +76,14 @@ export function AppRouter(): JSX.Element {
           <RedirectIfAuthed>
             <LoginPage />
           </RedirectIfAuthed>
+        }
+      />
+      <Route
+        path="/change-password"
+        element={
+          <RequireAuth>
+            <ChangePasswordPage />
+          </RequireAuth>
         }
       />
 

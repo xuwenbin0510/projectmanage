@@ -9,6 +9,8 @@ const Database = require('better-sqlite3');
 const cfg = require('./config');
 const migrations = require('./server/dal/migrations');
 const seed = require('./server/dal/seed');
+const { refreshRoleCatalog } = require('./server/services/roleCatalog');
+const { loadCatalog } = require('./server/services/permissionCatalog');
 
 // DB_PATH 可能指向挂载盘（如 Render 的 /data/pm.db），父目录不存在时先建出来
 const dir = path.dirname(path.resolve(cfg.DB_PATH));
@@ -25,6 +27,8 @@ db.pragma('foreign_keys = ON');
 
 migrations.run(db);
 seed.run(db);
+refreshRoleCatalog(db); // 预热角色视野缓存（scope 单一真相源 = roles 表）
+loadCatalog(db); // 预热权限矩阵缓存（canDo 数据源 = permission_rules 表）
 
 console.log('[db] ready at %s (schema v%d)', cfg.DB_PATH, migrations.currentVersion(db));
 

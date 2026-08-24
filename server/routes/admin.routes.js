@@ -426,8 +426,11 @@ router.post(
 
 const REVIEW_SCOPES = ['project', 'business'];
 const REVIEW_MODES = ['serial', 'parallel_veto', 'single'];
-/** 审批链合法角色：全局角色 ∪ 项目角色 ∪ 客户代表（formal/ccb 模板用到） */
-const ALLOWED_CHAIN_ROLES = new Set(roleCatalog.allRoleKeys().filter(roleCatalog.isEnabledRole));
+/** 审批链合法角色：全局角色 ∪ 项目角色 ∪ 客户代表（formal 历史模板用到，虚拟角色不在 roles 表） */
+const ALLOWED_CHAIN_ROLES = new Set([
+  ...roleCatalog.allRoleKeys().filter(roleCatalog.isEnabledRole),
+  'customer_rep',
+]);
 
 /**
  * review_templates 行 → API 对象（chain JSON → 数组、active 0/1 → boolean）。
@@ -1063,6 +1066,187 @@ router.delete(
     }
     db.prepare('DELETE FROM roles WHERE role_key = ?').run(roleKey);
     res.json(ok({ roleKey: roleKey }, '已删除'));
+  }),
+);
+
+/* ════════════════════════════════════════════════════════════════
+ * 权限矩阵可配置化（B19 · 阶段二 · T03）
+ *
+ * 数据底座由 v18 迁移建立：permission_rules(PK action,role_key) +
+ * permission_actions(PK action)。运行时 canDo 经 permissionCatalog.rolesFor()
+ * 读取本表（v18 已接线），此处仅提供后台读写 + 重置。
+ *
+ * 防锁死铁律（与 user_roles 同一套思路）：
+ *  - 拒绝取消 admin 对任何 action 的授权（admin 是逃生舱，永远全权）；
+ *  - RBAC_CONFIG_SOURCE === 'constant' 时拒绝任何写（逃生舱已旁路 DB）；
+ *  - 写后 invalidate() + loadCatalog(db) 立即刷新进程内缓存（无需重启）；
+ *  - 每次写都落 audit_logs（旁路，失败不回滚业务）。
+ * ════════════════════════════════════════════════════════════════ */
+
+const permissionCatalog = require('../services/permissionCatalog');
+const { DEFAULT_PERMISSIONS } = require('../config/permissions');
+const { writeAudit } = require('../lib/audit');
+
+/** 逃生舱：constant 模式拒绝写 */
+function assertWritableSource() {
+  if (process.env.RBAC_CONFIG_SOURCE === 'constant') {
+    throw new AppError(ErrorCode.E_FORBIDDEN, '当前 RBAC 配置源为常量模式（RBAC_CONFIG_SOURCE=constant），不可通过后台修改；请改用数据库配置源后重试', { source: 'constant' });
+  }
+}
+
+/** 拉取当前矩阵：action → { roleKey: granted }，仅返回启用角色 + 启用 action */
+function readMatrix() {
+  const enabledRoles = new Set(db.prepare("SELECT role_key FROM roles WHERE enabled = 1").all().map(function (x) { return x.role_key; }));
+  const enabledActions = new Set(
+    db.prepare("SELECT action FROM permission_actions WHERE enabled = 1").all().map(function (x) { return x.action; }),
+  );
+  const rules = db.prepare('SELECT action, role_key, granted FROM permission_rules').all();
+  const out = {};
+  rules.forEach(function (r) {
+    if (!enabledActions.has(r.action)) return;
+    if (!enabledRoles.has(r.role_key)) return;
+    if (!out[r.action]) out[r.action] = {};
+    out[r.action][r.role_key] = !!r.granted;
+  });
+  return out;
+}
+
+/* GET /api/admin/permissions —— 后台矩阵编辑数据源 */
+router.get(
+  '/admin/permissions',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function getPermissionsMatrix(req, res) {
+    res.json(ok({
+      matrix: readMatrix(),
+      roles: db.prepare('SELECT role_key AS roleKey, name, scope, enabled FROM roles WHERE enabled = 1 ORDER BY order_no ASC').all(),
+      actions: permissionCatalog.allActions().filter(function (a) { return a.enabled; }),
+    }));
+  }),
+);
+
+/* PUT /api/admin/permissions —— 批量更新矩阵
+ * body: { matrix: { [action]: { [roleKey]: boolean } } }
+ * 守卫：拒绝取消 admin 任一 action 的授权。 */
+router.put(
+  '/admin/permissions',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function putPermissionsMatrix(req, res) {
+    assertWritableSource();
+    const body = req.body || {};
+    const incoming = body.matrix;
+    if (!incoming || typeof incoming !== 'object') {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, { fields: [{ field: 'matrix', message: 'matrix 必须为对象' }] });
+    }
+
+    const enabledActions = new Set(
+      db.prepare('SELECT action FROM permission_actions WHERE enabled = 1').all().map(function (x) { return x.action; }),
+    );
+    const enabledRoles = new Set(db.prepare('SELECT role_key FROM roles WHERE enabled = 1').all().map(function (x) { return x.role_key; }));
+
+    const tx = db.transaction(function () {
+      Object.keys(incoming).forEach(function (action) {
+        if (!enabledActions.has(action)) return; // 未知 / 停用 action 直接忽略
+        const row = incoming[action] || {};
+        Object.keys(row).forEach(function (roleKey) {
+          if (!enabledRoles.has(roleKey)) return; // 未知 / 停用角色忽略
+          const granted = !!row[roleKey];
+          if (roleKey === 'admin' && !granted) return; // 🔴 防锁死：永不取消 admin 授权
+          db.prepare(
+            'INSERT INTO permission_rules (action, role_key, granted, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) '
+            + 'ON CONFLICT(action, role_key) DO UPDATE SET granted = excluded.granted, updated_at = excluded.updated_at, updated_by = excluded.updated_by',
+          ).run(action, roleKey, granted ? 1 : 0, nowIso(), String((req.user && (req.user.open_id || req.user.openId)) || 'admin'));
+        });
+      });
+    });
+    tx();
+
+    // 写后刷新缓存（即时生效，无需重启）
+    permissionCatalog.invalidate();
+    permissionCatalog.loadCatalog(db);
+
+    // 旁路审计
+    writeAudit(db, req.user, 'permission_matrix', 'permission_rules', 'update', '', '管理员更新权限矩阵', null, { after: { updatedActions: Object.keys(incoming) } });
+
+    res.json(ok({ matrix: readMatrix() }, '权限矩阵已更新，已即时生效'));
+  }),
+);
+
+/* POST /api/admin/permissions/reset —— 恢复默认（重新种入 DEFAULT_PERMISSIONS，清空自定义） */
+router.post(
+  '/admin/permissions/reset',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function resetPermissionsMatrix(req, res) {
+    assertWritableSource();
+
+    const tx = db.transaction(function () {
+      db.prepare('DELETE FROM permission_rules').run();
+      const enabledRoles = new Set(db.prepare('SELECT role_key FROM roles WHERE enabled = 1').all().map(function (x) { return x.role_key; }));
+      Object.keys(DEFAULT_PERMISSIONS).forEach(function (action) {
+        const rule = DEFAULT_PERMISSIONS[action];
+        if (!rule || !Array.isArray(rule.roles)) return;
+        rule.roles.forEach(function (roleKey) {
+          // 仅对启用角色种入；admin 恒 true（DEFAULT_PERMISSIONS 已含）
+          if (!enabledRoles.has(roleKey)) return;
+          db.prepare(
+            'INSERT OR IGNORE INTO permission_rules (action, role_key, granted, updated_at, updated_by) VALUES (?, ?, 1, ?, ?)',
+          ).run(action, roleKey, nowIso(), 'reset');
+        });
+      });
+    });
+    tx();
+
+    permissionCatalog.invalidate();
+    permissionCatalog.loadCatalog(db);
+
+    writeAudit(db, req.user, 'permission_matrix', 'permission_rules', 'reset', '', '管理员重置权限矩阵为默认', null, { after: { source: 'DEFAULT_PERMISSIONS' } });
+
+    res.json(ok({ matrix: readMatrix() }, '已恢复默认权限矩阵'));
+  }),
+);
+
+/* GET /api/admin/permission-actions —— 权限动作元数据（后台只读展示 + 分组） */
+router.get(
+  '/admin/permission-actions',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function getPermissionActions(req, res) {
+    res.json(ok(permissionCatalog.allActions().filter(function (a) { return a.enabled; })));
+  }),
+);
+
+/* PUT /api/admin/permission-actions —— 编辑 action 元数据（label/description/group_label/order_no；不开放增删） */
+router.put(
+  '/admin/permission-actions',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function putPermissionActions(req, res) {
+    assertWritableSource();
+    const body = req.body || {};
+    const list = Array.isArray(body.actions) ? body.actions : [];
+
+    const tx = db.transaction(function () {
+      list.forEach(function (a) {
+        if (!a || !a.action) return;
+        const sets = [];
+        const args = [];
+        if (a.label !== undefined) { sets.push('label = ?'); args.push(String(a.label)); }
+        if (a.description !== undefined) { sets.push('description = ?'); args.push(String(a.description)); }
+        if (a.group_label !== undefined) { sets.push('group_label = ?'); args.push(String(a.group_label)); }
+        if (a.order_no !== undefined) { sets.push('order_no = ?'); args.push(Number(a.order_no)); }
+        if (!sets.length) return;
+        args.push(a.action);
+        db.prepare('UPDATE permission_actions SET ' + sets.join(', ') + ' WHERE action = ?').run(args);
+      });
+    });
+    tx();
+
+    permissionCatalog.invalidate();
+    permissionCatalog.loadCatalog(db);
+
+    res.json(ok(permissionCatalog.allActions().filter(function (a) { return a.enabled; }), '权限动作元数据已更新'));
   }),
 );
 

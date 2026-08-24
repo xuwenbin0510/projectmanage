@@ -30,8 +30,6 @@ import { api } from '@/api/client';
 import type { CreateProjectPayload } from '@/api/contract';
 import type { ClassifyInput, ClassifyResult, LifecycleTemplate, ProjectRole, ProjectType, TemplateTeamRule, User } from '@/types/project';
 import {
-  PROJECT_ROLES,
-  PROJECT_ROLE_LABEL,
   PROJECT_TYPES,
   PROJECT_TYPE_LABEL,
   PROJECT_TYPE_SHORT,
@@ -86,7 +84,7 @@ interface CreateForm {
 const STEPS = ['基本信息', '分类判定', '里程碑规划', '团队组建', '确认提交'] as const;
 
 /** 按团队约束规则检查成员；不满足返回错误文案，满足返回 null（与后端 assertMemberCardinality 同口径） */
-function checkTeamRules(members: MemberDraft[], rules: TemplateTeamRule[]): string | null {
+function checkTeamRules(members: MemberDraft[], rules: TemplateTeamRule[], roleNameMap: Record<string, string>): string | null {
   for (const rule of rules) {
     const count = members.filter((m) => m.role === rule.role).length;
     const min = Number(rule.min) || 0;
@@ -94,15 +92,15 @@ function checkTeamRules(members: MemberDraft[], rules: TemplateTeamRule[]): stri
     const max = maxRaw === -1 ? Infinity : maxRaw;
     if (count < min || count > max) {
       if (rule.role === 'po' && count === 0 && min === 1) return '模板要求必须指定产品负责人（PO）';
-      return `模板要求角色「${PROJECT_ROLE_LABEL[rule.role]}」${min}~${maxRaw === -1 ? '不限' : maxRaw} 人，当前 ${count} 人`;
+      return `模板要求角色「${roleNameMap[rule.role] ?? rule.role}」${min}~${maxRaw === -1 ? '不限' : maxRaw} 人，当前 ${count} 人`;
     }
   }
   return null;
 }
 
 /** 团队约束的展示文案（用于提示 Alert 与确认页） */
-function teamRuleLabel(r: TemplateTeamRule): string {
-  return `${PROJECT_ROLE_LABEL[r.role]} ${r.min}~${r.max === -1 ? '不限' : r.max} 人`;
+function teamRuleLabel(r: TemplateTeamRule, roleNameMap: Record<string, string>): string {
+  return `${roleNameMap[r.role] ?? r.role} ${r.min}~${r.max === -1 ? '不限' : r.max} 人`;
 }
 
 const baseSchema = z.object({
@@ -172,6 +170,31 @@ export function ProjectCreatePage(): JSX.Element {
 
   const { data: users } = useAsync<User[]>(() => api.listUsers(), []);
   const userList: User[] = users ?? [];
+
+  /** 动态职位目录（单一真相源 = 后台 roles 表，替代写死的 PROJECT_ROLES / PROJECT_ROLE_LABEL） */
+  const [roleOptions, setRoleOptions] = useState<Array<{ roleKey: string; name: string }>>([]);
+  const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const rs = await api.listRoles();
+        if (!alive) return;
+        const opts = rs.filter((r) => r.enabled && r.scope === 'project').sort((a, b) => a.orderNo - b.orderNo);
+        setRoleOptions(opts.map((r) => ({ roleKey: r.roleKey, name: r.name })));
+        const map: Record<string, string> = {};
+        rs.forEach((r) => {
+          map[r.roleKey] = r.name;
+        });
+        setRoleNameMap(map);
+      } catch {
+        /* 失败则回退 roleKey 原文 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const classifyInput: ClassifyInput = useMemo(
     () => ({
@@ -341,7 +364,7 @@ export function ProjectCreatePage(): JSX.Element {
       if (new Set(keys).size !== keys.length) next.members = '同一成员的同一角色不能重复添加';
       else {
         // 团队约束：读模板 definition.team（缺省回落系统默认，与后端 assertMemberCardinality 同口径）
-        const ruleMsg = checkTeamRules(form.members, teamRules);
+        const ruleMsg = checkTeamRules(form.members, teamRules, roleNameMap);
         if (ruleMsg) next.members = ruleMsg;
       }
     }
@@ -376,7 +399,7 @@ export function ProjectCreatePage(): JSX.Element {
     if (!hit) {
       const combos: Array<{ user: User; role: ProjectRole }> = [];
       for (const u of userList) {
-        for (const r of PROJECT_ROLES) combos.push({ user: u, role: r });
+        for (const r of roleOptions) combos.push({ user: u, role: r.roleKey as ProjectRole });
       }
       const found = combos.find((c) => !used.has(`${c.user.openId}::${c.role}`));
       if (found) {
@@ -612,7 +635,7 @@ export function ProjectCreatePage(): JSX.Element {
   const renderMembers = (): JSX.Element => (
     <Stack spacing={2}>
       <Alert severity="info" variant="outlined">
-        团队约束（{selectedTpl ? `模板「${selectedTpl.name}」` : '系统默认'}）：{teamRules.map(teamRuleLabel).join('；')}。
+        团队约束（{selectedTpl ? `模板「${selectedTpl.name}」` : '系统默认'}）：{teamRules.map((r) => teamRuleLabel(r, roleNameMap)).join('；')}。
         <br />
         同一人可担任多个角色（如既是 PM 又是 TL），请<strong>分行添加</strong>。
       </Alert>
@@ -655,15 +678,15 @@ export function ProjectCreatePage(): JSX.Element {
               onChange={(e) => updateMember(i, { role: e.target.value as ProjectRole })}
               sx={{ width: 170 }}
             >
-              {PROJECT_ROLES.map((r) => (
+              {roleOptions.map((r) => (
                 <MenuItem
-                  key={r}
-                  value={r}
+                  key={r.roleKey}
+                  value={r.roleKey}
                   disabled={form.members.some(
-                    (x, xi) => xi !== i && x.userOpenId === m.userOpenId && x.role === r,
+                    (x, xi) => xi !== i && x.userOpenId === m.userOpenId && x.role === r.roleKey,
                   )}
                 >
-                  {PROJECT_ROLE_LABEL[r]}
+                  {r.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -712,7 +735,7 @@ export function ProjectCreatePage(): JSX.Element {
         {selectedTpl ? `${selectedTpl.name} · v${selectedTpl.version}` : '系统默认模板'}
       </FieldRow>
       <FieldRow label="团队约束">
-        {teamRules.map(teamRuleLabel).join('；')}
+        {teamRules.map((r) => teamRuleLabel(r, roleNameMap)).join('；')}
       </FieldRow>
       <FieldRow label="里程碑">
         {form.milestones.length} 个里程碑 · 创建后可在里程碑页自由增删改

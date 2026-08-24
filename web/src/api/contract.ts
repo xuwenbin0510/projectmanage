@@ -232,6 +232,39 @@ export interface MetaData {
   wipDefault: number;
 }
 
+/* ── 权限矩阵可配置化（B19 阶段二）类型 ───────────── */
+
+export interface PermissionActionMeta {
+  action: string;
+  label: string;
+  group_key: string;
+  group_label: string;
+  description: string;
+  order_no: number;
+  enabled: boolean;
+  builtin: boolean;
+}
+
+export interface PermissionRoleMeta {
+  roleKey: string;
+  name: string;
+  scope: 'global' | 'project';
+  enabled: boolean;
+}
+
+/** 后台矩阵编辑数据源：action → { roleKey: granted }（仅启用角色 + 启用 action） */
+export interface PermissionMatrixResponse {
+  matrix: Record<string, Record<string, boolean>>;
+  roles: PermissionRoleMeta[];
+  actions: PermissionActionMeta[];
+}
+
+/** 只读元数据（前端矩阵页渲染列头 / 行分组用） */
+export interface MetaPermissionsResponse {
+  roles: PermissionRoleMeta[];
+  actions: PermissionActionMeta[];
+}
+
 /* ── 客户端接口（Mock / HTTP 双实现共用） ───────────── */
 
 /**
@@ -395,6 +428,22 @@ export interface ApiClient {
   updateRole(roleKey: string, patch: UpdateRolePayload): Promise<Role>;
   deleteRole(roleKey: string): Promise<{ roleKey: string }>;
   listTemplates(): Promise<LifecycleTemplate[]>;
+
+  /* B19 阶段二：权限矩阵可配置化（仅 admin 写，只读元数据 requireAuth） */
+  /** 后台矩阵编辑数据源：当前生效矩阵 + 角色 + 动作元数据（仅 admin） */
+  getPermissionMatrix(): Promise<PermissionMatrixResponse>;
+  /** 批量更新矩阵：{ matrix: { [action]: { [roleKey]: boolean } } }（仅 admin；永不取消 admin） */
+  updatePermissionMatrix(matrix: Record<string, Record<string, boolean>>): Promise<PermissionMatrixResponse>;
+  /** 恢复默认（重新种入 DEFAULT_PERMISSIONS；仅 admin） */
+  resetPermissionMatrix(): Promise<PermissionMatrixResponse>;
+  /** 权限动作元数据（仅 admin） */
+  getPermissionActions(): Promise<PermissionActionMeta[]>;
+  /** 编辑动作元数据（label/description/group_label/order_no；不开放增删；仅 admin） */
+  updatePermissionActions(actions: Array<Partial<PermissionActionMeta> & { action: string }>): Promise<PermissionActionMeta[]>;
+  /** 只读元数据（角色 + 动作分组），供矩阵页渲染（requireAuth） */
+  getMetaPermissions(): Promise<MetaPermissionsResponse>;
+  /** 当前生效矩阵（所有登录用户可读，用于前端按钮显隐 hydrate；requireAuth） */
+  getMetaPermissionMatrix(): Promise<{ matrix: Record<string, Record<string, boolean>> }>;
   resetDemoData(): Promise<void>;
 
   /* 阶段三：生命周期模板管理（仅 admin） */

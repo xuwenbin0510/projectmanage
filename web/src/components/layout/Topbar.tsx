@@ -77,7 +77,18 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
           <MenuIcon fontSize="small" />
         </IconButton>
         {isMobile && (
-          <Typography sx={{ fontWeight: 600, fontSize: 15 }}>太空字节 PM</Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Box
+              component="img"
+              src="/logo_dark.png"
+              alt="logo"
+              sx={{ height: 24, width: 'auto', display: 'block', objectFit: 'contain' }}
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
+            />
+            <Typography sx={{ fontWeight: 600, fontSize: 15 }}>项目管理系统</Typography>
+          </Stack>
         )}
       </Stack>
 

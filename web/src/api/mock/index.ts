@@ -64,10 +64,14 @@ import type {
   ChangePayloadInput,
   AuditQuery,
   MetaData,
+  PermissionMatrixResponse,
+  PermissionActionMeta,
+  MetaPermissionsResponse,
 } from '../contract';
 import type { ReviewTemplateConfig, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, CreateTemplatePayload, UpdateTemplatePayload } from '@/types/project';
 import { getDb, saveDb, resetDb } from './db';
 import type { MockDb } from './db';
+import { defaultPermissionRules } from './db';
 import { delay } from './delay';
 import {
   classifyProject,
@@ -3915,6 +3919,110 @@ export class MockApiClient implements ApiClient {
     db.roles.splice(idx, 1);
     saveDb();
     return { roleKey };
+  }
+
+  /* B19 阶段二：权限矩阵可配置化（mock 实现，与后端同构） */
+
+  /** 当前生效矩阵（所有登录用户可读，用于前端按钮显隐 hydrate） */
+  async getMetaPermissionMatrix(): Promise<{ matrix: Record<string, Record<string, boolean>> }> {
+    await delay(40);
+    const db = getDb();
+    const enabledRoles = new Set(db.roles.filter((r) => r.enabled).map((r) => r.roleKey));
+    const enabledActions = new Set(db.permissionActions.filter((a) => a.enabled).map((a) => a.action));
+    const matrix: Record<string, Record<string, boolean>> = {};
+    db.permissionRules.forEach((r) => {
+      if (!r.granted || !enabledActions.has(r.action) || !enabledRoles.has(r.roleKey)) return;
+      if (!matrix[r.action]) matrix[r.action] = {};
+      matrix[r.action][r.roleKey] = true;
+    });
+    return { matrix };
+  }
+
+  /** 后台矩阵编辑数据源（仅 admin） */
+  async getPermissionMatrix(): Promise<PermissionMatrixResponse> {
+    await delay(60);
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    const enabledRoles = db.roles.filter((r) => r.enabled).map((r) => ({ roleKey: r.roleKey, name: r.name, scope: r.scope as 'global' | 'project', enabled: r.enabled }));
+    const matrix: Record<string, Record<string, boolean>> = {};
+    db.permissionRules.forEach((r) => {
+      if (!matrix[r.action]) matrix[r.action] = {};
+      matrix[r.action][r.roleKey] = !!r.granted;
+    });
+    return {
+      matrix,
+      roles: enabledRoles,
+      actions: db.permissionActions.filter((a) => a.enabled).map((a) => ({ ...a })),
+    };
+  }
+
+  /** 批量更新矩阵（仅 admin；永不取消 admin） */
+  async updatePermissionMatrix(matrix: Record<string, Record<string, boolean>>): Promise<PermissionMatrixResponse> {
+    await delay(80);
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    const enabledRoles = new Set(db.roles.filter((r) => r.enabled).map((r) => r.roleKey));
+    const enabledActions = new Set(db.permissionActions.filter((a) => a.enabled).map((a) => a.action));
+    // 清除现有规则（重新种入传入值）
+    db.permissionRules = db.permissionRules.filter((r) => !enabledActions.has(r.action));
+    Object.keys(matrix).forEach((action) => {
+      if (!enabledActions.has(action)) return;
+      const row = matrix[action] || {};
+      Object.keys(row).forEach((roleKey) => {
+        if (!enabledRoles.has(roleKey)) return;
+        const granted = !!row[roleKey];
+        if (roleKey === 'admin' && !granted) return; // 🔴 防锁死
+        db.permissionRules.push({ action, roleKey, granted });
+      });
+    });
+    saveDb();
+    return this.getPermissionMatrix();
+  }
+
+  /** 恢复默认（仅 admin） */
+  async resetPermissionMatrix(): Promise<PermissionMatrixResponse> {
+    await delay(80);
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    db.permissionRules = defaultPermissionRules();
+    saveDb();
+    return this.getPermissionMatrix();
+  }
+
+  /** 权限动作元数据（仅 admin） */
+  async getPermissionActions(): Promise<PermissionActionMeta[]> {
+    await delay(40);
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    return db.permissionActions.filter((a) => a.enabled).map((a) => ({ ...a }));
+  }
+
+  /** 编辑动作元数据（仅 admin） */
+  async updatePermissionActions(actions: Array<Partial<PermissionActionMeta> & { action: string }>): Promise<PermissionActionMeta[]> {
+    await delay(60);
+    const db = getDb();
+    assertCan(db, 'user.manage');
+    actions.forEach((a) => {
+      if (!a.action) return;
+      const target = db.permissionActions.find((x) => x.action === a.action);
+      if (!target) return;
+      if (a.label !== undefined) target.label = a.label;
+      if (a.description !== undefined) target.description = a.description;
+      if (a.group_label !== undefined) target.group_label = a.group_label;
+      if (a.order_no !== undefined) target.order_no = a.order_no;
+    });
+    saveDb();
+    return db.permissionActions.filter((x) => x.enabled).map((x) => ({ ...x }));
+  }
+
+  /** 只读元数据（角色 + 动作分组，requireAuth） */
+  async getMetaPermissions(): Promise<MetaPermissionsResponse> {
+    await delay(40);
+    const db = getDb();
+    currentUser(db);
+    const roles = db.roles.filter((r) => r.enabled).map((r) => ({ roleKey: r.roleKey, name: r.name, scope: r.scope as 'global' | 'project', enabled: r.enabled }));
+    const actions = db.permissionActions.filter((a) => a.enabled).map((a) => ({ ...a }));
+    return { roles, actions };
   }
 
   async listTemplates(): Promise<LifecycleTemplate[]> {

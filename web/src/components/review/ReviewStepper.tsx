@@ -33,14 +33,17 @@ interface ReviewStepperProps {
   review: Review;
   /** 紧凑模式：单行横向展示（列表内嵌用） */
   dense?: boolean;
+  /** 角色中文名映射（动态从 roles 表取）；缺省时回落写死常量 */
+  roleNameMap?: Record<string, string>;
 }
 
 /**
  * 审批链可视化：串行逐级 / 并行一票否决 / 单人决议
  * @prd P0-09 P0-10
  */
-export function ReviewStepper({ review, dense = false }: ReviewStepperProps): JSX.Element {
+export function ReviewStepper({ review, dense = false, roleNameMap }: ReviewStepperProps): JSX.Element {
   const steps: ReviewStep[] = review.steps;
+  const roleLabel = (key: string): string => roleNameMap?.[key] ?? CHAIN_ROLE_LABEL[key] ?? key;
 
   if (dense) {
     return (
@@ -49,14 +52,14 @@ export function ReviewStepper({ review, dense = false }: ReviewStepperProps): JS
           <Tooltip
             key={s.id}
             arrow
-            title={`${CHAIN_ROLE_LABEL[s.role] ?? s.role} · ${s.assigneeName} · ${REVIEW_STEP_STATUS_LABEL[s.status]}${
+            title={`${roleLabel(s.role)} · ${s.assigneeName} · ${REVIEW_STEP_STATUS_LABEL[s.status]}${
               s.comment ? `：${s.comment}` : ''
             }`}
           >
             <Stack direction="row" spacing={0.5} alignItems="center">
               <StepIcon status={s.status} />
               <Typography variant="caption" sx={{ color: toneColor[STEP_TONE[s.status]] }}>
-                {s.assigneeName || CHAIN_ROLE_LABEL[s.role] || s.role}
+                {s.assigneeName || roleLabel(s.role)}
               </Typography>
               {i < steps.length - 1 && review.mode === 'serial' && (
                 <Typography variant="caption" color="text.secondary">
@@ -90,7 +93,7 @@ export function ReviewStepper({ review, dense = false }: ReviewStepperProps): JS
               <Box sx={{ pb: i < steps.length - 1 ? 1.75 : 0, minWidth: 0, flex: 1 }}>
                 <Stack direction="row" spacing={1} alignItems="baseline" flexWrap="wrap" useFlexGap>
                   <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
-                    {CHAIN_ROLE_LABEL[s.role] ?? s.role}
+                    {roleLabel(s.role)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     {s.assigneeName || '待指派'}

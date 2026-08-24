@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 import {
   Box,
   Button,
@@ -8,6 +8,9 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
   MenuItem,
   Stack,
   Switch,
@@ -20,6 +23,7 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 import RuleOutlinedIcon from '@mui/icons-material/RuleOutlined';
 
 import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard } from '@/components/common';
@@ -27,9 +31,9 @@ import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
 import type { ReviewTemplateConfig, ReviewTemplateScope, CreateReviewTemplatePayload, UpdateReviewTemplatePayload } from '@/types/project';
 import type { ReviewMode } from '@/types/review';
+import type { Role } from '@/types/project';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
-import { CHAIN_ROLE_LABEL, GLOBAL_ROLE_LABEL } from '@/config/enums';
 
 /* ── 展示映射 ─────────────────────────────────────── */
 
@@ -39,10 +43,9 @@ const MODE_LABEL: Record<ReviewMode, string> = {
   parallel_veto: '并行一票否决',
   single: '单人决议',
 };
-const ROLE_LABEL: Record<string, string> = { ...CHAIN_ROLE_LABEL, ...GLOBAL_ROLE_LABEL };
 
-/** 审批链可选角色（与服务端 ALLOWED_CHAIN_ROLES 白名单一致，按常见顺序排列） */
-const ALL_ROLES: string[] = ['pmo', 'tl', 'management', 'pm', 'po', 'qa', 'cm', 'customer_rep', 'admin', 'member'];
+/** 系统未在 roles 表维护、但审批链历史模板在用的虚拟角色（如客户代表） */
+const EXTRA_CHAIN_ROLES: Record<string, string> = { customer_rep: '客户代表' };
 
 /** 编辑弹窗表单值 */
 interface TplForm {
@@ -72,11 +75,35 @@ export function AdminReviewTemplatesPage(): JSX.Element {
   const [form, setForm] = useState<TplForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; tpl: ReviewTemplateConfig } | null>(null);
+
+  const roleNameMap = useMemo(() => {
+    const map: Record<string, string> = { ...EXTRA_CHAIN_ROLES };
+    roles.forEach((r) => { if (r.enabled) map[r.roleKey] = r.name; });
+    return map;
+  }, [roles]);
+
+  const roleOptions = useMemo(() => {
+    const list = roles.filter((r) => r.enabled);
+    // 保留历史模板中已使用、但当前已被禁用/删除的虚拟角色（如 customer_rep），避免展示丢失
+    const used = new Set<string>();
+    rows.forEach((t) => t.chain.forEach((k) => used.add(k)));
+    used.forEach((k) => {
+      if (!list.some((r) => r.roleKey === k) && EXTRA_CHAIN_ROLES[k] && !list.some((r) => r.roleKey === k)) {
+        list.push({ roleKey: k, name: EXTRA_CHAIN_ROLES[k], scope: 'project', enabled: true, orderNo: 999 } as Role);
+      }
+    });
+    return list.sort((a, b) => (a.orderNo ?? 999) - (b.orderNo ?? 999));
+  }, [roles, rows]);
+
   const load = (): void => {
     setLoading(true);
-    api
-      .listReviewTemplates()
-      .then(setRows)
+    Promise.all([api.listReviewTemplates(), api.listRoles()])
+      .then(([templates, roleList]) => {
+        setRows(templates);
+        setRoles(roleList);
+      })
       .catch((e: unknown) => toast.error(e))
       .finally(() => setLoading(false));
   };
@@ -84,6 +111,11 @@ export function AdminReviewTemplatesPage(): JSX.Element {
   useEffect(() => {
     load();
   }, [toast]);
+
+  const openMenu = (event: MouseEvent<HTMLElement>, tpl: ReviewTemplateConfig): void => {
+    setMenuAnchor({ el: event.currentTarget, tpl });
+  };
+  const closeMenu = (): void => setMenuAnchor(null);
 
   const openCreate = (): void => {
     setEditing(null);
@@ -192,17 +224,17 @@ export function AdminReviewTemplatesPage(): JSX.Element {
       key: 'mode',
       label: '模式',
       width: 120,
-      hideOnMobile: true,
+      hideBelow: 'md',
       render: (t) => <Chip label={MODE_LABEL[t.mode]} size="small" variant="outlined" sx={{ height: 22, fontSize: 12 }} />,
     },
     {
       key: 'chain',
       label: '审批链',
-      width: 320,
+      width: 260,
       render: (t) => (
         <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
           {t.chain.map((r, i) => (
-            <Chip key={`${r}-${i}`} label={`${i + 1}. ${ROLE_LABEL[r] ?? r}`} size="small" sx={{ height: 22, fontSize: 12 }} />
+            <Chip key={`${r}-${i}`} label={`${i + 1}. ${roleNameMap[r] ?? r}`} size="small" sx={{ height: 22, fontSize: 12 }} />
           ))}
         </Stack>
       ),
@@ -225,29 +257,21 @@ export function AdminReviewTemplatesPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 90,
+      width: 72,
       render: (t) => (
-        <Stack direction="row" spacing={0.5}>
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Tooltip title="编辑">
-              <IconButton size="small" onClick={() => openEdit(t)}>
-                <EditOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </PermissionButton>
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Tooltip title="删除">
-              <IconButton size="small" color="error" onClick={() => void remove(t)}>
-                <DeleteOutlineIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </PermissionButton>
-        </Stack>
+        <PermissionButton action="admin:user:role" fallback="disable">
+          <Tooltip title="操作">
+            <IconButton size="small" onClick={(e) => openMenu(e, t)}>
+              <MoreVertOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </PermissionButton>
       ),
     },
   ];
 
-  const chainValid = useMemo(() => form.chain.length > 0 && form.chain.every((r) => ALL_ROLES.includes(r)), [form.chain]);
+  const validRoleKeys = useMemo(() => new Set(roleOptions.map((r) => r.roleKey)), [roleOptions]);
+  const chainValid = useMemo(() => form.chain.length > 0 && form.chain.every((r) => validRoleKeys.has(r)), [form.chain, validRoleKeys]);
 
   return (
     <Stack spacing={2.5}>
@@ -268,10 +292,37 @@ export function AdminReviewTemplatesPage(): JSX.Element {
           <LoadingState variant="skeleton" rows={8} height={48} />
         ) : (
           <Box sx={{ p: 1 }}>
-            <DataTable<ReviewTemplateConfig> columns={columns} rows={rows} rowKey={(t) => t.key} />
+            <DataTable<ReviewTemplateConfig> columns={columns} rows={rows} rowKey={(t) => t.key} tableLayout="fixed" />
           </Box>
         )}
       </SectionCard>
+
+      {/* 行操作「更多」菜单 */}
+      <Menu anchorEl={menuAnchor?.el} open={!!menuAnchor} onClose={closeMenu}>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) openEdit(menuAnchor.tpl);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon>
+            <EditOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>编辑</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) void remove(menuAnchor.tpl);
+            closeMenu();
+          }}
+          sx={{ color: 'error.main' }}
+        >
+          <ListItemIcon>
+            <DeleteOutlineIcon fontSize="small" color="error" />
+          </ListItemIcon>
+          <ListItemText>删除</ListItemText>
+        </MenuItem>
+      </Menu>
 
       {/* 新增 / 编辑弹窗 */}
       <Dialog open={open} onClose={() => !saving && setOpen(false)} maxWidth="sm" fullWidth>
@@ -335,7 +386,7 @@ export function AdminReviewTemplatesPage(): JSX.Element {
                 {form.chain.map((r, i) => (
                   <Chip
                     key={`${r}-${i}`}
-                    label={`${i + 1}. ${ROLE_LABEL[r] ?? r}`}
+                    label={`${i + 1}. ${roleNameMap[r] ?? r}`}
                     size="small"
                     onDelete={() => setForm((f) => ({ ...f, chain: f.chain.filter((_, j) => j !== i) }))}
                     deleteIcon={
@@ -347,17 +398,19 @@ export function AdminReviewTemplatesPage(): JSX.Element {
                 ))}
               </Stack>
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                {ALL_ROLES.filter((r) => !form.chain.includes(r)).map((r) => (
-                  <Chip
-                    key={r}
-                    label={`+ ${ROLE_LABEL[r] ?? r}`}
-                    size="small"
-                    variant="outlined"
-                    onClick={() => setForm((f) => ({ ...f, chain: [...f.chain, r] }))}
-                    icon={<AddIcon sx={{ fontSize: 13 }} />}
-                    sx={{ cursor: 'pointer' }}
-                  />
-                ))}
+                {roleOptions
+                  .filter((r) => !form.chain.includes(r.roleKey))
+                  .map((r) => (
+                    <Chip
+                      key={r.roleKey}
+                      label={`+ ${r.name}`}
+                      size="small"
+                      variant="outlined"
+                      onClick={() => setForm((f) => ({ ...f, chain: [...f.chain, r.roleKey] }))}
+                      icon={<AddIcon sx={{ fontSize: 13 }} />}
+                      sx={{ cursor: 'pointer' }}
+                    />
+                  ))}
               </Stack>
               <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 1 }}>
                 <Typography variant="caption" color="text.secondary">

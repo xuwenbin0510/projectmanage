@@ -8,6 +8,9 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
   MenuItem,
   Stack,
   Switch,
@@ -19,6 +22,7 @@ import AddIcon from '@mui/icons-material/Add';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 
 import { DataTable, EmptyState, LoadingState, PageHeader, PermissionButton, SectionCard, StatusChip } from '@/components/common';
 import type { Column } from '@/components/common';
@@ -27,7 +31,7 @@ import { TemplateEditorDialog } from '@/components/admin/TemplateEditorDialog';
 import type { LifecycleTemplate, ProjectType, CreateTemplatePayload } from '@/types/project';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
-import { PROJECT_TYPE_LABEL, PROJECT_ROLE_LABEL } from '@/config/enums';
+import { PROJECT_TYPE_LABEL } from '@/config/enums';
 
 /** 新增模板弹窗表单 */
 interface CreateForm {
@@ -44,6 +48,8 @@ export function AdminTemplatesPage(): JSX.Element {
   const toast = useToast();
   const [rows, setRows] = useState<LifecycleTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  /** 动态职位中文名（单一真相源 = 后台 roles 表，替代写死的 PROJECT_ROLE_LABEL） */
+  const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
 
   /* 新增弹窗 */
   const [createOpen, setCreateOpen] = useState(false);
@@ -52,6 +58,14 @@ export function AdminTemplatesPage(): JSX.Element {
 
   /* 编辑抽屉 */
   const [editing, setEditing] = useState<LifecycleTemplate | null>(null);
+
+  /* 行操作「更多」菜单 */
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; tpl: LifecycleTemplate } | null>(null);
+  const openMenu = (e: React.MouseEvent<HTMLElement>, tpl: LifecycleTemplate): void => {
+    e.stopPropagation();
+    setMenuAnchor({ el: e.currentTarget, tpl });
+  };
+  const closeMenu = (): void => setMenuAnchor(null);
 
   const load = (): void => {
     setLoading(true);
@@ -65,6 +79,27 @@ export function AdminTemplatesPage(): JSX.Element {
   useEffect(() => {
     load();
   }, [toast]);
+
+  /* 加载后台角色目录，用于团队约束列的中文渲染（动态，避免与 roles 表脱节） */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const rs = await api.listRoles();
+        if (!alive) return;
+        const map: Record<string, string> = {};
+        rs.forEach((r) => {
+          map[r.roleKey] = r.name;
+        });
+        setRoleNameMap(map);
+      } catch {
+        /* 失败则回退 roleKey 原文 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const toggleActive = async (t: LifecycleTemplate): Promise<void> => {
     try {
@@ -119,26 +154,39 @@ export function AdminTemplatesPage(): JSX.Element {
   };
 
   const columns: Array<Column<LifecycleTemplate>> = [
-    { key: 'name', label: '模板名称', render: (t) => <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{t.name}</Typography> },
+    {
+      key: 'name',
+      label: '模板名称',
+      width: 260,
+      render: (t) => (
+        <Tooltip title={t.name} placement="top-start">
+          <Typography sx={{ fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {t.name}
+          </Typography>
+        </Tooltip>
+      ),
+    },
     {
       key: 'type',
       label: '适用分类',
-      width: 110,
+      width: 96,
       render: (t) => <Chip size="small" variant="outlined" label={PROJECT_TYPE_LABEL[t.projectType as ProjectType]} />,
     },
-    { key: 'version', label: '版本', width: 70, render: (t) => <Typography variant="caption">v{t.version}</Typography> },
+    { key: 'version', label: '版本', width: 56, align: 'center', hideBelow: 'md', render: (t) => <Typography variant="caption">v{t.version}</Typography> },
     {
       key: 'milestones',
       label: '里程碑数',
-      width: 96,
+      width: 84,
       align: 'center',
+      hideBelow: 'md',
       render: (t) => <Typography variant="caption">{t.definition.milestones.length}</Typography>,
     },
     {
       key: 'gates',
       label: '质量门数',
-      width: 96,
+      width: 84,
       align: 'center',
+      hideBelow: 'md',
       render: (t) => (
         <Typography variant="caption">{t.definition.milestones.filter((m) => m.gate).length}</Typography>
       ),
@@ -146,14 +194,15 @@ export function AdminTemplatesPage(): JSX.Element {
     {
       key: 'docs',
       label: '交付物数',
-      width: 96,
+      width: 84,
       align: 'center',
+      hideBelow: 'md',
       render: (t) => <Typography variant="caption">{t.definition.docs.length}</Typography>,
     },
     {
       key: 'team',
       label: '团队约束',
-      width: 230,
+      width: 360,
       render: (t) => {
         const rules = t.definition.team;
         if (!rules || rules.length === 0) {
@@ -166,7 +215,7 @@ export function AdminTemplatesPage(): JSX.Element {
                 key={r.role}
                 size="small"
                 variant="outlined"
-                label={`${PROJECT_ROLE_LABEL[r.role]} ${r.min}~${r.max === -1 ? '∞' : r.max}`}
+                label={`${roleNameMap[r.role] ?? r.role} ${r.min}~${r.max === -1 ? '∞' : r.max}`}
                 sx={{ height: 22, fontSize: 12 }}
               />
             ))}
@@ -192,31 +241,15 @@ export function AdminTemplatesPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 116,
+      width: 72,
       render: (t) => (
-        <Stack direction="row" spacing={0.5}>
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Tooltip title="编辑">
-              <IconButton size="small" onClick={() => setEditing(t)}>
-                <EditOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </PermissionButton>
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Tooltip title="复制">
-              <IconButton size="small" onClick={() => void duplicate(t)}>
-                <ContentCopyIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </PermissionButton>
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Tooltip title="删除">
-              <IconButton size="small" color="error" onClick={() => void remove(t)}>
-                <DeleteOutlineIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </PermissionButton>
-        </Stack>
+        <PermissionButton action="admin:user:role" fallback="disable">
+          <Tooltip title="操作">
+            <IconButton size="small" onClick={(e) => openMenu(e, t)}>
+              <MoreVertOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </PermissionButton>
       ),
     },
   ];
@@ -242,10 +275,42 @@ export function AdminTemplatesPage(): JSX.Element {
           <EmptyState title="暂无模板" description="生命周期模板由系统初始化生成" />
         ) : (
           <Box sx={{ p: 1 }}>
-            <DataTable<LifecycleTemplate> columns={columns} rows={rows} rowKey={(t) => t.id} />
+            <DataTable<LifecycleTemplate> columns={columns} rows={rows} rowKey={(t) => t.id} tableLayout="fixed" />
           </Box>
         )}
       </SectionCard>
+
+      {/* 行操作「更多」菜单 */}
+      <Menu anchorEl={menuAnchor?.el} open={!!menuAnchor} onClose={closeMenu}>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) setEditing(menuAnchor.tpl);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon><EditOutlinedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>编辑</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) void duplicate(menuAnchor.tpl);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>复制</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) void remove(menuAnchor.tpl);
+            closeMenu();
+          }}
+          sx={{ color: 'error.main' }}
+        >
+          <ListItemIcon><DeleteOutlineIcon fontSize="small" color="error" /></ListItemIcon>
+          <ListItemText>删除</ListItemText>
+        </MenuItem>
+      </Menu>
 
       {/* 新增模板弹窗 */}
       <Dialog open={createOpen} onClose={() => !creating && setCreateOpen(false)} maxWidth="xs" fullWidth>

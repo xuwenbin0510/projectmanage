@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Button, Chip, Paper, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 
@@ -16,6 +16,7 @@ import type { DecisionAction } from '@/components/review/DecisionDialog';
 import { api } from '@/api/client';
 import type { DecisionPayload } from '@/api/contract';
 import type { Review } from '@/types/review';
+import type { Role } from '@/types/project';
 import { useAsync } from '@/hooks';
 import { REVIEW_TYPE_LABEL } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
@@ -33,6 +34,17 @@ export function ApprovalsPage(): JSX.Element {
   const [tab, setTab] = useState<TabKey>('todo');
   const [target, setTarget] = useState<Review | null>(null);
   const [action, setAction] = useState<DecisionAction>('approve');
+  const [roles, setRoles] = useState<Role[]>([]);
+
+  const roleNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    roles.forEach((r) => { if (r.enabled) map[r.roleKey] = r.name; });
+    return map;
+  }, [roles]);
+
+  useEffect(() => {
+    api.listRoles().then(setRoles).catch(() => {});
+  }, []);
 
   const fetcher = useCallback(
     async (): Promise<{ todo: Review[]; all: Review[] }> => {
@@ -156,7 +168,7 @@ export function ApprovalsPage(): JSX.Element {
                     borderTop: `1px solid ${alpha(tokens.border.subtle, 0.9)}`,
                   }}
                 >
-                  <ReviewStepper review={r} />
+                  <ReviewStepper review={r} roleNameMap={roleNameMap} />
                 </Box>
               </Paper>
             );

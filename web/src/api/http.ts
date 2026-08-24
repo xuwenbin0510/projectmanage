@@ -57,6 +57,9 @@ import type {
   ChangePayloadInput,
   AuditQuery,
   MetaData,
+  PermissionMatrixResponse,
+  PermissionActionMeta,
+  MetaPermissionsResponse,
 } from './contract';
 import { genRequestId } from '@/utils/format';
 
@@ -474,6 +477,35 @@ export class HttpApiClient implements ApiClient {
 
   deleteRole(roleKey: string): Promise<{ roleKey: string }> {
     return del<{ roleKey: string }>(`/admin/roles/${roleKey}`);
+  }
+
+  /* B19 阶段二：权限矩阵可配置化 */
+  getPermissionMatrix(): Promise<PermissionMatrixResponse> {
+    return get<PermissionMatrixResponse>('/admin/permissions');
+  }
+
+  updatePermissionMatrix(matrix: Record<string, Record<string, boolean>>): Promise<PermissionMatrixResponse> {
+    return put<PermissionMatrixResponse>('/admin/permissions', { matrix });
+  }
+
+  resetPermissionMatrix(): Promise<PermissionMatrixResponse> {
+    return post<PermissionMatrixResponse>('/admin/permissions/reset', {});
+  }
+
+  getPermissionActions(): Promise<PermissionActionMeta[]> {
+    return get<PermissionActionMeta[]>('/admin/permission-actions');
+  }
+
+  updatePermissionActions(actions: Array<Partial<PermissionActionMeta> & { action: string }>): Promise<PermissionActionMeta[]> {
+    return put<PermissionActionMeta[]>('/admin/permission-actions', { actions });
+  }
+
+  getMetaPermissions(): Promise<MetaPermissionsResponse> {
+    return get<MetaPermissionsResponse>('/meta/permissions');
+  }
+
+  getMetaPermissionMatrix(): Promise<{ matrix: Record<string, Record<string, boolean>> }> {
+    return get<{ matrix: Record<string, Record<string, boolean>> }>('/meta/permission-matrix');
   }
 
   listTemplates(): Promise<LifecycleTemplate[]> {
