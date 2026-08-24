@@ -1,0 +1,201 @@
+%% B19 权限矩阵可配置化（真·RBAC）· 类图
+%% 图例：new = 本次新增 | modify = 本次改造 | unchanged = 零改动（仅受益）
+classDiagram
+    direction TB
+
+    %% ───────────── 数据层 ─────────────
+    class permission_rules {
+        <<new table>>
+        +TEXT action PK
+        +TEXT role_key PK
+        +INTEGER granted
+        +TEXT updated_at
+        +TEXT updated_by
+    }
+    note for permission_rules "granted=1 才算授予；granted=0 或整行不存在 → 未授予。\n稀疏存储：28 action x 15 role = 420 组合，初始种子仅 101 行。\nUPSERT ON CONFLICT(action, role_key) 保证幂等"
+
+    class permission_actions {
+        <<new table>>
+        +TEXT action PK
+        +TEXT label
+        +TEXT group_key
+        +TEXT group_label
+        +TEXT description
+        +INTEGER order_no
+        +INTEGER enabled
+        +INTEGER builtin
+    }
+    note for permission_actions "由前端写死的 PERM_GROUPS 下沉入库。\nbuiltin=1 表示被代码 assertCan 引用：\n仅可改 label/group/order（展示层），禁止删除或改 key"
+
+    class roles {
+        <<unchanged>>
+        +TEXT role_key PK
+        +TEXT name
+        +TEXT scope
+        +INTEGER enabled
+        +INTEGER order_no
+    }
+    note for roles "不建外键关联 permission_rules：\n避免删角色时级联丢配置。\n载入时软忽略不存在或已停用的角色（孤儿规则留存不生效）"
+
+    %% ───────────── 迁移层 ─────────────
+    class Migrations {
+        <<modify>>
+        +migrationV18(db, now)
+        -seedPermissionActions(db)
+        -seedPermissionRules(db)
+        -reconcileActions(db)
+    }
+    note for Migrations "注册名 connect-v18-permission-rules（现有最新为 v17）。\n种子唯一源 = DEFAULT_PERMISSIONS + ACTION_META，不手抄 SQL 常量。\nINSERT OR IGNORE 幂等：老库二次升级不覆盖管理员改动。\nreconcile = code 与 DB 对账：补代码新增 action，标记 orphan"
+
+    %% ───────────── 缓存层 ─────────────
+    class PermissionCatalog {
+        <<new>>
+        -Map rules
+        -Array actionMeta
+        -boolean loaded
+        +refreshPermissionCatalog(db) Map
+        +isLoaded() boolean
+        +getActionRoles(action) Set
+        +hasRule(action) boolean
+        +getActionMeta() Array
+        +snapshot() Object
+    }
+    note for PermissionCatalog "与 roleCatalog.js 严格同构（同一套心智模型）。\n模块级缓存使 canDo 保持同步、零 DB 依赖，\n因此 33 个 assertCan 调用点无需 async 改造"
+
+    class RoleCatalog {
+        <<unchanged>>
+        -Map catalog
+        +refreshRoleCatalog(db) Map
+        +isGlobalRole(role) boolean
+        +isProjectRole(role) boolean
+        +globalFallbacks() Array
+    }
+
+    %% ───────────── 判定层 ─────────────
+    class PermissionsConfig {
+        <<modify>>
+        +Object DEFAULT_PERMISSIONS
+        +Object ACTION_META
+        +Array ALL_ACTIONS
+        +Object ACTION_KEY
+        +canDo(globalRoles, action, projectRoles) boolean
+    }
+    note for PermissionsConfig "PERMISSIONS 改名 DEFAULT_PERMISSIONS（保留别名导出）。\ncanDo 语义顺序（仅第 4 步换数据源，其余逐字保留）：\n1 空值防御  2 admin 短路（早于任何缓存读）\n3 ACTION_KEY 别名解析  4 取规则：缓存优先，空则降级常量\n5 global 角色跨项目  6 project 角色项目内\n新增逃生舱：RBAC_CONFIG_SOURCE=constant 强制走常量"
+
+    class Rbac {
+        <<unchanged>>
+        +assertCan(db, req, action, projectId) object
+        +assertWritable(db, projectId) object
+        +projectRolesOf(db, projectId, openId) Array
+        +globalRolesOf(db, openId, primaryRole) Array
+    }
+    note for Rbac "★ 零改动。33 个调用点自动获得可配置能力，\n这是本方案规模远小于预估的根本原因"
+
+    %% ───────────── 业务调用方（零改动） ─────────────
+    class BusinessCallSites {
+        <<unchanged>>
+        +wbs_service_x4()
+        +gate_service_x8()
+        +milestone_service_x3()
+        +board_service_x2()
+        +change_service_x3()
+        +member_service_x2()
+        +documents_routes_x4()
+        +reports_routes_x2()
+        +reviews_routes_x1()
+        +projectFlow_service_x1()
+    }
+    note for BusinessCallSites "合计 33 个 assertCan 调用点（后缀 xN = 该文件内调用次数）。\n本批次对 route / service 层改动为零"
+
+    class OwnershipGuards {
+        <<unchanged>>
+        +projectService_updateProjectBasic()
+        +reportService_updateReport()
+        +reportService_confirmOrReject()
+        +reviewService_withdraw()
+    }
+    note for OwnershipGuards "归属类（ABAC）判定，不是角色判定，不经由 canDo。\n本批次保持原样，矩阵页对相关行加 ⓘ 约束说明。\n未来若并入需 assertCanOrOwner（OR 语义，绝不可 AND），\n但会造成扩权（例：任意 pmo 可编辑任意项目），须用户签字"
+
+    %% ───────────── 管理 API ─────────────
+    class AdminRoutes {
+        <<modify>>
+        +getPermissionMatrix()
+        +savePermissionChanges()
+        +resetPermissionsToDefault()
+        +listPermissionActions()
+        +updatePermissionAction()
+    }
+    note for AdminRoutes "全部 requireAuth + requireGlobalRole('admin')（保留，双保险）。\n护栏：拒绝 roleKey=admin 且 granted=false。\n增量 changes 提交避免并发覆盖。\n单事务 UPSERT → 刷缓存 → 写审计"
+
+    class MetaRoutes {
+        <<modify>>
+        +getEffectivePermissions()
+    }
+    note for MetaRoutes "GET /api/meta/permissions，仅 requireAuth，\n供前端 hydrate 权限镜像"
+
+    class AuditLib {
+        <<modify>>
+        +permission_rule_update()
+        +permission_reset()
+        +permission_action_update()
+    }
+
+    %% ───────────── 前端 ─────────────
+    class WebPermissionsConfig {
+        <<modify>>
+        -Object RUNTIME_PERMISSIONS
+        +Object DEFAULT_PERMISSIONS
+        +hydratePermissions(matrix)
+        +resetPermissions()
+        +canDo(globalRoles, action, projectRoles) boolean
+    }
+    note for WebPermissionsConfig "canDo 签名不变（大量组件同步调用）。\n数据源 = RUNTIME_PERMISSIONS 否则 DEFAULT_PERMISSIONS。\n⚠ 仍只用于按钮显隐，永远不是安全边界"
+
+    class AdminPermissionsPage {
+        <<modify>>
+        -Array actions
+        -Object matrix
+        -Object dirty
+        +loadData()
+        +toggleCell(action, roleKey)
+        +save()
+        +resetToDefault()
+    }
+    note for AdminPermissionsPage "只读 → 可编辑网格。行与列均改读接口（移除写死 PERM_GROUPS）。\nadmin 列强制打勾且禁用；空授权二次确认；未保存离开拦截；\n保存后重新 hydrate 使当前会话显隐立即跟随"
+
+    class ApiLayer {
+        <<modify>>
+        +contract_ts_interface()
+        +http_ts_real()
+        +mock_index_ts()
+    }
+    note for ApiLayer "三处必须同步新增方法，否则 mock 模式或类型检查会断"
+
+    %% ───────────── 关系 ─────────────
+    Migrations ..> permission_rules : 建表 + 种子
+    Migrations ..> permission_actions : 建表 + 种子 + 对账
+    Migrations ..> PermissionsConfig : 读常量作为种子唯一源
+
+    PermissionCatalog --> permission_rules : SELECT granted=1
+    PermissionCatalog --> permission_actions : SELECT 展示元数据
+    RoleCatalog --> roles : SELECT scope
+
+    PermissionsConfig --> PermissionCatalog : 优先读缓存
+    PermissionsConfig --> RoleCatalog : isGlobalRole 判 scope
+    PermissionsConfig ..> PermissionsConfig : 缓存空则降级自身常量
+
+    Rbac --> PermissionsConfig : canDo()
+    BusinessCallSites --> Rbac : assertCan() x33
+    OwnershipGuards ..> Rbac : 绕过（独立归属判定）
+
+    AdminRoutes --> permission_rules : UPSERT
+    AdminRoutes --> permission_actions : UPDATE
+    AdminRoutes ..> PermissionCatalog : 写后 refresh
+    AdminRoutes ..> AuditLib : 埋点
+    MetaRoutes --> PermissionCatalog : snapshot()
+
+    AdminPermissionsPage --> ApiLayer : 读写矩阵
+    ApiLayer ..> AdminRoutes : HTTP
+    ApiLayer ..> MetaRoutes : HTTP
+    MetaRoutes ..> WebPermissionsConfig : hydrate 注入
+    AdminPermissionsPage ..> WebPermissionsConfig : 保存后重新 hydrate

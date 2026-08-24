@@ -17,6 +17,8 @@ const wbs = require('../lib/wbs');
 const ids = require('../lib/ids');
 const mappers = require('../lib/mappers');
 const enums = require('../config/enums');
+const rbac = require('../config/permissions');
+const roleCatalog = require('./roleCatalog');
 const classifyService = require('./classify.service');
 const milestoneService = require('./milestone.service');
 const documentService = require('./document.service');
@@ -83,11 +85,14 @@ function updateProjectBasic(db, req, id, payload) {
   const me = req.user || {};
   const p = requireProjectRow(db, id);
 
-  /* 权限：admin 恒放行；否则项目负责人或创建人（E1.5：任一全局职位为 admin 即视为管理员） */
+  /* 权限：admin 恒放行；否则项目负责人或创建人；
+     q-0 放开：矩阵里被分配 project:edit 的角色（如 pmo，全局 scope）也能编辑任意项目。
+     其余 4 处归属判定（周报作者/确认人、评审发起人）保持 owner/author-only 不动。 */
   const isAdmin = resolveGlobalRoles(me).indexOf('admin') >= 0;
   const isOwner = p.pm === me.open_id || p.created_by === me.open_id;
-  if (!isAdmin && !isOwner) {
-    throw new AppError(ErrorCode.E_FORBIDDEN, '仅项目负责人或管理员可编辑', { projectId: id });
+  const canEditByMatrix = rbac.canDo(resolveGlobalRoles(me), 'project:edit');
+  if (!isAdmin && !isOwner && !canEditByMatrix) {
+    throw new AppError(ErrorCode.E_FORBIDDEN, '仅项目负责人、管理员或被授权角色可编辑', { projectId: id });
   }
 
   const b = payload || {};
@@ -166,8 +171,50 @@ function updateProjectBasic(db, req, id, payload) {
   vals.push(dates.nowIso());
   vals.push(String(id));
 
-  db.prepare('UPDATE projects SET ' + fields.join(', ') + ' WHERE id = ?').run(...vals);
+  const tx = db.transaction(function () {
+    db.prepare('UPDATE projects SET ' + fields.join(', ') + ' WHERE id = ?').run(...vals);
+    /* 类型变更：同步重整“系统自动生成的模板交付物”，用户自定义数据（CUS- 必交付项 / 手动上传 / 里程碑 / 质量门 / WBS）一律不动 */
+    if (b.type !== undefined && String(b.type) !== p.type) {
+      reconcileTemplateDeliverablesOnTypeChange(db, id, p, b);
+    }
+  });
+  tx();
+
   return mappers.toApiProject(requireProjectRow(db, id));
+}
+
+/**
+ * 类型变更时重整模板交付物（D-BUG 修复）：
+ * - 删除「旧类型的自动交付物」（待交付、非 CUS- 自定义、非手动上传），避免与旧类型残留纠缠；
+ * - 按新类型模板重新派生（幂等：已存在的 key 不重复插入）；
+ * - 用户自定义的里程碑 / 质量门 / WBS / CUS- 必交付项 / 手动上传文件：全部保留。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} projectId
+ * @param {object} oldRow 变更前 projects 行（含 type / template_id）
+ * @param {object} payload 本次变更入参（含 type / templateId?）
+ */
+function reconcileTemplateDeliverablesOnTypeChange(db, projectId, oldRow, payload) {
+  const newType = String(payload.type);
+  /* 新模板：显式指定 templateId 优先，否则取新类型生效模板 */
+  let newTplRow = null;
+  if (payload.templateId) {
+    newTplRow = db
+      .prepare('SELECT * FROM lifecycle_templates WHERE id = ? AND project_type = ? AND is_active = 1')
+      .get(String(payload.templateId), newType);
+  }
+  if (!newTplRow) {
+    newTplRow = db
+      .prepare('SELECT * FROM lifecycle_templates WHERE project_type = ? AND is_active = 1 ORDER BY version DESC LIMIT 1')
+      .get(newType);
+  }
+  if (!newTplRow) return; // 无模板可派生，跳过
+
+  const keepPrefix = String(newTplRow.id) + '-%';
+  db.prepare(
+    "DELETE FROM project_documents WHERE project_id = ? AND status = '待交付' AND template_key != '' AND template_key NOT LIKE ? AND template_key NOT LIKE 'CUS-%'",
+  ).run(projectId, keepPrefix);
+
+  documentService.deriveTemplateDocs(db, projectId, newTplRow);
 }
 
 /* ── 成员 ───────────────────────────────────────────── */
@@ -489,9 +536,9 @@ function assertCreatePayload(payload) {
 function assertMemberCardinality(members, tpl) {
   const list = Array.isArray(members) ? members : [];
 
-  /* 角色合法性（与模板无关，保留） */
+  /* 角色合法性（与模板无关，保留）：scope=project 且启用的角色方可作为项目成员角色 */
   const bad = list.filter(function (m) {
-    return !m || !String(m.userOpenId || '').trim() || enums.PROJECT_ROLES.indexOf(m.role) < 0;
+    return !m || !String(m.userOpenId || '').trim() || !roleCatalog.isProjectRole(m.role);
   });
   if (bad.length) {
     throw new AppError(ErrorCode.E_VALIDATION, '成员角色不合法', {

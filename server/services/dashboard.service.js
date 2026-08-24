@@ -29,7 +29,9 @@ const mappers = require('../lib/mappers');
 const wbs = require('../lib/wbs');
 const agg = require('../lib/portfolioAgg');
 const enums = require('../config/enums');
-const { PERMISSIONS, canDo } = require('../config/permissions');
+const { canDo } = require('../config/permissions');
+const { isGlobalRole } = require('../services/roleCatalog');
+const permissionCatalog = require('../services/permissionCatalog');
 const { resolveGlobalRoles } = require('../middleware/auth');
 const projectService = require('./project.service');
 
@@ -207,7 +209,7 @@ function listScopedRows(db, q, me, scope) {
     if (!openId) return [];
     if (q.onlyMine) {
       // 「我负责的项目」= 我以「项目负责人」角色参与的项目；角色集从权限矩阵动态取，避免硬编码漏判
-      const ownerRoles = PERMISSIONS['project:edit'].project; // 例：['pm']
+      const ownerRoles = permissionCatalog.rolesFor('project:edit').roles.filter(function (r) { return !isGlobalRole(r); }); // 项目视角负责人角色（例：['pm']）
       const ph = ownerRoles.map(function () { return '?'; }).join(',');
       where.push(
         'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ? '
