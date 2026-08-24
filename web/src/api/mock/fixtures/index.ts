@@ -1,5 +1,5 @@
 import type { MockDb, ProgressSnapshotMock } from '../db';
-import { DEFAULT_REVIEW_TEMPLATES, DEFAULT_ROLES } from '../db';
+import { DEFAULT_REVIEW_TEMPLATES, DEFAULT_ROLES, DEFAULT_PERMISSION_ACTIONS, defaultPermissionRules } from '../db';
 import { createUsers } from './users';
 import { createTemplates } from './templates';
 import { createProjects } from './projects';
@@ -79,5 +79,7 @@ export function createSeedDb(): MockDb {
     roles: DEFAULT_ROLES.map((r) => ({ ...r })),
     progressSnapshots: createProgressSnapshots(wb),
     sessionOpenId: null,
+    permissionRules: defaultPermissionRules(),
+    permissionActions: DEFAULT_PERMISSION_ACTIONS.map((a) => ({ ...a })),
   };
 }

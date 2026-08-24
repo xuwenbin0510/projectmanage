@@ -10,7 +10,9 @@ import { httpClient, setToken, getToken } from './http';
  *
  * 两套实现签名完全一致，**页面代码零改动切换**。
  */
-export const USE_MOCK: boolean = String(import.meta.env.VITE_USE_MOCK ?? 'true') === 'true';
+// 默认走真实后端（false）。仅当显式声明 VITE_USE_MOCK=true 时才用 mock，
+// 杜绝任何未正确注入 env 的构建默默回退到 mock 导致展示写死演示数据。
+export const USE_MOCK: boolean = String(import.meta.env.VITE_USE_MOCK ?? 'false') === 'true';
 
 export const api: ApiClient = USE_MOCK ? mockClient : httpClient;
 

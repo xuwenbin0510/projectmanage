@@ -49,10 +49,12 @@ function hasColumn(db, table, column) {
   return columnsOf(db, table).indexOf(column) >= 0;
 }
 
-/** 允许的全局角色（与 server/config/enums.js GLOBAL_ROLES 一致，此处内联避免迁移层依赖业务层） */
-const VALID_GLOBAL_ROLES = [
-  'admin', 'management', 'pmo', 'pm', 'tl', 'qa', 'cm', 'po', 'member',
-];
+/** 合法角色键（单一来源 = server/config/roles-catalog.js 的 ROLE_CATALOG；此处内联避免迁移层依赖业务层） */
+const { ROLE_CATALOG } = require('../config/roles-catalog');
+const VALID_ROLE_KEYS = ROLE_CATALOG.map(function (r) { return r[0]; });
+
+/** 权限矩阵默认源（server/config/permissions.js 的 DEFAULT_PERMISSIONS）：v18 种子唯一写入源 */
+const { DEFAULT_PERMISSIONS } = require('../config/permissions');
 
 /** 允许的项目状态（与 enums.PROJECT_STATUSES 一致） */
 const VALID_PROJECT_STATUSES = [
@@ -219,6 +221,7 @@ function migrationV1(db, now) {
       CREATE TABLE users (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         open_id     TEXT UNIQUE NOT NULL,
+        union_id    TEXT,
         employee_id TEXT,
         name        TEXT NOT NULL,
         email       TEXT,
@@ -238,7 +241,7 @@ function migrationV1(db, now) {
         VALUES (@id, @open_id, @employee_id, @name, @global_role, 'active', @created_at, @updated_at)
       `);
       legacyUsers.forEach(function (u) {
-        const role = VALID_GLOBAL_ROLES.indexOf(u.role) >= 0 ? u.role : 'member';
+        const role = VALID_ROLE_KEYS.indexOf(u.role) >= 0 ? u.role : 'member';
         ins.run({
           id: u.id,
           open_id: u.open_id,
@@ -466,7 +469,7 @@ function migrationV1(db, now) {
 /**
  * 遗留 `tasks.status` → 新契约 `TaskStatus`。
  * ⚠ 与 `server/config/enums.js` 的 `LEGACY_TASK_STATUS_MAP` 逐字一致；
- *   此处内联是沿用本文件既有约定（迁移层不依赖业务层，见 VALID_GLOBAL_ROLES）。
+ *   此处内联是沿用本文件既有约定（迁移层不依赖业务层，见 VALID_ROLE_KEYS）。
  */
 const LEGACY_TASK_STATUS_TO_TASK_STATUS = {
   待开始: '待办',
@@ -1227,25 +1230,11 @@ function migrationV15(db, now) {
   `);
 
   /**
-   * 默认职位目录（与 enums.GLOBAL_ROLES 对齐，标注视野 scope）。
-   * 说明：
-   *  - `member` 为最弱全局职位（普通成员，仅项目内参与者视野），scope=global 但无特殊全局权限；
-   *  - `admin` 恒为全局超级职位；
-   *  - `pm` / `tl` / `qa` / `cm` / `po` 等既可作全局职位（身兼管理视野）也可作项目内职位，
-   *    E1.5 仅把 scope 作为「该职位可被指派为哪种维度的角色」的元数据标记，判定仍由 PERMISSIONS 矩阵按 role key 命中。
+   * 默认职位目录（单一来源：server/config/roles-catalog.js 的 ROLE_CATALOG，
+   * INSERT OR IGNORE 不覆盖已有角色；仅空库首次迁移时写入出生种子）。
    * order_no 仅控制后台列表展示顺序。
    */
-  const defaultRoles = [
-    ['admin', '系统管理员', 'global', '拥有全部权限，系统至少保留一名', 1],
-    ['management', '公司管理层', 'global', '公司层面决策与跨项目审批', 2],
-    ['pmo', 'PMO', 'global', '项目管理办公室，全局项目治理与审批', 3],
-    ['pm', '项目经理', 'global', '可指派为全局或项目内项目经理', 4],
-    ['tl', '技术负责人', 'global', '可指派为全局或项目内技术负责人', 5],
-    ['qa', '质量负责人', 'global', '可指派为全局或项目内质量负责人', 6],
-    ['cm', '配置管理员', 'global', '可指派为全局或项目内配置管理', 7],
-    ['po', '产品经理', 'global', '可指派为全局或项目内产品经理', 8],
-    ['member', '普通成员', 'global', '默认成员，仅项目内参与者视野', 9],
-  ];
+  const defaultRoles = ROLE_CATALOG;
 
   const insRole = db.prepare(
     'INSERT OR IGNORE INTO roles (role_key, name, scope, enabled, description, order_no) '
@@ -1258,6 +1247,176 @@ function migrationV15(db, now) {
   });
   tx();
   console.log('[migrations] v15 roles 职位目录 + user_roles 多职位表 + 默认职位 seed（E1.5）');
+}
+
+/**
+ * v16：邮箱密码登录（2026-08-23）。
+ *
+ * 新增 users 列：
+ *   - password_hash      TEXT     密码哈希（scrypt）
+ *   - must_change_pwd    INTEGER  NOT NULL DEFAULT 1  首次登录/重置后强制改密
+ *
+ * 老用户：password_hash 为空 → 仍可登录，但前端检测到 must_change_pwd=1 强制改密。
+ * 新用户：若通过飞书登录首次创建，默认 must_change_pwd=0（飞书免登不需要密码）。
+ */
+function migrationV16(db, now) { // eslint-disable-line no-unused-vars
+  if (!hasColumn(db, 'users', 'password_hash')) {
+    db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+  }
+  if (!hasColumn(db, 'users', 'must_change_pwd')) {
+    db.exec('ALTER TABLE users ADD COLUMN must_change_pwd INTEGER NOT NULL DEFAULT 1');
+  }
+  console.log('[migrations] v16 users 加 password_hash / must_change_pwd（邮箱密码登录）');
+}
+
+/**
+ * v17：users 表增加 union_id 列，用于飞书跨应用账号认回。
+ * 飞书同一租户下 union_id 不变，open_id 随应用变化；登录时按 union_id/email 认回已有账号。
+ */
+function migrationV17(db, now) { // eslint-disable-line no-unused-vars
+  if (!hasColumn(db, 'users', 'union_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN union_id TEXT');
+  }
+  console.log('[migrations] v17 users 加 union_id（飞书跨应用账号认回）');
+}
+
+/**
+ * v18：权限矩阵可配置化 · 数据底座（B19 阶段一 · T01）
+ *
+ * 把原本写死在 server/config/permissions.js 的 `PERMISSIONS` 常量，
+ * 下沉为数据库两张表，使权限矩阵可通过管理后台配置（阶段二/三），
+ * 而不改任何业务 route / service 判定逻辑（canDo 仅切换数据源）。
+ *
+ * 表：
+ *  1. `permission_rules`  action × role_key 的授权矩阵（稀疏，只存 granted=1），
+ *     主键 (action, role_key)；**不建外键**到 roles 表，避免删角色级联丢配置；
+ *     运行时软忽略不存在/停用的角色（见 server/services/permissionCatalog.js）。
+ *  2. `permission_actions`  action 元数据（中文 label / 分组 / 排序 / 启用 / 内置标记），
+ *     主键 action；本阶段 action 集合固定，不开放后台增删。
+ *
+ * 种子（单一真相源 = DEFAULT_PERMISSIONS 常量）：
+ *  - permission_actions：28 个 action 的 label/分组（下沉自前端 PERM_GROUPS，order_no 按出现顺序）。
+ *  - permission_rules：遍历 DEFAULT_PERMISSIONS，对每个 action 的 roles 数组逐条 INSERT OR IGNORE。
+ *    不手抄 SQL，保证与代码认知的权限点集合完全一致（code↔DB 对账，见下方安全断言）。
+ *
+ * 幂等：建表 `CREATE TABLE IF NOT EXISTS`；种子 `INSERT OR IGNORE`（以 (action,role_key) 为主键）。
+ * ⚠ `run()` 已统一开事务并处理 `PRAGMA foreign_keys`，此处**不要**自行 BEGIN。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ * @returns {void}
+ */
+function migrationV18(db, now) {
+  /* ---------- 1. permission_rules（授权矩阵） ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS permission_rules (
+      action     TEXT NOT NULL,
+      role_key   TEXT NOT NULL,
+      granted    INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      PRIMARY KEY (action, role_key)
+    );
+  `);
+
+  /* ---------- 2. permission_actions（action 元数据） ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS permission_actions (
+      action      TEXT PRIMARY KEY,
+      label       TEXT NOT NULL,
+      group_key   TEXT,
+      group_label TEXT,
+      description TEXT,
+      order_no    INTEGER,
+      enabled     INTEGER,
+      builtin     INTEGER NOT NULL DEFAULT 1
+    );
+  `);
+
+  /**
+   * 28 个 action 的展示元数据（label / 分组）。
+   * 与 web/src/pages/admin/AdminPermissionsPage.tsx 的 PERM_GROUPS 逐条一致；
+   * order_no 按出现顺序（0-based）。本阶段 action 集合固定，不开放后台增删。
+   * 元组：[action, label, group_key, group_label]
+   */
+  const ACTION_META = [
+    // 项目
+    ['project:create', '新建项目', 'project', '项目'],
+    ['project:edit', '编辑项目', 'project', '项目'],
+    ['project:delete', '删除项目', 'project', '项目'],
+    ['project:transition', '项目状态流转', 'project', '项目'],
+    ['project:close', '项目结项', 'project', '项目'],
+    ['project:member:assign', '项目成员分配', 'project', '项目'],
+    // 质量门 / 里程碑
+    ['gate:decide', '质量门决议', 'gate_milestone', '质量门 / 里程碑'],
+    ['gate:item:check', '门检查项检查', 'gate_milestone', '质量门 / 里程碑'],
+    ['gate:item:add', '门检查项新增', 'gate_milestone', '质量门 / 里程碑'],
+    ['milestone:create', '里程碑新建', 'gate_milestone', '质量门 / 里程碑'],
+    ['milestone:edit', '里程碑编辑', 'gate_milestone', '质量门 / 里程碑'],
+    ['milestone:delete', '里程碑删除', 'gate_milestone', '质量门 / 里程碑'],
+    // WBS / 看板 / 任务
+    ['wbs:edit', 'WBS 编辑', 'wbs_board', 'WBS / 看板 / 任务'],
+    ['wbs:delete', 'WBS 删除', 'wbs_board', 'WBS / 看板 / 任务'],
+    ['task:status', '任务状态更新', 'wbs_board', 'WBS / 看板 / 任务'],
+    ['board:config', '看板配置', 'wbs_board', 'WBS / 看板 / 任务'],
+    // 周报 / 评审 / 变更
+    ['report:write', '周报填写', 'report_review', '周报 / 评审 / 变更'],
+    ['review:start', '发起评审', 'report_review', '周报 / 评审 / 变更'],
+    ['review:decide', '评审决议', 'report_review', '周报 / 评审 / 变更'],
+    ['review:proxy', '评审代理', 'report_review', '周报 / 评审 / 变更'],
+    ['change:create', '变更创建', 'report_review', '周报 / 评审 / 变更'],
+    ['change:submit', '变更提交', 'report_review', '周报 / 评审 / 变更'],
+    // 全局 / 管理
+    ['dashboard:global', '全局仪表盘', 'global_admin', '全局 / 管理'],
+    ['admin:user:role', '用户角色管理', 'global_admin', '全局 / 管理'],
+    ['admin:audit:view', '审计查看', 'global_admin', '全局 / 管理'],
+    ['admin:template', '生命周期模板管理', 'global_admin', '全局 / 管理'],
+    ['document:upload', '文档上传', 'global_admin', '全局 / 管理'],
+    ['document:delete', '文档删除', 'global_admin', '全局 / 管理'],
+  ];
+
+  // ── code↔DB 对账 ──
+  // permission_actions 必须覆盖 DEFAULT_PERMISSIONS 认知的全部 action（漏建 → 该 action 静默无权限）；
+  // 也不应含代码已删除的 action（脏数据）。
+  const dpActions = Object.keys(DEFAULT_PERMISSIONS);
+  const metaActions = ACTION_META.map(function (x) { return x[0]; });
+  const missing = dpActions.filter(function (a) { return metaActions.indexOf(a) < 0; });
+  if (missing.length) {
+    throw new Error('[migrations] v18 permission_actions 缺失 action（请补充 ACTION_META）：' + missing.join(', '));
+  }
+  const orphan = metaActions.filter(function (a) { return dpActions.indexOf(a) < 0; });
+  if (orphan.length) {
+    throw new Error('[migrations] v18 permission_actions 含代码未定义 action（请清理 ACTION_META）：' + orphan.join(', '));
+  }
+
+  /* ---------- 3. 种子 permission_actions（INSERT OR IGNORE，幂等） ---------- */
+  const insAction = db.prepare(
+    'INSERT OR IGNORE INTO permission_actions '
+    + '(action, label, group_key, group_label, description, order_no, enabled, builtin) '
+    + 'VALUES (?, ?, ?, ?, ?, ?, 1, 1)'
+  );
+  const txMeta = db.transaction(function () {
+    ACTION_META.forEach(function (m, i) {
+      insAction.run(m[0], m[1], m[2], m[3], m[1], i);
+    });
+  });
+  txMeta();
+
+  /* ---------- 4. 种子 permission_rules（唯一源 = DEFAULT_PERMISSIONS，逐条 INSERT OR IGNORE） ---------- */
+  const insRule = db.prepare(
+    "INSERT OR IGNORE INTO permission_rules (action, role_key, granted, updated_at, updated_by) VALUES (?, ?, 1, ?, 'seed')"
+  );
+  const txRules = db.transaction(function () {
+    dpActions.forEach(function (action) {
+      const rule = DEFAULT_PERMISSIONS[action];
+      (rule.roles || []).forEach(function (roleKey) {
+        insRule.run(action, roleKey, now);
+      });
+    });
+  });
+  txRules();
+
+  console.log('[migrations] v18 permission_rules + permission_actions 表 + %d 条授权种子（RBAC 可配置化·数据底座）', dpActions.length);
 }
 
 /* ── 迁移注册表 ───────────────────────────────────── */
@@ -1282,6 +1441,9 @@ const MIGRATIONS = [
   { version: 13, name: 'connect-v13-change-flow', up: migrationV13 },
   { version: 14, name: 'connect-v14-review-templates', up: migrationV14 },
   { version: 15, name: 'connect-v15-roles-directory', up: migrationV15 },
+  { version: 16, name: 'connect-v16-password-login', up: migrationV16 },
+  { version: 17, name: 'connect-v17-union-id', up: migrationV17 },
+  { version: 18, name: 'connect-v18-rbac-config', up: migrationV18 },
 ];
 
 /**

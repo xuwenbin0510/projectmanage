@@ -15,13 +15,13 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined';
 import { NavLink, useLocation } from 'react-router-dom';
 import { MAIN_MENU } from '@/config/routes';
 import type { MenuItem } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
 import { alphaOf as alpha, tokens } from '@/theme/tokens';
 import { USE_MOCK } from '@/api/client';
+import { useThemeMode } from '@/theme/themeContext';
 
 const ICONS: Record<MenuItem['icon'], JSX.Element> = {
   workbench: <DashboardOutlinedIcon fontSize="small" />,
@@ -40,6 +40,7 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
   const user = useAuthStore((s) => s.user);
   const { pathname } = useLocation();
+  const { isDark } = useThemeMode();
 
   const visible = MAIN_MENU.filter((m) => !m.roles || (user && m.roles.includes(user.globalRole)));
 
@@ -57,10 +58,18 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
         overflow: 'hidden',
       }}
     >
-      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.25, height: 56, flexShrink: 0 }}>
-        <RocketLaunchOutlinedIcon sx={{ color: tokens.brand.primary }} />
+      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.25, height: 56, flexShrink: 0, justifyContent: collapsed ? 'center' : 'flex-start' }}>
+        <Box
+          component="img"
+          src={isDark ? '/logo_dark.png' : '/logo_light.png'}
+          alt="logo"
+          sx={{ height: 28, width: 'auto', display: 'block', objectFit: 'contain' }}
+          onError={(e) => {
+            (e.target as HTMLImageElement).style.display = 'none';
+          }}
+        />
         {!collapsed && (
-          <Typography sx={{ fontWeight: 600, fontSize: 15, whiteSpace: 'nowrap' }}>太空字节 PM</Typography>
+          <Typography sx={{ fontWeight: 600, fontSize: 15, whiteSpace: 'nowrap' }}>项目管理系统</Typography>
         )}
       </Stack>
       <Divider />

@@ -14,6 +14,25 @@ import type { Change } from '@/types/change';
 import type { AuditLog, Risk, ProjectDocument } from '@/types/audit';
 import { createSeedDb } from './fixtures';
 import type { ReviewTemplateConfig, Role } from '@/types/project';
+import { PERMISSIONS } from '@/config/permissions';
+
+/** B19 阶段二：权限矩阵 mock 数据载体（与后端 permission_rules / permission_actions 同构） */
+export interface PermissionRuleMock {
+  action: string;
+  roleKey: string;
+  granted: boolean;
+}
+
+export interface PermissionActionMock {
+  action: string;
+  label: string;
+  group_key: string;
+  group_label: string;
+  description: string;
+  order_no: number;
+  enabled: boolean;
+  builtin: boolean;
+}
 
 /** D03：全量任务快照（mock 内存版，周报提交时采集，UNIQUE 语义由 mock 逻辑保证） */
 export interface ProgressSnapshotMock {
@@ -90,6 +109,57 @@ export interface MockDb {
   progressSnapshots: ProgressSnapshotMock[];
   /** 当前登录用户 openId（devlogin 写入） */
   sessionOpenId: string | null;
+  /** B19 阶段二：权限矩阵规则（action → roleKey → granted） */
+  permissionRules: PermissionRuleMock[];
+  /** B19 阶段二：权限动作元数据 */
+  permissionActions: PermissionActionMock[];
+}
+
+/**
+ * B19 阶段二：权限动作默认元数据（与后端 migrationV18 的 ACTION_META 同源）。
+ * 分组 label 与前端 PERM_GROUPS（AdminPermissionsPage）保持一致，便于矩阵页渲染。
+ */
+export const DEFAULT_PERMISSION_ACTIONS: PermissionActionMock[] = [
+  { action: 'project:create', label: '新建项目', group_key: 'project', group_label: '项目', description: '创建新项目', order_no: 10, enabled: true, builtin: true },
+  { action: 'project:edit', label: '编辑项目', group_key: 'project', group_label: '项目', description: '编辑项目基本信息', order_no: 11, enabled: true, builtin: true },
+  { action: 'project:delete', label: '删除项目', group_key: 'project', group_label: '项目', description: '删除项目', order_no: 12, enabled: true, builtin: true },
+  { action: 'project:transition', label: '项目状态流转', group_key: 'project', group_label: '项目', description: '推进/回退项目阶段', order_no: 13, enabled: true, builtin: true },
+  { action: 'project:close', label: '项目结项', group_key: 'project', group_label: '项目', description: '结项项目', order_no: 14, enabled: true, builtin: true },
+  { action: 'project:member:assign', label: '项目成员分配', group_key: 'project', group_label: '项目', description: '分配项目成员', order_no: 15, enabled: true, builtin: true },
+  { action: 'gate:decide', label: '质量门决议', group_key: 'gate', group_label: '质量门 / 里程碑', description: '决议质量门通过/不通过', order_no: 20, enabled: true, builtin: true },
+  { action: 'gate:item:check', label: '门检查项检查', group_key: 'gate', group_label: '质量门 / 里程碑', description: '勾选门检查项', order_no: 21, enabled: true, builtin: true },
+  { action: 'gate:item:add', label: '门检查项新增', group_key: 'gate', group_label: '质量门 / 里程碑', description: '新增门检查项', order_no: 22, enabled: true, builtin: true },
+  { action: 'milestone:create', label: '里程碑新建', group_key: 'milestone', group_label: '质量门 / 里程碑', description: '新建里程碑', order_no: 23, enabled: true, builtin: true },
+  { action: 'milestone:edit', label: '里程碑编辑', group_key: 'milestone', group_label: '质量门 / 里程碑', description: '编辑里程碑', order_no: 24, enabled: true, builtin: true },
+  { action: 'milestone:delete', label: '里程碑删除', group_key: 'milestone', group_label: '质量门 / 里程碑', description: '删除里程碑', order_no: 25, enabled: true, builtin: true },
+  { action: 'wbs:edit', label: 'WBS 编辑', group_key: 'wbs', group_label: 'WBS / 看板 / 任务', description: '编辑 WBS 节点', order_no: 30, enabled: true, builtin: true },
+  { action: 'wbs:delete', label: 'WBS 删除', group_key: 'wbs', group_label: 'WBS / 看板 / 任务', description: '删除 WBS 节点', order_no: 31, enabled: true, builtin: true },
+  { action: 'task:status', label: '任务状态更新', group_key: 'task', group_label: 'WBS / 看板 / 任务', description: '更新任务状态', order_no: 32, enabled: true, builtin: true },
+  { action: 'board:config', label: '看板配置', group_key: 'board', group_label: 'WBS / 看板 / 任务', description: '配置看板列与 WIP', order_no: 33, enabled: true, builtin: true },
+  { action: 'report:write', label: '周报填写', group_key: 'report', group_label: '周报 / 评审 / 变更', description: '填写/提交周报', order_no: 40, enabled: true, builtin: true },
+  { action: 'review:start', label: '发起评审', group_key: 'review', group_label: '周报 / 评审 / 变更', description: '发起评审', order_no: 41, enabled: true, builtin: true },
+  { action: 'review:decide', label: '评审决议', group_key: 'review', group_label: '周报 / 评审 / 变更', description: '决议评审', order_no: 42, enabled: true, builtin: true },
+  { action: 'review:proxy', label: '评审代理', group_key: 'review', group_label: '周报 / 评审 / 变更', description: '代理评审', order_no: 43, enabled: true, builtin: true },
+  { action: 'change:create', label: '变更创建', group_key: 'change', group_label: '周报 / 评审 / 变更', description: '创建变更单', order_no: 44, enabled: true, builtin: true },
+  { action: 'change:submit', label: '变更提交', group_key: 'change', group_label: '周报 / 评审 / 变更', description: '提交变更单', order_no: 45, enabled: true, builtin: true },
+  { action: 'dashboard:global', label: '全局仪表盘', group_key: 'global', group_label: '全局 / 管理', description: '查看公司全量仪表盘', order_no: 50, enabled: true, builtin: true },
+  { action: 'admin:user:role', label: '用户角色管理', group_key: 'admin', group_label: '全局 / 管理', description: '管理用户与职位', order_no: 51, enabled: true, builtin: true },
+  { action: 'admin:audit:view', label: '审计查看', group_key: 'admin', group_label: '全局 / 管理', description: '查看审计日志', order_no: 52, enabled: true, builtin: true },
+  { action: 'admin:template', label: '生命周期模板管理', group_key: 'admin', group_label: '全局 / 管理', description: '管理生命周期模板', order_no: 53, enabled: true, builtin: true },
+  { action: 'document:upload', label: '文档上传', group_key: 'document', group_label: '全局 / 管理', description: '上传项目文档', order_no: 54, enabled: true, builtin: true },
+  { action: 'document:delete', label: '文档删除', group_key: 'document', group_label: '全局 / 管理', description: '删除项目文档', order_no: 55, enabled: true, builtin: true },
+];
+
+/** B19 阶段二：默认权限规则（从前端 PERMISSIONS 常量种入，与后端 DEFAULT_PERMISSIONS 同源） */
+export function defaultPermissionRules(): PermissionRuleMock[] {
+  const rules: PermissionRuleMock[] = [];
+  Object.keys(PERMISSIONS).forEach(function (action) {
+    const rule = PERMISSIONS[action];
+    (rule.roles || []).forEach(function (roleKey: string) {
+      rules.push({ action, roleKey, granted: true });
+    });
+  });
+  return rules;
 }
 
 // v4：方案一（极简）彻底删除「阶段」实体 ——
@@ -115,6 +185,13 @@ function load(): MockDb | null {
     /* E1.5：旧缓存无 roles → 兜底注入默认职位目录 */
     if (!Array.isArray(parsed.roles)) {
       parsed.roles = DEFAULT_ROLES.map((r) => ({ ...r }));
+    }
+    /* B19：旧缓存无权限矩阵 → 兜底注入默认规则 + 动作元数据 */
+    if (!Array.isArray(parsed.permissionRules)) {
+      parsed.permissionRules = defaultPermissionRules();
+    }
+    if (!Array.isArray(parsed.permissionActions)) {
+      parsed.permissionActions = DEFAULT_PERMISSION_ACTIONS.map((a) => ({ ...a }));
     }
     return parsed;
   } catch {

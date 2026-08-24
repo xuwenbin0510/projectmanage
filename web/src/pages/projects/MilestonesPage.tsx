@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import {
   Alert,
   Box,
@@ -6,6 +6,9 @@ import {
   Checkbox,
   Chip,
   IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
   MenuItem,
   Select,
   Stack,
@@ -18,6 +21,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -91,6 +95,11 @@ export function MilestonesPage(): JSX.Element {
   const [edit, setEdit] = useState<EditState | null>(null);
   /** D04.2 反查：里程碑关联文档计数（按 milestoneId 分组） */
   const [docCountByMs, setDocCountByMs] = useState<Record<string, number>>({});
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; ms: MilestoneWithGate } | null>(null);
+  const openMenu = (event: MouseEvent<HTMLElement>, ms: MilestoneWithGate): void => {
+    setMenuAnchor({ el: event.currentTarget, ms });
+  };
+  const closeMenu = (): void => setMenuAnchor(null);
 
   const archived = project?.status === '已结项' || project?.status === '已终止';
   const editable = can('milestone:edit') && !archived;
@@ -579,35 +588,14 @@ export function MilestonesPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 128,
+      width: 72,
       align: 'center',
       render: (m) => (
-        <Stack direction="row" spacing={0.25} justifyContent="center">
-          <Tooltip title="编辑里程碑" arrow>
-            <span>
-              <IconButton size="small" disabled={!editable} onClick={() => openEdit(m)}>
-                <EditOutlinedIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="人工覆盖状态" arrow>
-            <IconButton size="small" onClick={() => openOverride(m)}>
-              <FlagOutlinedIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="删除里程碑" arrow>
-            <span>
-              <IconButton
-                size="small"
-                color="error"
-                disabled={!editable}
-                onClick={() => setDeleteTarget(m)}
-              >
-                <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            </span>
-          </Tooltip>
-        </Stack>
+        <Tooltip title="操作" arrow>
+          <IconButton size="small" onClick={(e) => openMenu(e, m)}>
+            <MoreVertOutlinedIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
       ),
     },
   ];
@@ -639,10 +627,51 @@ export function MilestonesPage(): JSX.Element {
           columns={columns}
           rows={milestones}
           rowKey={(m) => m.id}
+          tableLayout="fixed"
           emptyTitle="暂无里程碑"
           emptyDescription="新建项目时会按生命周期模板自动生成里程碑"
         />
       </SectionCard>
+
+      {/* 行操作「更多」菜单 */}
+      <Menu anchorEl={menuAnchor?.el} open={!!menuAnchor} onClose={closeMenu}>
+        <MenuItem
+          disabled={!editable || archived}
+          onClick={() => {
+            if (menuAnchor) openEdit(menuAnchor.ms);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon>
+            <EditOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>编辑里程碑</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) openOverride(menuAnchor.ms);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon>
+            <FlagOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>人工覆盖状态</ListItemText>
+        </MenuItem>
+        <MenuItem
+          disabled={!editable || archived}
+          onClick={() => {
+            if (menuAnchor) setDeleteTarget(menuAnchor.ms);
+            closeMenu();
+          }}
+          sx={{ color: 'error.main' }}
+        >
+          <ListItemIcon>
+            <DeleteOutlineIcon fontSize="small" color="error" />
+          </ListItemIcon>
+          <ListItemText>删除里程碑</ListItemText>
+        </MenuItem>
+      </Menu>
 
       {/* 改期表单：显式提交才调用接口 */}
       <FormDialog

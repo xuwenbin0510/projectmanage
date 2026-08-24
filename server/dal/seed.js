@@ -14,23 +14,19 @@
 const cfg = require('../../config');
 const { createTemplates } = require('../config/lifecycle');
 const { nowIso } = require('../lib/dates');
+const { hashPassword } = require('../lib/password');
 
 /**
- * 演示账号（与前端 demoAccounts.ts 逐字对齐）
+ * 演示账号（与前端 demoAccounts.ts 对应）
+ *
+ * 2026-08-23 清理：原 10 个占位演示账号已并入真实管理员、不再单独存在，
+ * 避免 seed 在重启时把已删除的占位用户（含重复的「徐文斌」测试号 ou_xuwenbin01）重建。
+ * 系统唯一管理员为真实飞书账号 ou_05a73dc49cbe53196fa42de2c616db21
+ * （首次飞书登录即创建；devlogin 亦可直接用该 open_id 登入）。
+ * 如需恢复演示账号，按需在此数组回填，并同步前端 demoAccounts.ts。
  * @type {{openId: string, employeeId: string, name: string, globalRole: string, dept: string}[]}
  */
-const DEMO_ACCOUNTS = [
-  { openId: 'ou_xuwenbin01', employeeId: 'E1001', name: '徐文斌', globalRole: 'admin', dept: '项目管理部' },
-  { openId: 'ou_liming03', employeeId: 'E1003', name: '李明', globalRole: 'pm', dept: '项目管理部' },
-  { openId: 'ou_zhangmin04', employeeId: 'E1004', name: '张敏', globalRole: 'pmo', dept: 'PMO' },
-  { openId: 'ou_wangqiang02', employeeId: 'E1002', name: '王强', globalRole: 'tl', dept: '研发中心' },
-  { openId: 'ou_chenjing05', employeeId: 'E1005', name: '陈静', globalRole: 'qa', dept: '质量部' },
-  { openId: 'ou_sunyue07', employeeId: 'E1007', name: '孙悦', globalRole: 'po', dept: '产品部' },
-  { openId: 'ou_zhoutao08', employeeId: 'E1008', name: '周涛', globalRole: 'management', dept: '公司管理层' },
-  { openId: 'ou_zhaolei06', employeeId: 'E1006', name: '赵磊', globalRole: 'cm', dept: '配置管理组' },
-  { openId: 'ou_wudi09', employeeId: 'E1009', name: '吴迪', globalRole: 'member', dept: '研发中心' },
-  { openId: 'ou_zhengshuang10', employeeId: 'E1010', name: '郑爽', globalRole: 'member', dept: '研发中心' },
-];
+const DEMO_ACCOUNTS = [];
 
 /**
  * 写入演示账号（幂等）。
@@ -77,6 +73,34 @@ function promoteConfiguredAdmins(db, ts) {
   cfg.ADMIN_OPEN_IDS.forEach(function (openId) {
     n += upd.run(ts, openId).changes;
   });
+  return n;
+}
+
+/**
+ * 系统默认初始化密码。首次登录强制改密，因此该默认值仅用于第一次登入，不长期使用。
+ */
+const DEFAULT_PASSWORD = process.env.DEFAULT_USER_PASSWORD || 'AstrBytes@2026';
+
+/**
+ * 为所有缺少 password_hash 的现有用户写入默认密码，并标记 must_change_pwd=1。
+ * 幂等：仅当 password_hash IS NULL 时更新；用户已改密后不再覆盖。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} ts ISO 时间戳
+ * @returns {Promise<number>} 实际更新条数
+ */
+async function initializePasswords(db, ts) {
+  const rows = db.prepare('SELECT open_id FROM users WHERE password_hash IS NULL').all();
+  if (!rows.length) return 0;
+  const hashed = await hashPassword(DEFAULT_PASSWORD);
+  const upd = db.prepare(
+    'UPDATE users SET password_hash = ?, must_change_pwd = 1, email = COALESCE(email, ?), updated_at = ? WHERE open_id = ?'
+  );
+  let n = 0;
+  rows.forEach(function (row) {
+    const fallbackEmail = `${row.open_id}@local.astrbytes.com`.toLowerCase();
+    n += upd.run(hashed, fallbackEmail, ts, row.open_id).changes;
+  });
+  console.log('[seed] 为 %d 位现有用户初始化默认密码（首次登录需修改）', n);
   return n;
 }
 
@@ -151,7 +175,7 @@ function seedTemplates(db, ts) {
  */
 function cleanupDirtyData(db, ts) {
   const PHANTOM = 'dev_徐文斌';
-  const DEFAULT_ADMIN = 'ou_xuwenbin01';
+  const DEFAULT_ADMIN = 'ou_05a73dc49cbe53196fa42de2c616db21';
 
   let changed = 0;
 
@@ -226,9 +250,9 @@ function cleanupDirtyData(db, ts) {
 /**
  * 执行全部种子写入（在单事务内，失败整体回滚）。
  * @param {import('better-sqlite3').Database} db
- * @returns {{users: number, admins: number, templates: {added: number, upgraded: number}}}
+ * @returns {{users: number, admins: number, templates: {added: number, upgraded: number}, passwords?: number}}
  */
-function run(db) {
+async function run(db) {
   const ts = nowIso();
   let result = { users: 0, admins: 0, templates: { added: 0, upgraded: 0 } };
 
@@ -246,6 +270,10 @@ function run(db) {
   });
   tx();
 
+  /* 密码初始化：必须在 transaction 外执行（hashPassword 是 async，better-sqlite3 transaction 内不支持 await） */
+  const pwdInit = await initializePasswords(db, ts);
+  if (pwdInit) result.passwords = pwdInit;
+
   if (result.users || result.admins || result.templates.added || result.templates.upgraded) {
     console.log(
       '[seed] users +%d, admins +%d, templates +%d (upgraded %d)',
@@ -258,4 +286,4 @@ function run(db) {
   return result;
 }
 
-module.exports = { run, DEMO_ACCOUNTS };
+module.exports = { run, DEMO_ACCOUNTS, DEFAULT_PASSWORD };

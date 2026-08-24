@@ -4,6 +4,7 @@
 import type {
   GlobalRole,
   ProjectRole,
+  RoleKey,
   ProjectStatus,
   ProjectType,
   GateStatus,
@@ -20,31 +21,35 @@ import type { TodoType } from '@/types/todo';
 
 /* ── 角色 ─────────────────────────────────────────── */
 
-export const GLOBAL_ROLE_LABEL: Record<GlobalRole, string> & Record<string, string> = {
+import { ROLE_CATALOG, allRoleKeys, projectRoleKeys } from './roles-catalog';
+
+/** 全部启用角色 key（按 order_no）。运行时单一真相源为后端 roles 表；此处仅前端/mock 用。 */
+export const ALL_ROLES: RoleKey[] = allRoleKeys() as RoleKey[];
+
+/** 项目视角启用角色 key（可作为项目成员角色）。 */
+export const PROJECT_ROLES: RoleKey[] = projectRoleKeys() as RoleKey[];
+
+export const GLOBAL_ROLE_LABEL: Record<string, string> = {
   admin: '管理员',
+  cpo: '产品总监',
+  cto: '技术总监',
   management: '管理层',
   pmo: 'PMO',
-  pm: '项目经理',
-  tl: '技术负责人',
-  qa: '质量负责人',
   cm: '配置管理员',
-  po: '产品负责人',
+  dev: '研发工程师',
   member: '普通成员',
+  ops: '运维工程师',
+  pm: '项目经理',
+  po: '产品负责人',
+  qa: '质量负责人',
+  sale: '商务',
+  tl: '技术负责人',
+  ued: '体验设计师',
 };
 
-export const GLOBAL_ROLES: GlobalRole[] = [
-  'admin',
-  'management',
-  'pmo',
-  'pm',
-  'tl',
-  'qa',
-  'cm',
-  'po',
-  'member',
-];
+export const GLOBAL_ROLE_LABEL_MAP = GLOBAL_ROLE_LABEL;
 
-export const PROJECT_ROLE_LABEL: Record<ProjectRole, string> & Record<string, string> = {
+export const PROJECT_ROLE_LABEL: Record<string, string> = {
   pm: '项目经理 PM',
   tl: '技术负责人 TL',
   po: '产品负责人 PO',
@@ -52,11 +57,15 @@ export const PROJECT_ROLE_LABEL: Record<ProjectRole, string> & Record<string, st
   cm: '配置管理员 CM',
   pmo: 'PMO',
   member: '成员',
+  cpo: '产品总监',
+  cto: '技术总监',
+  dev: '研发工程师',
+  ops: '运维工程师',
+  sale: '商务',
+  ued: '体验设计师',
 };
 
-export const PROJECT_ROLES: ProjectRole[] = ['pm', 'tl', 'po', 'qa', 'cm', 'pmo', 'member'];
-
-/** 评审链里出现的角色（含虚拟的客户代表） */
+/** 评审链里出现的角色（含虚拟的客户代表，仅内部系统历史模板保留，无实际外部用户） */
 export const CHAIN_ROLE_LABEL: Record<string, string> = {
   ...PROJECT_ROLE_LABEL,
   management: '管理层',
@@ -358,6 +367,7 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   apply: '变更应用',
   baseline: '建立基线',
   baseline_change: '基线变更',
+  'reset-password': '重置密码',
 };
 
 export const AUDIT_ENTITY_LABEL: Record<AuditEntityType, string> = {

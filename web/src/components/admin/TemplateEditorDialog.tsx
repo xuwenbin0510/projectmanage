@@ -23,7 +23,6 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 
 import type { LifecycleTemplate, TemplateMilestone, TemplateGate, TemplateDocItem, TemplateTeamRule } from '@/types/project';
-import { PROJECT_ROLES, PROJECT_ROLE_LABEL } from '@/config/enums';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks';
 
@@ -48,6 +47,27 @@ function GateEditor({
   onSave: (g: GateForm) => void;
 }): JSX.Element {
   const [form, setForm] = useState<GateForm>({ code: '', name: '', ownerRole: 'tl', items: [{ content: '', ownerRole: 'tl' }] });
+  /** 动态职位目录（项目视角 + 公司视角，全部启用角色），替代写死的角色常量 */
+  const [roleOptions, setRoleOptions] = useState<Array<{ roleKey: string; name: string; scope: string }>>([]);
+  const scopeLabel: Record<string, string> = { project: '项目', global: '公司' };
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const rs = await api.listRoles();
+        if (!alive) return;
+        setRoleOptions(
+          rs.filter((r) => r.enabled).sort((a, b) => (a.scope === b.scope ? a.orderNo - b.orderNo : a.scope === 'global' ? -1 : 1)).map((r) => ({ roleKey: r.roleKey, name: r.name, scope: r.scope })),
+        );
+      } catch {
+        if (alive) setRoleOptions([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   /* 每次打开时从外部 gate 初始化（新增 = 空表单） */
   useEffect(() => {
@@ -85,10 +105,25 @@ function GateEditor({
             fullWidth
             value={form.ownerRole}
             onChange={(e) => setForm({ ...form, ownerRole: e.target.value })}
+            SelectProps={{
+              renderValue: (v) => {
+                const r = roleOptions.find((x) => x.roleKey === v);
+                return (
+                  <Tooltip title={r ? `${r.name}（${scopeLabel[r.scope] ?? r.scope}）` : String(v)} placement="top" arrow>
+                    <Box component="span" sx={{ lineHeight: 1.3, wordBreak: 'break-word', display: 'block' }}>
+                      {r ? r.name : String(v)}
+                    </Box>
+                  </Tooltip>
+                );
+              },
+            }}
           >
-            {['pm', 'tl', 'qa', 'po', 'cm', 'pmo', 'management'].map((r) => (
-              <MenuItem key={r} value={r}>
-                {r}
+            {roleOptions.map((r) => (
+              <MenuItem key={r.roleKey} value={r.roleKey}>
+                {r.name}
+                <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                  （{scopeLabel[r.scope] ?? r.scope}）
+                </Typography>
               </MenuItem>
             ))}
           </TextField>
@@ -108,22 +143,38 @@ function GateEditor({
                   setForm({ ...form, items });
                 }}
               />
-              <TextField
-                size="small"
-                select
-                sx={{ width: 120 }}
-                value={it.ownerRole}
-                onChange={(e) => {
-                  const items = form.items.map((x, j) => (j === i ? { ...x, ownerRole: e.target.value } : x));
-                  setForm({ ...form, items });
-                }}
-              >
-                {['pm', 'tl', 'qa', 'po', 'cm', 'pmo', 'management'].map((r) => (
-                  <MenuItem key={r} value={r}>
-                    {r}
-                  </MenuItem>
-                ))}
-              </TextField>
+          <TextField
+            size="small"
+            select
+            sx={{ width: 184 }}
+            value={it.ownerRole}
+            onChange={(e) => {
+              const items = form.items.map((x, j) => (j === i ? { ...x, ownerRole: e.target.value } : x));
+              setForm({ ...form, items });
+            }}
+            SelectProps={{
+              renderValue: (v) => {
+                const r = roleOptions.find((x) => x.roleKey === v);
+                const text = r ? r.name : String(v);
+                return (
+                  <Tooltip title={r ? `${r.name}（${scopeLabel[r.scope] ?? r.scope}）` : String(v)} placement="top" arrow>
+                    <Box component="span" sx={{ lineHeight: 1.3, wordBreak: 'break-word', display: 'block' }}>
+                      {text}
+                    </Box>
+                  </Tooltip>
+                );
+              },
+            }}
+          >
+            {roleOptions.map((r) => (
+              <MenuItem key={r.roleKey} value={r.roleKey}>
+                {r.name}
+                <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                  （{scopeLabel[r.scope] ?? r.scope}）
+                </Typography>
+              </MenuItem>
+            ))}
+          </TextField>
               <IconButton
                 size="small"
                 onClick={() => setForm({ ...form, items: form.items.filter((_, j) => j !== i) })}
@@ -184,6 +235,26 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
   const [gateFor, setGateFor] = useState<number | null>(null); // 正在编辑门的里程碑下标
   const [saving, setSaving] = useState(false);
   const [touched, setTouched] = useState(false);
+  /** 动态职位目录（项目内视野 + 启用），替代写死的 PROJECT_ROLES，与后台「职位管理」实时同步 */
+  const [roleOptions, setRoleOptions] = useState<Array<{ roleKey: string; name: string }>>([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const rs = await api.listRoles();
+        if (!alive) return;
+        setRoleOptions(
+          rs.filter((r) => r.enabled && r.scope === 'project').sort((a, b) => a.orderNo - b.orderNo).map((r) => ({ roleKey: r.roleKey, name: r.name })),
+        );
+      } catch {
+        if (alive) setRoleOptions([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   /* 打开时从 template 初始化 */
   const initFrom = (t: LifecycleTemplate | null): void => {
@@ -401,7 +472,7 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
                   size="small"
                   startIcon={<AddIcon />}
                   onClick={() => {
-                    setTeam((list) => [...list, { role: 'member', min: 0, max: -1 }]);
+                    setTeam((list) => [...list, { role: (roleOptions[0]?.roleKey ?? '') as TemplateTeamRule['role'], min: 0, max: -1 }]);
                     setTouched(true);
                   }}
                 >
@@ -425,8 +496,8 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
                         setTouched(true);
                       }}
                     >
-                      {PROJECT_ROLES.map((rl) => (
-                        <MenuItem key={rl} value={rl}>{PROJECT_ROLE_LABEL[rl]}</MenuItem>
+                      {roleOptions.map((rl) => (
+                        <MenuItem key={rl.roleKey} value={rl.roleKey}>{rl.name}</MenuItem>
                       ))}
                     </TextField>
                     <TextField

@@ -1,7 +1,18 @@
 import { create } from 'zustand';
 import type { User, ProjectRole } from '@/types/project';
 import { api, setToken, USE_MOCK } from '@/api/client';
-import { canDo } from '@/config/permissions';
+import { canDo, hydratePermissions, resetPermissions } from '@/config/permissions';
+
+/** 登录/恢复会话后拉取当前生效矩阵并注入前端 canDo（与后端同源） */
+async function hydrateMatrix(): Promise<void> {
+  try {
+    const { matrix } = await api.getMetaPermissionMatrix();
+    hydratePermissions(matrix);
+  } catch {
+    // 拉取失败不阻塞登录：回落编译期 PERMISSIONS 常量
+    resetPermissions();
+  }
+}
 
 /**
  * 认证与权限镜像 store
@@ -14,10 +25,13 @@ interface AuthState {
   ready: boolean;
   /** 当前项目内我的角色（进入项目详情时写入；值为职位 role_key，不再限定固定联合类型） */
   projectRoles: string[];
+  /** 邮箱密码登录 */
+  loginWithPassword: (email: string, password: string) => Promise<{ user: User; mustChangePwd: boolean }>;
   login: (openId: string) => Promise<User>;
   loginByCode: (code: string) => Promise<User>;
   /** 浏览器飞书 Web OAuth 回调登录（普通浏览器，不经过 JSSDK） */
   loginByFeishuWeb: (code: string) => Promise<User>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
   bootstrap: () => Promise<void>;
   logout: () => Promise<void>;
   setProjectRoles: (roles: string[]) => void;
@@ -30,6 +44,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   ready: false,
   projectRoles: [],
 
+  async loginWithPassword(email, password) {
+    set({ loading: true });
+    try {
+      const session = await api.login(email, password);
+      if (!USE_MOCK) setToken(session.token);
+      else localStorage.setItem('pm_token', session.token);
+      set({ user: session.user, ready: true });
+      void hydrateMatrix();
+      return { user: session.user, mustChangePwd: !!session.mustChangePwd };
+    } finally {
+      set({ loading: false });
+    }
+  },
+
   async login(openId) {
     set({ loading: true });
     try {
@@ -37,6 +65,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (!USE_MOCK) setToken(session.token);
       else localStorage.setItem('pm_token', session.token);
       set({ user: session.user, ready: true });
+      void hydrateMatrix();
       return session.user;
     } finally {
       set({ loading: false });
@@ -49,6 +78,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const session = await api.feishuLogin(code);
       localStorage.setItem('pm_token', session.token);
       set({ user: session.user, ready: true });
+      void hydrateMatrix();
       return session.user;
     } finally {
       set({ loading: false });
@@ -62,6 +92,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const { token, user } = await api.loginByFeishuCode(code);
       setToken(token);
       set({ user, ready: true });
+      void hydrateMatrix();
       return user;
     } finally {
       set({ loading: false });
@@ -74,11 +105,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const user = await api.me();
       set({ user });
+      void hydrateMatrix();
     } catch {
       set({ user: null });
     } finally {
       set({ loading: false, ready: true });
     }
+  },
+
+  async changePassword(oldPassword, newPassword) {
+    await api.changePassword(oldPassword, newPassword);
   },
 
   async logout() {
@@ -87,6 +123,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       localStorage.removeItem('pm_token');
       setToken('');
+      resetPermissions();
       set({ user: null, projectRoles: [] });
     }
   },

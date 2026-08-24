@@ -92,4 +92,6 @@ export interface WorkbenchReportClosure {
 export interface Session {
   token: string;
   user: import('./project').User;
+  /** 首次登录/重置密码后强制改密 */
+  mustChangePwd?: boolean;
 }

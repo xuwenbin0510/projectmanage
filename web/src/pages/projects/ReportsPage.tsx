@@ -1,17 +1,28 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
   Alert,
   Box,
   Button,
   Chip,
   CircularProgress,
+  IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
   Stack,
   TableSortLabel,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
+import TaskAltOutlinedIcon from '@mui/icons-material/TaskAltOutlined';
+import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import { useLocation, useParams } from 'react-router-dom';
 
 import {
@@ -121,6 +132,11 @@ export function ReportsPage(): JSX.Element {
   const [rejectReason, setRejectReason] = useState<string>('');
   /** 正在执行确认 / 打回动作的周报 id（禁重复点击） */
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; report: Report } | null>(null);
+  const openMenu = (event: MouseEvent<HTMLElement>, report: Report): void => {
+    setMenuAnchor({ el: event.currentTarget, report });
+  };
+  const closeMenu = (): void => setMenuAnchor(null);
 
   const reloadConfirmable = useCallback((): void => {
     setConfirmableLoading(true);
@@ -288,37 +304,14 @@ export function ReportsPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 120,
+      width: 72,
       align: 'center',
       render: (r) => (
-        <Stack direction="row" spacing={0.5} justifyContent="center">
-          <Button size="small" onClick={() => openDetail(r)}>
-            查看
-          </Button>
-          <Button size="small" color="primary" onClick={() => openEditReport(r)}>
-            编辑
-          </Button>
-          {isConfirmable(r) && (
-            <>
-              <Button
-                size="small"
-                color="success"
-                disabled={busyId === r.id}
-                onClick={() => void handleConfirm(r)}
-              >
-                {busyId === r.id ? <CircularProgress size={14} /> : '确认'}
-              </Button>
-              <Button
-                size="small"
-                color="error"
-                disabled={busyId === r.id}
-                onClick={() => openReject(r)}
-              >
-                打回
-              </Button>
-            </>
-          )}
-        </Stack>
+        <Tooltip title="操作">
+          <IconButton size="small" onClick={(e) => openMenu(e, r)}>
+            <MoreVertOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       ),
     },
   ];
@@ -379,10 +372,64 @@ export function ReportsPage(): JSX.Element {
                 填报时间
               </TableSortLabel>
             </Stack>
-            <DataTable<Report> columns={columns} rows={sortedReports} rowKey={(r) => r.id} />
+            <DataTable<Report> columns={columns} rows={sortedReports} rowKey={(r) => r.id} tableLayout="fixed" />
           </>
         )}
       </SectionCard>
+
+      {/* 行操作「更多」菜单 */}
+      <Menu anchorEl={menuAnchor?.el} open={!!menuAnchor} onClose={closeMenu}>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) openDetail(menuAnchor.report);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon>
+            <VisibilityOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>查看</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) openEditReport(menuAnchor.report);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon>
+            <EditOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>编辑</ListItemText>
+        </MenuItem>
+        {menuAnchor && isConfirmable(menuAnchor.report) && (
+          <>
+            <MenuItem
+              disabled={busyId === menuAnchor.report.id}
+              onClick={() => {
+                void handleConfirm(menuAnchor.report);
+                closeMenu();
+              }}
+            >
+              <ListItemIcon>
+                <TaskAltOutlinedIcon fontSize="small" color="success" />
+              </ListItemIcon>
+              <ListItemText>确认</ListItemText>
+            </MenuItem>
+            <MenuItem
+              disabled={busyId === menuAnchor.report.id}
+              onClick={() => {
+                openReject(menuAnchor.report);
+                closeMenu();
+              }}
+            >
+              <ListItemIcon>
+                <BlockOutlinedIcon fontSize="small" color="error" />
+              </ListItemIcon>
+              <ListItemText>打回</ListItemText>
+            </MenuItem>
+          </>
+        )}
+      </Menu>
 
       {/* R4-P0-4：共享日志表单（新建提交后关闭，行为与现状一致；旧链接 prefill 走 lockNodeId 锁定） */}
       <ReportFormModal

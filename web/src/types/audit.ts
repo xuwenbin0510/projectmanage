@@ -25,7 +25,9 @@ export type AuditAction =
   | 'apply'
   /* D05：文档基线 */
   | 'baseline'
-  | 'baseline_change';
+  | 'baseline_change'
+  /* 用户管理：管理员重置密码 */
+  | 'reset-password';
 
 export interface AuditDiffEntry {
   field: string;

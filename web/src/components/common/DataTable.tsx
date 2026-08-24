@@ -18,8 +18,26 @@ export interface Column<T> {
   width?: number | string | Record<string, number | string>;
   align?: 'left' | 'right' | 'center';
   render?: (row: T, index: number) => ReactNode;
-  /** 移动端隐藏 */
+  /** 移动端隐藏（兼容旧接口，等价于 hideBelow: 'md'） */
   hideOnMobile?: boolean;
+  /** 在指定断点以下隐藏该列；例如 'lg' 表示 lg 以下隐藏，lg 及以上显示 */
+  hideBelow?: 'sm' | 'md' | 'lg' | 'xl';
+}
+
+/** 将 hideBelow 映射为 MUI display 响应式对象 */
+function responsiveHideSx(below?: 'sm' | 'md' | 'lg' | 'xl') {
+  switch (below) {
+    case 'sm':
+      return { display: { xs: 'none', sm: 'table-cell' } };
+    case 'md':
+      return { display: { xs: 'none', md: 'table-cell' } };
+    case 'lg':
+      return { display: { xs: 'none', lg: 'table-cell' } };
+    case 'xl':
+      return { display: { xs: 'none', xl: 'table-cell' } };
+    default:
+      return {};
+  }
 }
 
 interface DataTableProps<T> {
@@ -74,8 +92,11 @@ export function DataTable<T>({
                   align={c.align ?? 'left'}
                   sx={{
                     width: c.width,
+                    maxWidth: c.width,
                     whiteSpace: 'nowrap',
-                    ...(c.hideOnMobile ? { display: { xs: 'none', md: 'table-cell' } } : {}),
+                    overflow: c.width ? 'hidden' : undefined,
+                    textOverflow: c.width ? 'ellipsis' : undefined,
+                    ...(c.hideBelow ? responsiveHideSx(c.hideBelow) : c.hideOnMobile ? { display: { xs: 'none', md: 'table-cell' } } : {}),
                   }}
                 >
                   {c.label}
@@ -95,7 +116,14 @@ export function DataTable<T>({
                   <TableCell
                     key={c.key}
                     align={c.align ?? 'left'}
-                    sx={c.hideOnMobile ? { display: { xs: 'none', md: 'table-cell' } } : undefined}
+                    sx={{
+                      width: c.width,
+                      maxWidth: c.width,
+                      whiteSpace: 'nowrap',
+                      overflow: c.width ? 'hidden' : undefined,
+                      textOverflow: c.width ? 'ellipsis' : undefined,
+                      ...(c.hideBelow ? responsiveHideSx(c.hideBelow) : c.hideOnMobile ? { display: { xs: 'none', md: 'table-cell' } } : {}),
+                    }}
                   >
                     {c.render ? c.render(row, i) : String((row as Record<string, unknown>)[c.key] ?? '—')}
                   </TableCell>

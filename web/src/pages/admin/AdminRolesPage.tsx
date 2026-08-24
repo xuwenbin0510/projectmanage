@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import {
   Box,
   Button,
@@ -7,15 +7,21 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
+  ListItemIcon,
+  ListItemText,
+  Menu,
   MenuItem,
   Stack,
   Switch,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import DeleteOutlineOutlinedIcon from '@mui/icons-material/DeleteOutlineOutlined';
+import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 
 import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard } from '@/components/common';
 import type { Column } from '@/components/common';
@@ -70,6 +76,12 @@ export function AdminRolesPage(): JSX.Element {
   /* 删除确认弹窗状态 */
   const [deleteTarget, setDeleteTarget] = useState<Role | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; role: Role } | null>(null);
+  const openMenu = (event: MouseEvent<HTMLElement>, role: Role): void => {
+    setMenuAnchor({ el: event.currentTarget, role });
+  };
+  const closeMenu = (): void => setMenuAnchor(null);
 
   const load = (): void => {
     setLoading(true);
@@ -240,25 +252,15 @@ export function AdminRolesPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 140,
+      width: 72,
       render: (r) => (
-        <Stack direction="row" spacing={0.5}>
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Button size="small" startIcon={<EditOutlinedIcon />} onClick={() => openEdit(r)}>
-              编辑
-            </Button>
-          </PermissionButton>
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Button
-              size="small"
-              color="error"
-              startIcon={<DeleteOutlineOutlinedIcon />}
-              onClick={() => openDelete(r)}
-            >
-              删除
-            </Button>
-          </PermissionButton>
-        </Stack>
+        <PermissionButton action="admin:user:role" fallback="disable">
+          <Tooltip title="操作">
+            <IconButton size="small" onClick={(e) => openMenu(e, r)}>
+              <MoreVertOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </PermissionButton>
       ),
     },
   ];
@@ -282,10 +284,37 @@ export function AdminRolesPage(): JSX.Element {
           <LoadingState variant="skeleton" rows={6} height={48} />
         ) : (
           <Box sx={{ p: 1 }}>
-            <DataTable<Role> columns={columns} rows={roles} rowKey={(r) => r.roleKey} />
+            <DataTable<Role> columns={columns} rows={roles} rowKey={(r) => r.roleKey} tableLayout="fixed" />
           </Box>
         )}
       </SectionCard>
+
+      {/* 行操作「更多」菜单 */}
+      <Menu anchorEl={menuAnchor?.el} open={!!menuAnchor} onClose={closeMenu}>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) openEdit(menuAnchor.role);
+            closeMenu();
+          }}
+        >
+          <ListItemIcon>
+            <EditOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>编辑</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) openDelete(menuAnchor.role);
+            closeMenu();
+          }}
+          sx={{ color: 'error.main' }}
+        >
+          <ListItemIcon>
+            <DeleteOutlineOutlinedIcon fontSize="small" color="error" />
+          </ListItemIcon>
+          <ListItemText>删除</ListItemText>
+        </MenuItem>
+      </Menu>
 
       {/* 新增职位弹窗 */}
       <Dialog open={createOpen} onClose={() => !creating && setCreateOpen(false)} maxWidth="xs" fullWidth>
