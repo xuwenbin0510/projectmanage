@@ -283,6 +283,20 @@ export const REVIEW_STEP_STATUS_LABEL: Record<ReviewStepStatus, string> = {
   skipped: '已跳过',
 };
 
+/* ── 风险登记册（前端镜像；服务端 enums.js 取值逐字一致） ── */
+
+export type RiskCategory = '进度' | '成本' | '质量' | '技术' | '资源' | '外部依赖' | '范围' | '其他';
+export type RiskStatus = '待评估' | '监控中' | '应对中' | '已发生' | '已关闭';
+
+export const RISK_CATEGORIES: RiskCategory[] = ['进度', '成本', '质量', '技术', '资源', '外部依赖', '范围', '其他'];
+export const RISK_STATUSES: RiskStatus[] = ['待评估', '监控中', '应对中', '已发生', '已关闭'];
+
+/** 概率 / 影响取值域 1~5，风险值 = 概率 × 影响 */
+export const RISK_LEVELS: number[] = [1, 2, 3, 4, 5];
+
+/** 高风险阈值：riskValue >= 12 */
+export const RISK_HIGH_THRESHOLD = 12;
+
 /** 评审模板（前端镜像；服务端 REVIEW_TEMPLATES 为准） */
 export const REVIEW_TEMPLATES: Record<
   ReviewType,
@@ -383,6 +397,7 @@ export const AUDIT_ENTITY_LABEL: Record<AuditEntityType, string> = {
   document: '文档',
   review_template: '审批模板',
   template: '生命周期模板',
+  risk: '风险',
 };
 
 /* ── 周报 ─────────────────────────────────────────── */

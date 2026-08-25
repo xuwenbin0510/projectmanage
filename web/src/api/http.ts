@@ -30,7 +30,7 @@ import type { Report } from '@/types/report';
 import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
-import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
+import type { AuditLog, Risk, CreateRiskPayload, UpdateRiskPayload, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, WorkbenchReportClosure, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
@@ -550,9 +550,18 @@ export class HttpApiClient implements ApiClient {
     return del<{ key: string }>(`/admin/review-templates/${encodeURIComponent(key)}`);
   }
 
-  /* P1 */
+  /* 风险登记册（本期新增功能域） */
   listRisks(projectId: string): Promise<Risk[]> {
     return get<Risk[]>(`/projects/${projectId}/risks`);
+  }
+  createRisk(projectId: string, payload: CreateRiskPayload): Promise<Risk> {
+    return post<Risk>(`/projects/${projectId}/risks`, payload);
+  }
+  updateRisk(id: string, payload: UpdateRiskPayload): Promise<Risk> {
+    return patch<Risk>(`/risks/${id}`, payload);
+  }
+  deleteRisk(id: string): Promise<{ id: string }> {
+    return del<{ id: string }>(`/risks/${id}`);
   }
 
   /* C01 任务附件 */

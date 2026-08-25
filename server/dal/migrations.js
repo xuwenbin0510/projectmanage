@@ -1419,6 +1419,46 @@ function migrationV18(db, now) {
   console.log('[migrations] v18 permission_rules + permission_actions 表 + %d 条授权种子（RBAC 可配置化·数据底座）', dpActions.length);
 }
 
+/* ── 迁移 v19：风险登记册表 ───────────────────────── */
+
+/**
+ * 迁移 v19 —— 风险登记册（本期新增功能域）。
+ *
+ * 口径铁律（与前端 Mock `toListItem` 逐字一致）：
+ *  - `risk_value = probability * impact`，落库去重算，读路径不再现场乘
+ *  - 高风险阈值 `risk_value >= 12`（service 层 `countHighRisks` 复用同一常量）
+ *  - `code` 形如 `RISK-序号`，由 service 层自增生成（UNIQUE 约束防撞）
+ *  - 归档态拦截由 service 层 `rbac.assertWritable` 负责，此处不设业务约束
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ */
+function migrationV19(db, now) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS risks (
+      id           TEXT PRIMARY KEY,
+      project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      code         TEXT NOT NULL,
+      description  TEXT NOT NULL DEFAULT '',
+      category     TEXT NOT NULL DEFAULT '',
+      probability  INTEGER NOT NULL DEFAULT 1,
+      impact       INTEGER NOT NULL DEFAULT 1,
+      risk_value   INTEGER NOT NULL DEFAULT 1,
+      strategy     TEXT NOT NULL DEFAULT '',
+      owner        TEXT NOT NULL DEFAULT '',
+      status       TEXT NOT NULL DEFAULT '待评估',
+      review_date  TEXT,
+      created_by   TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      UNIQUE (project_id, code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_risks_project ON risks(project_id);
+  `);
+
+  console.log('[migrations] v19 risks 表（风险登记册）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1444,6 +1484,7 @@ const MIGRATIONS = [
   { version: 16, name: 'connect-v16-password-login', up: migrationV16 },
   { version: 17, name: 'connect-v17-union-id', up: migrationV17 },
   { version: 18, name: 'connect-v18-rbac-config', up: migrationV18 },
+  { version: 19, name: 'connect-v19-risks', up: migrationV19 },
 ];
 
 /**

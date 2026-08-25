@@ -151,6 +151,20 @@ const REVIEW_STATUSES = ['草稿', '审批中', '已通过', '已驳回', '已�
 
 const REVIEW_STEP_STATUSES = ['pending', 'current', 'approved', 'rejected', 'skipped'];
 
+/* ── 风险登记册 ────────────────────────────────────── */
+
+/** 风险类别（前端同名字段取值必须逐字一致） */
+const RISK_CATEGORIES = ['进度', '成本', '质量', '技术', '资源', '外部依赖', '范围', '其他'];
+
+/** 风险状态（前端同名字段取值必须逐字一致） */
+const RISK_STATUSES = ['待评估', '监控中', '应对中', '已发生', '已关闭'];
+
+/** 概率 / 影响取值域（1~5），风险值 = 概率 × 影响 */
+const RISK_LEVELS = [1, 2, 3, 4, 5];
+
+/** 高风险阈值：riskValue >= 12 */
+const RISK_HIGH_THRESHOLD = 12;
+
 // 审批链角色兜底顺序不再写死：运行时由 server/services/roleCatalog.js 按 roles 表
 // scope=global 的启用角色动态生成（globalFallbacks）。
 
@@ -269,6 +283,10 @@ module.exports = {
   REVIEW_STATUSES,
   REVIEW_STEP_STATUSES,
   REVIEW_TEMPLATES,
+  RISK_CATEGORIES,
+  RISK_STATUSES,
+  RISK_LEVELS,
+  RISK_HIGH_THRESHOLD,
   CHANGE_TYPES,
   CHANGE_ROUTES,
   CHANGE_STATUSES,

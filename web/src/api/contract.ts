@@ -30,7 +30,7 @@ import type { Report } from '@/types/report';
 import type { EffortReport } from '@/types/effort';
 import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
-import type { AuditLog, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
+import type { AuditLog, Risk, CreateRiskPayload, UpdateRiskPayload, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, WorkbenchReportClosure, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
@@ -460,8 +460,11 @@ export interface ApiClient {
   toggleReviewTemplateActive(key: string, active: boolean): Promise<ReviewTemplateConfig>;
   deleteReviewTemplate(key: string): Promise<{ key: string }>;
 
-  /* P1 占位 */
+  /* 风险登记册（本期新增功能域） */
   listRisks(projectId: string): Promise<Risk[]>;
+  createRisk(projectId: string, payload: CreateRiskPayload): Promise<Risk>;
+  updateRisk(id: string, patch: UpdateRiskPayload): Promise<Risk>;
+  deleteRisk(id: string): Promise<{ id: string }>;
 
   /* C01 任务附件 */
   listDocuments(projectId: string, opts?: { nodeId?: string; milestoneId?: string }): Promise<ProjectDocument[]>;

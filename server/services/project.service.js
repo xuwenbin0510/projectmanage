@@ -22,6 +22,7 @@ const roleCatalog = require('./roleCatalog');
 const classifyService = require('./classify.service');
 const milestoneService = require('./milestone.service');
 const documentService = require('./document.service');
+const riskService = require('./risk.service');
 const { resolveGlobalRoles } = require('../middleware/auth');
 
 /** 无 PM 时列表页展示的占位（与前端 Mock `toListItem` 一致） */
@@ -383,9 +384,10 @@ function loadListContext(db, projectIds) {
  * @param {object} row projects 行
  * @param {{pmName: Object, milestones: Object, gates: Object}} ctx
  * @param {string} todayStr
+ * @param {import('better-sqlite3').Database} db
  * @returns {object} ProjectListItem
  */
-function toListItem(row, ctx, todayStr) {
+function toListItem(row, ctx, todayStr, db) {
   const projectId = mappers.toStr(row.id);
   const msList = (ctx.milestones[projectId] || []).slice();
   const gates = ctx.gates[projectId] || [];
@@ -416,8 +418,8 @@ function toListItem(row, ctx, todayStr) {
     milestoneDone: milestoneDone,
     milestoneTotal: sorted.length,
     nextMilestoneDate: next ? next.currentDate || null : null,
-    // TODO(批次4): 接入 risks 表后统计 riskValue >= 12 的高风险数
-    highRiskCount: 0,
+    /* 高风险数：risk_value >= 12（与前端 Mock `toListItem` 逐字一致），现由风险表实时统计 */
+    highRiskCount: riskService.countHighRisks(db, projectId),
   });
 }
 
@@ -461,7 +463,7 @@ function listProjects(db, query, me) {
 
   const ctx = loadListContext(db, rows.map(function (r) { return String(r.id); }));
   const todayStr = dates.today();
-  let items = rows.map(function (r) { return toListItem(r, ctx, todayStr); });
+  let items = rows.map(function (r) { return toListItem(r, ctx, todayStr, db); });
 
   /* pm 过滤按「PM 姓名」匹配（与前端 Mock 口径一致），须在聚合后进行 */
   if (q.pm) {
@@ -493,7 +495,7 @@ function listMyProjectItems(db, me) {
     .all(openId);
   const ctx = loadListContext(db, rows.map(function (r) { return String(r.id); }));
   const todayStr = dates.today();
-  return rows.map(function (r) { return toListItem(r, ctx, todayStr); });
+  return rows.map(function (r) { return toListItem(r, ctx, todayStr, db); });
 }
 
 /* ── 建项校验 ───────────────────────────────────────── */

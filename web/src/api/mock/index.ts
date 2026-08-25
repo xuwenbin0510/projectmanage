@@ -30,7 +30,7 @@ import type { Report, ReportTaskRow, ReportRisk } from '@/types/report';
 import type { EffortReport, EffortSummary, EffortReportRow, EffortBreakdownItem } from '@/types/effort';
 import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
-import type { AuditLog, AuditDiffEntry, Risk, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
+import type { AuditLog, AuditDiffEntry, Risk, CreateRiskPayload, UpdateRiskPayload, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, ReportReminder, GateTodo, ReportConfirmation, WorkbenchReportClosure, WorkbenchReportClosureItem, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
@@ -351,6 +351,30 @@ function audit(
     summary: summary || AUDIT_ACTION_LABEL[action],
     createdAt: nowIso(),
   });
+}
+
+/* ── 风险登记册（本期新增功能域）辅助 ──────────────── */
+
+/** 概率 / 影响取值夹紧到 1~5 */
+function normalizeRiskLevel(v: unknown): number {
+  const n = typeof v === 'number' ? v : parseInt(String(v), 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > 5) return 5;
+  return Math.round(n);
+}
+
+/** 生成下一个风险 code：`RISK-` + (maxSeq + 1) */
+function nextRiskCode(db: MockDb, projectId: string): string {
+  let maxSeq = 0;
+  db.risks.forEach((r) => {
+    if (r.projectId !== projectId) return;
+    const m = /^RISK-(\d+)$/.exec(r.code);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxSeq) maxSeq = n;
+    }
+  });
+  return 'RISK-' + (maxSeq + 1);
 }
 
 /* ── 阶段二：审批模板校验（白名单与服务端 admin.routes 一致） ───── */
@@ -4222,13 +4246,92 @@ export class MockApiClient implements ApiClient {
     return { key };
   }
 
-  /* ── P1 占位 ──────────────────────────────────── */
+  /* ── 风险登记册（本期新增功能域） ──────────────── */
 
   async listRisks(projectId: string): Promise<Risk[]> {
     await delay(80);
     const db = getDb();
     currentUser(db);
     return deepClone(db.risks.filter((r) => r.projectId === projectId));
+  }
+
+  async createRisk(projectId: string, payload: CreateRiskPayload): Promise<Risk> {
+    await delay(80);
+    const db = getDb();
+    const me = currentUser(db);
+    const description = (payload.description ?? '').trim();
+    if (!description) throw new ApiError(ErrorCode.E_VALIDATION, '风险描述不能为空');
+    const probability = normalizeRiskLevel(payload.probability);
+    const impact = normalizeRiskLevel(payload.impact);
+    const riskValue = probability * impact;
+    const code = nextRiskCode(db, projectId);
+    const risk: Risk = {
+      id: genId('RK'),
+      projectId,
+      code,
+      description,
+      category: payload.category ?? '',
+      probability,
+      impact,
+      riskValue,
+      strategy: payload.strategy ?? '',
+      owner: payload.owner ?? '',
+      status: payload.status ?? '待评估',
+      reviewDate: payload.reviewDate ?? null,
+    };
+    db.risks.push(risk);
+    audit(db, me, 'risk', risk.id, 'create', projectId, `新增风险「${code} ${description}」（风险值 ${riskValue}）`, []);
+    saveDb();
+    return deepClone(risk);
+  }
+
+  async updateRisk(id: string, patch: UpdateRiskPayload): Promise<Risk> {
+    await delay(80);
+    const db = getDb();
+    const me = currentUser(db);
+    const risk = db.risks.find((r) => r.id === id);
+    if (!risk) throw new ApiError(ErrorCode.E_NOT_FOUND, '风险记录不存在');
+    const diff: AuditDiffEntry[] = [];
+    const set = (field: keyof Risk, label: string, v: string | number | null): void => {
+      if (v !== (risk[field] as unknown as string | number | null)) {
+        diff.push({ field: String(field), label, before: String(risk[field] ?? ''), after: String(v ?? '') });
+        (risk as unknown as Record<string, unknown>)[field] = v;
+      }
+    };
+    if (patch.description !== undefined) {
+      const v = (patch.description ?? '').trim();
+      if (!v) throw new ApiError(ErrorCode.E_VALIDATION, '风险描述不能为空');
+      set('description', '风险描述', v);
+    }
+    if (patch.category !== undefined) set('category', '类别', patch.category ?? '');
+    if (patch.probability !== undefined || patch.impact !== undefined) {
+      const probability = normalizeRiskLevel(patch.probability ?? risk.probability);
+      const impact = normalizeRiskLevel(patch.impact ?? risk.impact);
+      const riskValue = probability * impact;
+      set('probability', '概率', probability);
+      set('impact', '影响', impact);
+      set('riskValue', '风险值', riskValue);
+    }
+    if (patch.strategy !== undefined) set('strategy', '应对策略', patch.strategy ?? '');
+    if (patch.owner !== undefined) set('owner', '责任人', patch.owner ?? '');
+    if (patch.status !== undefined) set('status', '状态', patch.status ?? '待评估');
+    if (patch.reviewDate !== undefined) set('reviewDate', '复评日期', patch.reviewDate ?? null);
+    audit(db, me, 'risk', risk.id, 'update', risk.projectId, `更新风险「${risk.code}」`, diff);
+    saveDb();
+    return deepClone(risk);
+  }
+
+  async deleteRisk(id: string): Promise<{ id: string }> {
+    await delay(80);
+    const db = getDb();
+    const me = currentUser(db);
+    const idx = db.risks.findIndex((r) => r.id === id);
+    if (idx < 0) throw new ApiError(ErrorCode.E_NOT_FOUND, '风险记录不存在');
+    const risk = db.risks[idx];
+    db.risks.splice(idx, 1);
+    audit(db, me, 'risk', risk.id, 'delete', risk.projectId, `删除风险「${risk.code} ${risk.description}」`, []);
+    saveDb();
+    return { id };
   }
 
   /** D04：懒派生（幂等）——项目无模板清单项时按模板 docs 派生（按里程碑 code 挂载） */

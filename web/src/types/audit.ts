@@ -12,7 +12,8 @@ export type AuditEntityType =
   | 'user'
   | 'document'
   | 'review_template'
-  | 'template';
+  | 'template'
+  | 'risk';
 
 export type AuditAction =
   | 'create'
@@ -52,7 +53,7 @@ export interface AuditLog {
   createdAt: string;
 }
 
-/** P1 风险登记册（一期仅建类型与占位页） */
+/** 风险登记册（本期新增功能域） */
 export interface Risk {
   id: string;
   projectId: string;
@@ -65,7 +66,31 @@ export interface Risk {
   strategy: string;
   owner: string;
   status: string;
-  reviewDate: string;
+  reviewDate: string | null;
+}
+
+/** 新建风险载荷（需 project:edit 权限） */
+export interface CreateRiskPayload {
+  description: string;
+  category?: string;
+  probability?: number;
+  impact?: number;
+  strategy?: string;
+  owner?: string;
+  status?: string;
+  reviewDate?: string | null;
+}
+
+/** 编辑风险载荷（全字段可选 patch） */
+export interface UpdateRiskPayload {
+  description?: string;
+  category?: string;
+  probability?: number;
+  impact?: number;
+  strategy?: string;
+  owner?: string;
+  status?: string;
+  reviewDate?: string | null;
 }
 
 /** 文档记录类型：file=本地附件（C01）；link=飞书/外链文档（D02）；模板清单项未交付时 docType='' */
