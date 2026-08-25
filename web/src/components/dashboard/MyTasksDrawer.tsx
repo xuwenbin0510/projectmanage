@@ -262,10 +262,11 @@ export function MyTasksDrawer({
         {/* 筛选工具栏：进度段 / 优先级 / 状态 / 关键字（P1-1 二次筛选） */}
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
           <FormControl size="small" sx={{ minWidth: 108 }}>
-            <InputLabel id="mt-progress-label">进度段</InputLabel>
+            <InputLabel id="mt-progress-label" shrink>进度段</InputLabel>
             <Select
               labelId="mt-progress-label"
               label="进度段"
+              notched
               value={progressFilter}
               displayEmpty
               onChange={(e) => {
@@ -282,10 +283,11 @@ export function MyTasksDrawer({
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 108 }}>
-            <InputLabel id="mt-priority-label">优先级</InputLabel>
+            <InputLabel id="mt-priority-label" shrink>优先级</InputLabel>
             <Select
               labelId="mt-priority-label"
               label="优先级"
+              notched
               value={priorityFilter}
               displayEmpty
               onChange={(e) => {
@@ -302,10 +304,11 @@ export function MyTasksDrawer({
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 100 }}>
-            <InputLabel id="mt-status-label">状态</InputLabel>
+            <InputLabel id="mt-status-label" shrink>状态</InputLabel>
             <Select
               labelId="mt-status-label"
               label="状态"
+              notched
               value={statusFilter}
               displayEmpty
               onChange={(e) => {
