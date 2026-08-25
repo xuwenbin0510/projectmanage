@@ -102,7 +102,7 @@ export function useTodos(): TodoState {
           priorityRank: rank,
           priority: prio,
           dueDate: t.dueDate || null,
-          targetRoute: ROUTES.projectWbs(t.projectId),
+          targetRoute: ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id,
           payload: { node: t } as Record<string, unknown>,
         });
 
@@ -117,7 +117,7 @@ export function useTodos(): TodoState {
             priorityRank: rank,
             priority: prio,
             dueDate: t.dueDate || null,
-            targetRoute: ROUTES.projectWbs(t.projectId),
+            targetRoute: ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id,
             payload: { node: t } as Record<string, unknown>,
           });
         }
@@ -133,7 +133,7 @@ export function useTodos(): TodoState {
             priorityRank: rank,
             priority: prio,
             dueDate: t.dueDate || null,
-            targetRoute: ROUTES.projectWbs(t.projectId),
+            targetRoute: ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id,
             payload: { node: t } as Record<string, unknown>,
           });
         }

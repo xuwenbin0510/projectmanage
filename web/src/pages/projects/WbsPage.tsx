@@ -20,7 +20,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { SimpleTreeView, TreeItem } from '@mui/x-tree-view';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import type { Dayjs } from 'dayjs';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
 
 import {
@@ -171,6 +171,12 @@ export function WbsPage(): JSX.Element {
   /** R4-P0-4：页内写日志 Modal 开关 + 预关联锁定节点 id（不再跳转 ReportsPage） */
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportLockNodeId, setReportLockNodeId] = useState<string | null>(null);
+  /** 外部带入定位：从工作台 / 待办点「我的任务」跳入时，滚动居中 + 高亮该节点（5 秒后自动淡出） */
+  const [searchParams] = useSearchParams();
+  const locateId = searchParams.get('taskId');
+  const [highlightNodeId, setHighlightNodeId] = useState<string | null>(null);
+  const [highlightDim, setHighlightDim] = useState(false);
+  const locatedRef = useRef<string | null>(null);
   /** 创建子任务时里程碑若继承自上级则锁定（用户反馈④a：避免误改继承关系） */
   const [lockMilestone, setLockMilestone] = useState<boolean>(false);
   /** R5-P0-2：从节点行「+」创建下级时锁定「上级节点」（与 lockMilestone 同层同范式；移动节点走「编辑」） */
@@ -217,6 +223,29 @@ export function WbsPage(): JSX.Element {
       alive = false;
     };
   }, [projectType]);
+
+  // 外部带入定位：从工作台 / 待办点「我的任务」跳入 → 滚动居中并高亮该节点（5 秒后自动淡出）
+  useEffect(() => {
+    if (!locateId || loading) return;
+    if (locatedRef.current === locateId) return; // 同一任务只定位一次，避免后续 nodes 变化重复触发
+    if (!nodes.some((n) => n.id === locateId)) return;
+    locatedRef.current = locateId;
+    setHighlightNodeId(locateId);
+    setHighlightDim(false);
+    // 等待行渲染并挂上 wbs-locate 类后，用 scrollIntoView 居中（兼容页面整体滚动，比固定容器更稳）
+    const t = window.setTimeout(() => {
+      const row = document.querySelector('.wbs-locate') as HTMLElement | null;
+      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    const t2 = window.setTimeout(() => setHighlightDim(true), 5000);
+    const t3 = window.setTimeout(() => setHighlightNodeId(null), 5650);
+    return () => {
+      window.clearTimeout(t);
+      window.clearTimeout(t2);
+      window.clearTimeout(t3);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locateId, loading]);
 
   const archived = project?.status === '已结项' || project?.status === '已终止';
   const editable = can('wbs:edit') && !archived;
@@ -453,6 +482,7 @@ export function WbsPage(): JSX.Element {
       <TreeItem
         key={node.id}
         itemId={node.id}
+        className={highlightNodeId === node.id ? `wbs-locate${highlightDim ? ' wbs-locate--dim' : ''}` : undefined}
         label={
           <Stack
             direction="row"

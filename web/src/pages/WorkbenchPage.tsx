@@ -573,7 +573,7 @@ export function WorkbenchPage(): JSX.Element {
                     justifyContent="space-between"
                     /* B16：整行可点击下探 → 该项目 WBS 页（详情/编辑），与 B15 抽屉行行为一致；
                        点状态下拉不触发跳转（Select 上已 stopPropagation） */
-                    onClick={() => navigate(ROUTES.projectWbs(t.projectId))}
+                    onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
                     sx={{
                       px: 1.5,
                       py: 1.25,

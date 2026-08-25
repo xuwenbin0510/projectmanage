@@ -42,7 +42,7 @@ export interface MenuItem {
 
 export const MAIN_MENU: MenuItem[] = [
   { key: 'workbench', label: '工作台', path: ROUTES.workbench, icon: 'workbench', mobile: true },
-  { key: 'projects', label: '项目', path: ROUTES.projects, icon: 'projects', mobile: true },
+  { key: 'projects', label: '项目管理', path: ROUTES.projects, icon: 'projects', mobile: true },
   { key: 'approvals', label: '审批中心', path: ROUTES.approvals, icon: 'approvals', mobile: true },
   {
     key: 'metrics',

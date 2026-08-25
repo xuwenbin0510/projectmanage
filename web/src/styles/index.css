@@ -109,3 +109,15 @@ body {
 .kanban-dragging {
   opacity: 0.45;
 }
+
+/* WBS 外部带入定位高亮（从工作台 / 待办点「我的任务」跳入时滚动居中 + 高亮该节点） */
+.wbs-locate > .MuiTreeItem-content {
+  background: color-mix(in srgb, var(--brand-primary) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--brand-primary);
+  border-radius: 6px;
+  transition: background-color .6s ease, box-shadow .6s ease;
+}
+.wbs-locate--dim > .MuiTreeItem-content {
+  background: transparent;
+  box-shadow: none;
+}
