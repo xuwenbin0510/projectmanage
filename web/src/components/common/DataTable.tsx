@@ -82,8 +82,8 @@ export function DataTable<T>({
 
   return (
     <Box>
-      <TableContainer>
-        <Table size={dense ? 'small' : 'medium'} sx={{ tableLayout }}>
+      <TableContainer sx={{ overflowX: 'auto', width: '100%' }}>
+        <Table size={dense ? 'small' : 'medium'} sx={{ tableLayout, minWidth: 'max-content' }}>
           <TableHead>
             <TableRow>
               {columns.map((c) => (
