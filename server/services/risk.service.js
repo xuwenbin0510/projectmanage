@@ -102,6 +102,7 @@ function requireRiskRow(db, id) {
  * @returns {number}
  */
 function countHighRisks(db, projectId) {
+  if (!db) return 0; // 安全网：调用方未传 db 时不抛错，避免整页 500
   const row = db
     .prepare('SELECT COUNT(*) AS c FROM risks WHERE project_id = ? AND risk_value >= ?')
     .get(String(projectId), RISK_HIGH_THRESHOLD);
