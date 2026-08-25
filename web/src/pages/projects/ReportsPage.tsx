@@ -278,23 +278,51 @@ export function ReportsPage(): JSX.Element {
 
   const columns: Array<Column<Report>> = [
     { key: 'week', label: '周次', width: 110, render: (r) => <Typography sx={{ fontSize: 14, fontWeight: 600 }}>{r.week}</Typography> },
-    { key: 'status', label: '状态', width: 90, render: (r) => <StatusChip status={r.status} /> },
-    { key: 'author', label: '填报人', width: 100, render: (r) => <Stack direction="row" spacing={0.75} alignItems="center"><UserAvatar name={r.authorName} size={22} /><Typography variant="caption">{r.authorName}</Typography></Stack> },
-    { key: 'doneNote', label: '完成摘要', render: (r) => <Typography variant="caption" color="text.secondary" noWrap>{r.doneNote || '—'}</Typography> },
+    {
+      key: 'status',
+      label: '状态',
+      width: 96,
+      render: (r) => (
+        <Stack direction="column" spacing={0.25} alignItems="flex-start">
+          <StatusChip status={r.status} />
+          {isConfirmable(r) && (
+            <Chip size="small" label="待你确认" color="warning" sx={{ height: 18, fontSize: 11, fontWeight: 600 }} />
+          )}
+        </Stack>
+      ),
+    },
+    { key: 'author', label: '填报人', width: 100, hideBelow: 'sm', render: (r) => <Stack direction="row" spacing={0.75} alignItems="center"><UserAvatar name={r.authorName} size={22} /><Typography variant="caption">{r.authorName}</Typography></Stack> },
+    {
+      key: 'doneNote',
+      label: '完成摘要',
+      render: (r) => (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          noWrap
+          title={r.doneNote || undefined}
+          sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}
+        >
+          {r.doneNote || '—'}
+        </Typography>
+      ),
+    },
     {
       key: 'tasks',
       label: '关联任务',
       width: 90,
       align: 'center',
+      hideBelow: 'md',
       // 关联任务数 = 实际勾选关联的任务（与勾选一致，用户反馈⑤）
       render: (r) => <Chip size="small" label={r.tasks.filter((t) => t.selected).length} sx={{ height: 20 }} />,
     },
-    { key: 'risks', label: '风险项', width: 80, align: 'center', render: (r) => <Chip size="small" label={r.risks.length} color={r.risks.length ? 'warning' : 'default'} sx={{ height: 20 }} /> },
+    { key: 'risks', label: '风险项', width: 80, align: 'center', hideBelow: 'md', render: (r) => <Chip size="small" label={r.risks.length} color={r.risks.length ? 'warning' : 'default'} sx={{ height: 20 }} /> },
     /* B5-R3：新增「填报时间」列（createdAt，YYYY-MM-DD HH:mm，空值兜底 —，title 放完整时间） */
     {
       key: 'createdAt',
       label: '填报时间',
       width: 150,
+      hideBelow: 'lg',
       render: (r) => (
         <Typography variant="caption" color="text.secondary" title={r.createdAt || undefined} sx={{ whiteSpace: 'nowrap' }}>
           {fmtDateTime(r.createdAt)}
@@ -304,15 +332,44 @@ export function ReportsPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 72,
+      width: 132,
       align: 'center',
-      render: (r) => (
-        <Tooltip title="操作">
-          <IconButton size="small" onClick={(e) => openMenu(e, r)}>
-            <MoreVertOutlinedIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      ),
+      render: (r) => {
+        const confirmable = isConfirmable(r);
+        return (
+          <Stack direction="row" spacing={0.25} justifyContent="center" alignItems="center">
+            {confirmable && (
+              <>
+                <Tooltip title="确认该周报">
+                  <IconButton
+                    size="small"
+                    color="success"
+                    disabled={busyId === r.id}
+                    onClick={(e) => { e.stopPropagation(); void handleConfirm(r); }}
+                  >
+                    <TaskAltOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="打回该周报">
+                  <IconButton
+                    size="small"
+                    color="error"
+                    disabled={busyId === r.id}
+                    onClick={(e) => { e.stopPropagation(); openReject(r); }}
+                  >
+                    <BlockOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+            <Tooltip title="更多操作">
+              <IconButton size="small" onClick={(e) => { e.stopPropagation(); openMenu(e, r); }}>
+                <MoreVertOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+        );
+      },
     },
   ];
 
