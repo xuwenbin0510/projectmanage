@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -145,6 +145,11 @@ export function ReportFormModal({
    *  仅当前关联任务（effectiveLockNodeId）进度可编辑，其余进度输入只读 */
   const lockMode = !editingReport && effectiveLockNodeId !== null;
 
+  /** B15.1：写日志弹框任务关联区——锁定行（WBS「写日志」入口）DOM 引用，用于打开时自动定位滚动 */
+  const lockedRowRef = useRef<HTMLDivElement | null>(null);
+  /** B15.1：任务关联滚动容器引用，用 scrollTop 数学定位（比 scrollIntoView 在 Dialog/Portal 内可靠） */
+  const scrollBoxRef = useRef<HTMLDivElement | null>(null);
+
   const {
     control,
     register,
@@ -211,6 +216,28 @@ export function ReportFormModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  /**
+   * B15.1：写日志弹框「任务关联」区——打开且存在锁定节点（WBS「写日志」入口）时，
+   * 自动将滚动容器居中定位到该节点，免去在长树中手动下拉查找。
+   * 用 getBoundingClientRect + scrollTop 数学定位（比 scrollIntoView 在 Dialog/Portal 内可靠，
+   * 不会误滚弹窗外层或被子动画吞掉）。依赖 tree：WBS 树异步载入，树就绪、锁定行挂载后
+   * ref 才有值，需随 tree 变化重跑。
+   */
+  useEffect(() => {
+    if (!open || !effectiveLockNodeId) return;
+    const t = setTimeout(() => {
+      const container = scrollBoxRef.current;
+      const row = lockedRowRef.current;
+      if (!container || !row) return;
+      const cRect = container.getBoundingClientRect();
+      const rRect = row.getBoundingClientRect();
+      const target =
+        container.scrollTop + (rRect.top - cRect.top) - container.clientHeight / 2 + rRect.height / 2;
+      container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [open, effectiveLockNodeId, tree]);
 
   /**
    * 新建态任务行组装（★ R5-P0-3 数据一致性契约 · 设计 §3.3 唯一真源）：
@@ -382,10 +409,17 @@ export function ReportFormModal({
       return (
         <Box
           key={n.id}
+          ref={!editingReport && effectiveLockNodeId === n.id ? lockedRowRef : undefined}
           sx={{
             pl: depth * 2,
-            // B5-R4：锁定节点行品牌青 tint（checked+disabled + 锁图标 + 浅青底）
-            ...(locked ? { backgroundColor: alphaOf(tokens.brand.primary, 0.05), borderRadius: 1 } : {}),
+            // B15.1：锁定节点行品牌青 tint + 左侧高亮条（checked+disabled + 锁图标 + 浅青底），打开时自动滚动定位到此
+            ...(locked
+              ? {
+                  backgroundColor: alphaOf(tokens.brand.primary, 0.1),
+                  borderRadius: 1,
+                  boxShadow: `inset 3px 0 0 ${tokens.brand.primary}`,
+                }
+              : {}),
           }}
         >
           {/* B8.3：一个任务 = 一行——勾选 + 锁图标 + 任务名 + 进度条 + 完成进度(%) + 本周实际工时（人日）
@@ -536,7 +570,10 @@ export function ReportFormModal({
             </Typography>
           )}
         </Stack>
-        <Box sx={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5, p: 1 }}>
+        <Box
+          ref={scrollBoxRef}
+          sx={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${tokens.border.subtle}`, borderRadius: 1.5, p: 1 }}
+        >
           {tree.length === 0 ? (
             <Typography variant="caption" color="text.secondary">
               暂无 WBS 任务，可先到「工作分解」页建立

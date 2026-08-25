@@ -547,37 +547,7 @@ export function validateWbsDeadline(input: {
   return null;
 }
 
-/** 工时估算上限失败结果 */
-export interface WbsEstimateError {
-  code: 'E_WBS_ESTIMATE_OVERFLOW';
-  message: string;
-  data: Record<string, unknown>;
-}
-
-/**
- * 工时估算硬拦截（用户反馈④b）：估算人日不得超过起止区间可用天数
- * （`dueDate - startDate`，按自然日计）。无日期或可用天数非正时放行，
- * 交由其它校验处理非法区间。
- * @prd P0-06
- */
-export function validateWbsEstimate(input: {
-  estimateDays: number;
-  startDate: string;
-  dueDate: string;
-}): WbsEstimateError | null {
-  const { estimateDays, startDate, dueDate } = input;
-  if (!startDate || !dueDate) return null;
-  const available = diffDays(startDate, dueDate); // dueDate - startDate（天）
-  if (available <= 0) return null;
-  if (estimateDays > available) {
-    return {
-      code: 'E_WBS_ESTIMATE_OVERFLOW',
-      message: `工时估算 ${estimateDays} 人日，超过起止区间可用天数 ${available} 天（${startDate} → ${dueDate}）`,
-      data: { estimateDays, startDate, dueDate, available },
-    };
-  }
-  return null;
-}
+/** B16.x：validateWbsEstimate 已移除（估算超起止区间不再硬卡）。 */
 
 /** 项目整体进度：真叶子按估算工时加权（SK-4 口径） */
 export function rollupProjectProgress(nodes: WbsNode[]): number {

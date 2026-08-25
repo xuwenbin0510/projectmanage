@@ -272,7 +272,7 @@ function listWbs(db, projectId) {
  * @returns {object} WbsNode
  * @throws {AppError} E_PROJECT_ARCHIVED / E_FORBIDDEN / E_NOT_FOUND / E_VALIDATION /
  *                    E_WBS_DEPTH / E_WBS_PARENT_TYPE / E_WBS_LEAF_INCOMPLETE /
- *                    E_WBS_DEADLINE_OVERFLOW / E_WBS_ESTIMATE_OVERFLOW /
+ *                    E_WBS_DEADLINE_OVERFLOW /
  *                    E_WBS_EFFORT_WRITE_DISABLED
  */
 function createWbsNode(db, req, projectId, payload) {
@@ -333,15 +333,10 @@ function createWbsNode(db, req, projectId, payload) {
     const milestone = findMilestone(db, milestoneId);
     throwIfInvalid(wbs.validateWbsDeadline({ dueDate: effectiveDue, parent: parent, milestone: milestone }));
 
-    /* 8. 工时估算硬拦截 */
+    /* 8. 有效开始日期（未传默认今天）—— B16.x：估算超起止区间硬拦截已移除（多人并行合法，工时可翻倍），不再校验 */
     const startDate = p.startDate === undefined || p.startDate === null || p.startDate === ''
       ? dates.today()
       : String(p.startDate);
-    throwIfInvalid(wbs.validateWbsEstimate({
-      estimateDays: Number(p.estimateDays) || 0,
-      startDate: startDate,
-      dueDate: effectiveDue,
-    }));
 
     /* 9. 落库 */
     const id = ids.genId('W');
@@ -415,7 +410,7 @@ function createWbsNode(db, req, projectId, payload) {
  * @returns {object} WbsNode
  * @throws {AppError} E_NOT_FOUND / E_PROJECT_ARCHIVED / E_FORBIDDEN / E_WBS_TYPE_LOCKED /
  *                    E_WBS_PARENT_TYPE / E_WBS_DEPTH / E_WBS_DEADLINE_OVERFLOW /
- *                    E_WBS_ESTIMATE_OVERFLOW / E_WBS_LEAF_INCOMPLETE / E_VALIDATION
+ *                    E_WBS_LEAF_INCOMPLETE / E_VALIDATION
  */
 function updateWbsNode(db, req, id, payload) {
   const p = payload || {};
@@ -520,12 +515,7 @@ function updateWbsNode(db, req, id, payload) {
       args.push(effDue);
     }
 
-    /* ── 工时估算硬拦截：与起止/截止任一变更后统一复检 ── */
-    throwIfInvalid(wbs.validateWbsEstimate({
-      estimateDays: effEstimate,
-      startDate: effStart,
-      dueDate: effDue,
-    }));
+    /* B16.x：估算超起止区间硬拦截已移除（多人并行合法，工时可翻倍），不再复检 */
 
     if (p.status !== undefined && String(p.status) !== node.status) {
       sets.push('status = ?');
