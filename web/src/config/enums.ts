@@ -413,21 +413,26 @@ export const REPORT_SECTION_TITLE = {
 
 /* ── 周报状态机 B14-块2 ──────────────────────────── */
 
-/** 周报状态取值（顺序 = 状态机推进顺序 `草稿 → 已提交 → 已确认`） */
-export const REPORT_STATUSES: ReportStatus[] = ['草稿', '已提交', '已确认'];
+/** 周报状态取值（状态机：`草稿 → 已提交 → 已确认`，打回进入独立 `已打回` 态） */
+export const REPORT_STATUSES: ReportStatus[] = ['草稿', '已提交', '已确认', '已打回'];
 
 /** 周报状态 Chip 配色 */
-export const REPORT_STATUS_COLOR: Record<ReportStatus, 'default' | 'info' | 'success'> = {
+export const REPORT_STATUS_COLOR: Record<
+  ReportStatus,
+  'default' | 'info' | 'success' | 'warning' | 'error' | 'primary' | 'secondary'
+> = {
   草稿: 'default',
   已提交: 'info',
   已确认: 'success',
+  已打回: 'warning',
 };
 
 /** 周报状态提示语（列表/详情 Tooltip） */
 export const REPORT_STATUS_HINT: Record<ReportStatus, string> = {
-  草稿: '尚未提交，作者可继续编辑；若曾被打回会显示打回原因',
+  草稿: '尚未提交，作者可继续编辑或删除；若曾被打回会显示打回原因',
   已提交: '等待上级确认；确认人可「确认」或「打回」',
   已确认: '已被上级确认，流程闭环',
+  已打回: '已被打回，作者可修改后重新提交（仅可改、不可删）',
 };
 
 /** 打回原因长度上限（与后端校验一致） */

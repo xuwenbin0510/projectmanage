@@ -6,6 +6,7 @@
  *  - `GET    /projects/:projectId/reports/:week`  指定周次最新一条（无则 `data: null`）
  *  - `POST   /projects/:projectId/reports`        暂存 / 提交（body `submit: true|false`）
  *  - `PATCH  /projects/:projectId/reports/:id`    编辑（作者本人或 admin）
+ *  - `DELETE /projects/:projectId/reports/:id`    删除草稿（仅作者本人或 admin，仅「草稿」可删）
  *
  * B14 块2（轻量闭环）新增：
  *  - `POST   /projects/:projectId/reports/:id/confirm`  确认（`已提交` → `已确认`）
@@ -117,6 +118,21 @@ router.patch(
     const payload = Object.assign({}, req.body || {}, { projectId: projectId });
     const report = reportSvc.updateReport(db, req.params.id, payload, req.user);
     res.json(ok(report, '已更新'));
+  }),
+);
+
+/** 删除草稿：仅「草稿」可删，作者本人或 admin（service 层做状态/权限收紧校验）。
+ *  与编辑同守卫：项目已结项/终止由 assertWritable 拦截。 */
+router.delete(
+  '/projects/:projectId/reports/:id',
+  requireAuth,
+  asyncHandler(async function deleteReport(req, res) {
+    const projectId = req.params.projectId;
+    rbac.assertWritable(db, projectId);
+    rbac.assertCan(db, req, 'report.write', projectId);
+
+    const result = reportSvc.deleteReport(db, req.params.id, req.user);
+    res.json(ok(result, '已删除'));
   }),
 );
 

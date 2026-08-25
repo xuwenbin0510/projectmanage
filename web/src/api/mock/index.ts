@@ -2087,10 +2087,15 @@ export class MockApiClient implements ApiClient {
       assertActualDaysValid(t, parentIdsOf.has(t.nodeId));
     });
 
-    /* B8（R4）：已提交日志先扣旧后加新（同构后端）；草稿不冲正 */
-    const wasSubmitted = report.status === '已提交';
+    /* B8（R4）同构后端：工时冲正基准 —— 当前是否计入（已提交/已打回 均计；草稿不计） */
+    const wantSubmit = Boolean(payload.submit) === true;
+    const wasCounted = report.status === '已提交' || report.status === '已打回';
+    const willBeCounted = wantSubmit || wasCounted;
+    /* B15：草稿/已打回 点「提交」→ 流转「已提交」，清打回原因、写提交时间；否则保持原状态 */
+    const toSubmitted = wantSubmit && (report.status === '草稿' || report.status === '已打回');
+    const newStatus = toSubmitted ? '已提交' : report.status;
     const oldTaskRows = report.tasks;
-    if (wasSubmitted) {
+    if (wasCounted) {
       oldTaskRows.forEach((t) => {
         const node = db.wbsNodes.find((n) => n.id === t.nodeId);
         if (node) {
@@ -2105,6 +2110,8 @@ export class MockApiClient implements ApiClient {
           node.effortHours = next;
         }
       });
+    }
+    if (willBeCounted) {
       payload.tasks.forEach((t) => {
         const node = db.wbsNodes.find((n) => n.id === t.nodeId);
         if (node && t.selected) {
@@ -2124,6 +2131,11 @@ export class MockApiClient implements ApiClient {
     report.doneNote = payload.doneNote;
     report.planItems = payload.planItems.filter((p) => p.trim());
     report.resourceNote = payload.resourceNote;
+    report.status = newStatus;
+    if (toSubmitted) {
+      report.rejectReason = null;
+      report.submittedAt = ts;
+    }
     report.updatedAt = ts;
     report.tasks = payload.tasks.map<ReportTaskRow>((t) => {
       const node = db.wbsNodes.find((n) => n.id === t.nodeId);
@@ -2151,6 +2163,33 @@ export class MockApiClient implements ApiClient {
 
     saveDb();
     return deepClone(report);
+  }
+
+  /** B15：删除草稿（仅 `草稿` 可删，作者本人或 admin；与后端 report.service#deleteReport 同构） */
+  async deleteReport(projectId: string, id: string): Promise<{ id: string; deleted: boolean }> {
+    await delay(120);
+    const db = getDb();
+    const report = db.reports.find((r) => r.id === id) ?? nf();
+    if (report.projectId !== projectId) {
+      throw new ApiError(ErrorCode.E_NOT_FOUND, '周报不存在或已被删除', { id });
+    }
+    assertWritable(db, projectId);
+    const me = assertCan(db, 'report.write', projectId);
+    if (report.status !== '草稿') {
+      throw new ApiError(ErrorCode.E_VALIDATION, `仅「草稿」可删除，当前状态：${report.status}`, {
+        id,
+        status: report.status,
+      });
+    }
+    const isAuthor = report.author === me.openId;
+    if (!isAuthor && !isAdminUser(me)) {
+      throw new ApiError(ErrorCode.E_FORBIDDEN, '只能删除本人提交的工作日志草稿', { id });
+    }
+    /* 子行（tasks/risks）随 report 对象内嵌，过滤即级联移除 */
+    db.reports = db.reports.filter((r) => r.id !== id);
+    audit(db, me, 'report', id, 'delete', projectId, `删除工作日志草稿「${report.week}」`);
+    saveDb();
+    return { id, deleted: true };
   }
 
   /* ── 周报轻量闭环 B14-块2（与后端 report.service 同构） ─────────── */
@@ -2243,7 +2282,7 @@ export class MockApiClient implements ApiClient {
     const report = this.assertConfirmable(db, id, me.openId);
     const ts = nowIso();
 
-    report.status = '草稿';
+    report.status = '已打回';
     report.rejectReason = trimmed;
     report.confirmedBy = null;
     report.confirmedAt = null;
