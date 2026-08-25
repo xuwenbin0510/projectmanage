@@ -84,13 +84,16 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
               to={m.path}
               onClick={onNavigate}
               sx={{
+                position: 'relative',
                 borderRadius: 1.5,
-                mb: 0.5,
-                minHeight: 42,
+                mb: 0.75,
+                minHeight: 44,
                 justifyContent: collapsed ? 'center' : 'flex-start',
                 px: collapsed ? 0 : 1.5,
                 color: active ? tokens.brand.primary : tokens.text.secondary,
                 bgcolor: active ? alpha(tokens.brand.primary, 0.14) : 'transparent',
+                boxShadow: active ? `inset 3px 0 0 ${tokens.brand.primary}` : 'none',
+                transition: 'background-color .2s ease, box-shadow .2s ease',
                 '&:hover': { bgcolor: alpha(tokens.brand.primary, 0.1), color: tokens.text.primary },
               }}
             >

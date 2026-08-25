@@ -347,7 +347,7 @@ export function MyTasksDrawer({
             rowKey={(r) => r.id}
             emptyTitle={emptyTitle}
             emptyDescription={emptyDescription}
-            onRowClick={(row) => navigate(ROUTES.projectWbs(row.projectId))}
+            onRowClick={(row) => navigate(ROUTES.projectWbs(row.projectId) + '?taskId=' + row.id)}
             pagination={
               filteredRows.length > PAGE_SIZE
                 ? {
