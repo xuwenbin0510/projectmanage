@@ -244,7 +244,7 @@ function listScopedItems(db, q, me, scope) {
   const ids = rows.map(function (r) { return String(r.id); });
   const ctx = projectService.loadListContext(db, ids);
   const todayStr = dates.today();
-  return rows.map(function (r) { return projectService.toListItem(r, ctx, todayStr); });
+  return rows.map(function (r) { return projectService.toListItem(r, ctx, todayStr, db); });
 }
 
 /**
