@@ -38,6 +38,7 @@ const documentsRoutes = require('./documents.routes');
 const changeRoutes = require('./change.routes');
 const auditRoutes = require('./audit.routes');
 const exportRoutes = require('./export.routes');
+const risksRoutes = require('./risks.routes');
 const stubsRoutes = require('./stubs.routes');
 const legacyRoutes = require('./legacy.routes');
 
@@ -82,6 +83,10 @@ router.use(auditRoutes);
 /* ── 新契约（本期：CSV 数据导出） ───────────────────── */
 /* ⚠ 必须先于 stubsRoutes，否则 /export/* 会被 501 桩抢先命中 */
 router.use(exportRoutes);
+
+/* ── 新契约（本期：风险登记册，替换风险空列表桩） ───── */
+/* ⚠ 必须先于 stubsRoutes，否则 /projects/:id/risks 会被空列表桩抢先命中 */
+router.use(risksRoutes);
 
 /* ── 降级桩：批次 4 后只兜未实现项（周报 / 评审桩已删） ─ */
 router.use(stubsRoutes);
