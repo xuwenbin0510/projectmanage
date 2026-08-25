@@ -37,6 +37,7 @@ import {
   UserAvatar,
 } from '@/components/common';
 import { ReportFormModal } from '@/components/report/ReportFormModal';
+import { GanttChart } from '@/components/projects/GanttChart';
 import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules, Priority } from '@/types/wbs';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useProjectStore } from '@/stores/projectStore';
@@ -460,6 +461,15 @@ export function WbsPage(): JSX.Element {
   const archived = project?.status === '已结项' || project?.status === '已终止';
   const editable = can('wbs:edit') && !archived;
 
+  // 视图切换：树形 / 甘特图（feat/connect-b10 后续）
+  const [view, setView] = useState<'tree' | 'gantt'>('tree');
+  const handleReschedule = (id: string, startDate: string, dueDate: string): void => {
+    void updateNode(id, { startDate, dueDate });
+  };
+  const handleReorder = (id: string, newParentId: string | null, index: number): void => {
+    void moveNode(id, newParentId, index);
+  };
+
   // 改动 B：一人可担任多个角色 → db.members 一人多行，按 userOpenId 去重避免 MUI Select 重复 value
   const memberOptions = useMemo(
     () =>
@@ -855,6 +865,23 @@ export function WbsPage(): JSX.Element {
         粒度建议 ≤ ${GRANULARITY_LIMIT[projectType]} 人日（超过仅提示拆分，不阻断保存）。
       </Alert>
 
+      <Stack direction="row" spacing={1} sx={{ mb: -0.5 }}>
+        <Button
+          variant={view === 'tree' ? 'contained' : 'outlined'}
+          size="small"
+          onClick={() => setView('tree')}
+        >
+          树形
+        </Button>
+        <Button
+          variant={view === 'gantt' ? 'contained' : 'outlined'}
+          size="small"
+          onClick={() => setView('gantt')}
+        >
+          甘特图
+        </Button>
+      </Stack>
+
       <SectionCard
         title="工作分解结构（WBS）"
         subtitle={`共 ${nodes.length} 个节点 · 展开/折叠点击节点左侧箭头`}
@@ -889,7 +916,7 @@ export function WbsPage(): JSX.Element {
             title="暂无任务"
             description="该项目暂无 WBS 节点，可点击「新建任务」补建（新项目会按模板自动生成骨架）"
           />
-        ) : (
+        ) : view === 'tree' ? (
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
             <Box sx={{ px: 1, py: 1 }}>
               <SimpleTreeView defaultExpandedItems={expanded} sx={{ flexGrow: 1 }}>
@@ -897,6 +924,14 @@ export function WbsPage(): JSX.Element {
               </SimpleTreeView>
             </Box>
           </DndContext>
+        ) : (
+          <GanttChart
+            nodes={nodes}
+            tree={tree}
+            editable={editable}
+            onReschedule={handleReschedule}
+            onReorder={handleReorder}
+          />
         )}
       </SectionCard>
 
