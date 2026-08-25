@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
   Box,
@@ -18,6 +18,8 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { SimpleTreeView, TreeItem } from '@mui/x-tree-view';
+import { DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable, type DragStartEvent, type DragOverEvent, type DragEndEvent } from '@dnd-kit/core';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import type { Dayjs } from 'dayjs';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -57,6 +59,131 @@ import { fmtDays } from '@/utils/format';
 import { dayjs, fmtDate, DATE_FMT, isOverdue, today, diffDays } from '@/utils/date';
 import { reportCountByNode, nodeReportsOf } from '@/utils/reportAgg';
 import { memberNameOf } from '@/utils/member';
+
+/* ── WBS 拖拽排序（dnd-kit，复用后端 /wbs/:id/move） ───────────── */
+function compareWbsCode(a?: string | null, b?: string | null): number {
+  const pa = String(a ?? '').split('.').map((s) => Number(s) || 0);
+  const pb = String(b ?? '').split('.').map((s) => Number(s) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+function isDescendantOf(flat: WbsTreeNode[], ancestorId: string, maybeParentId?: string | null): boolean {
+  if (!maybeParentId) return false;
+  const byId = new Map(flat.map((n) => [n.id, n]));
+  let cur = byId.get(maybeParentId);
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    if (cur.parentId === ancestorId) return true;
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  return false;
+}
+
+/** 拖拽时的插入位置标记：before = 行上方线，after = 行下方线，inside = 整行品牌青描边（成为子节点） */
+function WbsDropLine({ pos }: { pos: 'before' | 'after' | 'inside' }) {
+  if (pos === 'inside') {
+    return (
+      <Box
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          border: `2px solid ${tokens.brand.primary}`,
+          borderRadius: 1.5,
+          pointerEvents: 'none',
+          zIndex: 6,
+        }}
+      />
+    );
+  }
+  return (
+    <Box
+      sx={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        [pos === 'before' ? 'top' : 'bottom']: -1,
+        height: 3,
+        background: tokens.brand.primary,
+        borderRadius: 2,
+        boxShadow: `0 0 0 1px ${tokens.brand.primary}`,
+        pointerEvents: 'none',
+        zIndex: 6,
+      }}
+    />
+  );
+}
+
+/** 整行作为 drop 目标 */
+function WbsRowDroppable({
+  node,
+  isOver,
+  pos,
+  isActive,
+  children,
+}: {
+  node: WbsTreeNode;
+  isOver: boolean;
+  pos: 'before' | 'after' | 'inside' | null;
+  isActive: boolean;
+  children: ReactNode;
+}) {
+  const { setNodeRef } = useDroppable({ id: node.id });
+  return (
+    <Box ref={setNodeRef} sx={{ position: 'relative' }}>
+      {isOver && pos && <WbsDropLine pos={pos} />}
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{
+          py: 0.5,
+          pr: 1,
+          minWidth: 0,
+          borderRadius: 1,
+          bgcolor: isOver ? 'rgba(46,125,135,0.10)' : 'transparent',
+          opacity: isActive ? 0.4 : 1,
+          transition: 'background-color 120ms ease, opacity 120ms ease',
+        }}
+      >
+        {children}
+      </Stack>
+    </Box>
+  );
+}
+
+/** 拖拽手柄（draggable） */
+function WbsDragHandle({ id, disabled }: { id: string; disabled: boolean }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id, disabled });
+  return (
+    <Box
+      ref={setNodeRef}
+      {...attributes}
+      sx={{
+        cursor: disabled ? 'default' : 'grab',
+        color: 'text.disabled',
+        display: 'flex',
+        alignItems: 'center',
+        opacity: isDragging ? 0.4 : 1,
+        flexShrink: 0,
+        touchAction: 'none',
+      }}
+      onPointerDown={(e) => {
+        if (disabled) return;
+        e.stopPropagation();
+        listeners?.onPointerDown?.(e);
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <DragIndicatorIcon fontSize="small" />
+    </Box>
+  );
+}
 
 interface NodeForm {
   parentId: string;
@@ -119,6 +246,89 @@ export function WbsPage(): JSX.Element {
   const createNode = useWbsStore((s) => s.createNode);
   const updateNode = useWbsStore((s) => s.updateNode);
   const deleteNode = useWbsStore((s) => s.deleteNode);
+  const moveNode = useWbsStore((s) => s.moveNode);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  /* 拖拽过程态：activeDragId = 正在拖的节点；dragOverId + dropPos = 当前悬浮目标与插入方向 */
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [dropPos, setDropPos] = useState<'before' | 'after' | 'inside' | null>(null);
+
+  const handleDragStart = (event: DragStartEvent): void => {
+    setActiveDragId(String(event.active.id));
+  };
+
+  const handleDragOver = (event: DragOverEvent): void => {
+    const { active, over } = event;
+    if (!over) {
+      setDragOverId(null);
+      setDropPos(null);
+      return;
+    }
+    const aId = String(active.id);
+    const oId = String(over.id);
+    // 悬浮在自身或其子孙之上 → 非法（会成环），不显示标记线
+    const flat = flatNodes;
+    const aNode = flat.find((n) => n.id === aId);
+    const oNode = flat.find((n) => n.id === oId);
+    if (!aNode || !oNode) {
+      setDragOverId(null);
+      setDropPos(null);
+      return;
+    }
+    if (aId === oId || isDescendantOf(flat, aId, oId)) {
+      setDragOverId(null);
+      setDropPos(null);
+      return;
+    }
+    // 以「被拖节点中心」落在悬浮行的上/中/下三段判定 前 / 成为子节点 / 后
+    const activeRect = active.rect.current.translated;
+    const overRect = over.rect;
+    if (!activeRect || !overRect) return;
+    const activeCenterY = activeRect.top + activeRect.height / 2;
+    const band = overRect.height * 0.25;
+    let pos: 'before' | 'after' | 'inside';
+    if (activeCenterY < overRect.top + band) pos = 'before';
+    else if (activeCenterY > overRect.top + overRect.height - band) pos = 'after';
+    else pos = 'inside';
+    // 中段（成为子节点）需父类型允许该子类型，否则回退为「之后（兄弟）」
+    if (pos === 'inside' && !allowedChildTypes(oNode, rules).includes(aNode.nodeType)) {
+      pos = 'after';
+    }
+    setDragOverId(oId);
+    setDropPos(pos);
+  };
+
+  const handleDragEnd = (event: DragEndEvent): void => {
+    const { active, over } = event;
+    // 清掉所有拖拽态（无论是否落点）
+    setActiveDragId(null);
+    setDragOverId(null);
+    setDropPos(null);
+    if (!over) return;
+    const aId = String(active.id);
+    const oId = String(over.id);
+    if (aId === oId) return;
+    const flat = flatNodes;
+    const aNode = flat.find((n) => n.id === aId);
+    const oNode = flat.find((n) => n.id === oId);
+    if (!aNode || !oNode) return;
+    // 禁止把节点拖进自己（或自己的子孙）之下，避免成环
+    if (aId === oId || isDescendantOf(flat, aId, oId)) return;
+    // 中段落点 = 直接成为该行的子节点（newParentId = 该行 id，追加到末尾）；
+    // 上/下落点 = 成为该行的同级兄弟（newParentId = 该行的父级）
+    const inside = dropPos === 'inside';
+    const newParentId: string | null = inside ? oNode.id : oNode.parentId;
+    // 排除自身后再算兄弟序位（与后端 moveWbsNode 口径一致：siblings 不含 active）
+    const siblings = flat
+      .filter((n) => n.parentId === newParentId && n.id !== aId)
+      .sort((x, y) => compareWbsCode(x.wbsCode, y.wbsCode));
+    const idx = inside
+      ? siblings.length // 追加为末位子节点
+      : dropPos === 'after'
+        ? siblings.findIndex((n) => n.id === oId) + 1 // 'after' 插到目标之后
+        : siblings.findIndex((n) => n.id === oId); // 'before' 插到目标之前
+    void moveNode(aId, newParentId, idx);
+  };
 
   /** 导出 WBS 任务 CSV（真实模式走服务端，mock 模式本地生成）。 */
   const handleExportTasks = async (): Promise<void> => {
@@ -484,12 +694,8 @@ export function WbsPage(): JSX.Element {
         itemId={node.id}
         className={highlightNodeId === node.id ? `wbs-locate${highlightDim ? ' wbs-locate--dim' : ''}` : undefined}
         label={
-          <Stack
-            direction="row"
-            spacing={1}
-            alignItems="center"
-            sx={{ py: 0.5, pr: 1, minWidth: 0 }}
-          >
+          <WbsRowDroppable node={node} isOver={dragOverId === node.id} pos={dropPos} isActive={activeDragId === node.id}>
+            <WbsDragHandle id={node.id} disabled={!editable} />
             <Typography variant="caption" sx={{ color: 'text.secondary', width: 38, flexShrink: 0 }}>
               {node.wbsCode}
             </Typography>
@@ -633,7 +839,7 @@ export function WbsPage(): JSX.Element {
                 </Tooltip>
               </Stack>
             )}
-          </Stack>
+          </WbsRowDroppable>
         }
       >
         {node.children.map((c) => renderNode(c))}
@@ -684,11 +890,13 @@ export function WbsPage(): JSX.Element {
             description="该项目暂无 WBS 节点，可点击「新建任务」补建（新项目会按模板自动生成骨架）"
           />
         ) : (
-          <Box sx={{ px: 1, py: 1 }}>
-            <SimpleTreeView defaultExpandedItems={expanded} sx={{ flexGrow: 1 }}>
-              {tree.map((n) => renderNode(n))}
-            </SimpleTreeView>
-          </Box>
+          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
+            <Box sx={{ px: 1, py: 1 }}>
+              <SimpleTreeView defaultExpandedItems={expanded} sx={{ flexGrow: 1 }}>
+                {tree.map((n) => renderNode(n))}
+              </SimpleTreeView>
+            </Box>
+          </DndContext>
         )}
       </SectionCard>
 
