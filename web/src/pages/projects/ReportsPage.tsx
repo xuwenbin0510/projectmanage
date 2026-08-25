@@ -458,34 +458,6 @@ export function ReportsPage(): JSX.Element {
           </ListItemIcon>
           <ListItemText>编辑</ListItemText>
         </MenuItem>
-        {menuAnchor && isConfirmable(menuAnchor.report) && (
-          <>
-            <MenuItem
-              disabled={busyId === menuAnchor.report.id}
-              onClick={() => {
-                void handleConfirm(menuAnchor.report);
-                closeMenu();
-              }}
-            >
-              <ListItemIcon>
-                <TaskAltOutlinedIcon fontSize="small" color="success" />
-              </ListItemIcon>
-              <ListItemText>确认</ListItemText>
-            </MenuItem>
-            <MenuItem
-              disabled={busyId === menuAnchor.report.id}
-              onClick={() => {
-                openReject(menuAnchor.report);
-                closeMenu();
-              }}
-            >
-              <ListItemIcon>
-                <BlockOutlinedIcon fontSize="small" color="error" />
-              </ListItemIcon>
-              <ListItemText>打回</ListItemText>
-            </MenuItem>
-          </>
-        )}
       </Menu>
 
       {/* R4-P0-4：共享日志表单（新建提交后关闭，行为与现状一致；旧链接 prefill 走 lockNodeId 锁定） */}
