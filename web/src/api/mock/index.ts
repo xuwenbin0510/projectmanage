@@ -86,7 +86,6 @@ import {
   resolveWbsRules,
   validateWbsPlacement,
   validateWbsDeadline,
-  validateWbsEstimate,
   subtreeRelativeDepth,
   deriveMilestoneStatus,
   milestoneStartFrom,
@@ -1582,16 +1581,7 @@ export class MockApiClient implements ApiClient {
       throw new ApiError(deadlineErr.code, deadlineErr.message, deadlineErr.data);
     }
 
-    /* 工时估算硬拦截（用户反馈④b）：估算不得超过起止区间可用天数 */
-    const estimateErr = validateWbsEstimate({
-      estimateDays: payload.estimateDays ?? 0,
-      startDate: payload.startDate ?? today(),
-      dueDate: effectiveDue,
-    });
-    if (estimateErr) {
-      throw new ApiError(estimateErr.code, estimateErr.message, estimateErr.data);
-    }
-
+    /* B16.x：估算超起止区间硬拦截已移除（多人并行合法），不再校验 */
     const node: WbsNode = {
       id: newId,
       projectId,
@@ -1704,17 +1694,7 @@ export class MockApiClient implements ApiClient {
       node.dueDate = payload.dueDate;
     }
 
-    /* 工时估算硬拦截（用户反馈④b）：与起止/截止任一变更后统一复检 */
-    {
-      const effEstimate = payload.estimateDays !== undefined ? payload.estimateDays : node.estimateDays;
-      const effStart = payload.startDate !== undefined ? payload.startDate : node.startDate;
-      const effDue = payload.dueDate !== undefined ? payload.dueDate : node.dueDate;
-      const estErr = validateWbsEstimate({ estimateDays: effEstimate, startDate: effStart, dueDate: effDue });
-      if (estErr) {
-        throw new ApiError(estErr.code, estErr.message, estErr.data);
-      }
-    }
-    if (payload.status !== undefined && payload.status !== node.status) {
+    /* B16.x：估算超起止区间硬拦截已移除（多人并行合法），不再复检 */    if (payload.status !== undefined && payload.status !== node.status) {
       diff.push({ field: 'status', label: '状态', before: node.status, after: payload.status });
       node.status = payload.status;
     }

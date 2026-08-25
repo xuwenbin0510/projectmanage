@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -19,6 +19,7 @@ import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { SimpleTreeView, TreeItem } from '@mui/x-tree-view';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import type { Dayjs } from 'dayjs';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
 
@@ -68,6 +69,8 @@ interface NodeForm {
   milestoneId: string;
   /** 截止日期 YYYY-MM-DD（用户反馈③ · 硬拦截） */
   dueDate: string;
+  /** 开始日期 YYYY-MM-DD（B16：让工时估算按真实起止区间校验，而非默认锚定今天） */
+  startDate: string;
   /** 任务优先级（B14-块1）：默认 P2 */
   priority: Priority;
 }
@@ -81,6 +84,7 @@ const EMPTY_FORM: NodeForm = {
   status: '待办',
   milestoneId: '',
   dueDate: '',
+  startDate: '',
   priority: DEFAULT_PRIORITY,
 };
 
@@ -261,9 +265,36 @@ export function WbsPage(): JSX.Element {
   /** 写日志入口：report:write 权限且项目未归档（不依赖 wbs:edit，保证只有写日志权限的人也能写） */
   const canWriteLog = can('report:write') && !archived;
 
+  /**
+   * B16-估算联动：工时估算默认值 = 1人 × 计划天数（开始→截止区间，含首尾）。
+   * - 随开始/截止日期变化自动联动；
+   * - 用户一旦手动修改估算，即冻结自动联动（后续改日期不再覆盖手动值）。
+   */
+  const manualEstimateRef = useRef(false);
+  const plannedDaysOf = (start: string, due: string): number => {
+    if (start && due) {
+      const d = diffDays(start, due);
+      if (Number.isFinite(d)) return Math.max(1, Math.floor(d) + 1); // 含首尾：同日 = 1 天
+    }
+    return 1;
+  };
+  const plannedDays = plannedDaysOf(form.startDate, form.dueDate);
+  const handleStartDateChange = (v: Dayjs | null): void => {
+    const sd = v && v.isValid() ? v.format(DATE_FMT) : '';
+    const est = manualEstimateRef.current ? form.estimateDays : plannedDaysOf(sd, form.dueDate);
+    setForm({ ...form, startDate: sd, estimateDays: est });
+  };
+  const handleDueDateChange = (v: Dayjs | null): void => {
+    const dd = v && v.isValid() ? v.format(DATE_FMT) : '';
+    const est = manualEstimateRef.current ? form.estimateDays : plannedDaysOf(form.startDate, dd);
+    setForm({ ...form, dueDate: dd, estimateDays: est });
+  };
+
   const openCreate = (parentId: string): void => {
     const parent = parentId ? flatNodes.find((n) => n.id === parentId) ?? null : null;
     setEditingId(null);
+    const sd = parent?.startDate ?? dayjs().format(DATE_FMT);
+    const dd = parent?.dueDate ?? '';
     setForm({
       ...EMPTY_FORM,
       parentId,
@@ -272,10 +303,15 @@ export function WbsPage(): JSX.Element {
       nodeType: allowedChildTypes(parent, rules)[0] ?? EMPTY_FORM.nodeType,
       // 用户反馈②：子任务默认继承上级绑定的里程碑与截止日期
       milestoneId: parent?.milestoneId ?? '',
-      dueDate: parent?.dueDate ?? '',
+      dueDate: dd,
+      // B16：开始日期默认继承上级；上级无则取今天，使工时估算起止区间对用户可见、可调整
+      startDate: sd,
+      // B16-估算联动：新建默认估算 = 1人 × 计划天数（含首尾）
+      estimateDays: plannedDaysOf(sd, dd),
       // B14-块1：新节点默认 P2（服务端与 EMPTY_FORM 兜底一致）
       priority: DEFAULT_PRIORITY,
     });
+    manualEstimateRef.current = false;
     // 用户反馈④a：继承自上二级碑则锁定，避免误改
     setLockMilestone(Boolean(parent?.milestoneId));
     // R5-P0-2：节点行「+」进入（parentId 非空）锁定上级；顶部「新建任务」openCreate('') 恒不锁（AC-2.7）
@@ -294,11 +330,16 @@ export function WbsPage(): JSX.Element {
       status: node.status,
       milestoneId: node.milestoneId ?? '',
       dueDate: node.dueDate ?? '',
+      // B16：开始日期回显（无则取今天，保证区间可见，工时估算按真实窗口校验）
+      startDate: node.startDate ?? dayjs().format(DATE_FMT),
       priority: node.priority,
     });
     setLockMilestone(false);
     // R5-P0-2（AC-2.8）：编辑是合法的「移动节点」路径，上级保持可改
     setLockParent(false);
+    // B16-估算联动：编辑态同样「默认跟随日期联动」——打开时回填既有估算值用于展示，
+    // 但一旦用户改日期即按 1人×计划天数 重算；只有用户在估算输入框手动键入才冻结（见 estimate onChange）
+    manualEstimateRef.current = false;
     setDialogOpen(true);
   };
 
@@ -313,12 +354,18 @@ export function WbsPage(): JSX.Element {
           ? form.nodeType
           : nextAllowed[0] ?? form.nodeType;
     // 用户反馈②：切换上级时默认继承其里程碑与截止日期
+    const sd = parent?.startDate ?? dayjs().format(DATE_FMT);
+    const dd = parent?.dueDate ?? '';
     setForm({
       ...form,
       parentId,
       nodeType: keepType,
       milestoneId: parent?.milestoneId ?? '',
-      dueDate: parent?.dueDate ?? '',
+      dueDate: dd,
+      // B16：切换上级时同步继承其开始日期（与截止日期一致）
+      startDate: sd,
+      // B16-估算联动：未手动改过时，跟随新上级的计划区间重算默认估算
+      estimateDays: manualEstimateRef.current ? form.estimateDays : plannedDaysOf(sd, dd),
     });
     // 用户反馈④a：仅新建态下、上级带碑时锁定里程碑
     setLockMilestone(editingId === null && Boolean(parent?.milestoneId));
@@ -341,6 +388,11 @@ export function WbsPage(): JSX.Element {
       toast.warning(preErr.message);
       return;
     }
+    // B16：开始日期不得晚于截止日期（否则起止区间非法，工时估算校验无意义）
+    if (form.startDate && form.dueDate && diffDays(form.startDate, form.dueDate) < 0) {
+      toast.warning('开始日期不能晚于截止日期');
+      return;
+    }
     const payload = {
       parentId: form.parentId || null,
       nodeType: form.nodeType,
@@ -351,6 +403,8 @@ export function WbsPage(): JSX.Element {
       // 任务 / 子任务均可挂里程碑
       milestoneId: form.milestoneId || null,
       dueDate: form.dueDate || undefined,
+      // B16：开始日期随表单上报（缺省由后端回落今天），使工时估算按真实起止区间校验
+      startDate: form.startDate || undefined,
       // B14-块1：优先级随表单上报（缺省已在 EMPTY_FORM / openCreate 兜底为 P2）
       priority: form.priority,
     };
@@ -428,18 +482,31 @@ export function WbsPage(): JSX.Element {
                 sx={{ height: 20, flexShrink: 0 }}
               />
             )}
-            {/* R3-3：所有节点行内显示截止日期（无 dueDate 显示「截止 —」）；B16：逾期红 / 临期黄标记 */}
-            <Typography
-              variant="caption"
-              sx={{
-                color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
-                fontWeight: overdue || dueSoon ? 600 : 400,
-                flexShrink: 0,
-              }}
-            >
-              截止 {fmtDate(node.dueDate)}
-              {overdue ? ' · 已逾期' : dueSoon ? ' · 临期' : ''}
-            </Typography>
+            {/* R3-3 / B16：行内计划起止区间，去掉「开始/截止」字样省空间；逾期红 / 临期黄仅作用于截止 */}
+            {!node.startDate && !node.dueDate ? (
+              <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
+                —
+              </Typography>
+            ) : (
+              <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignItems: 'baseline' }}>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  {fmtDate(node.startDate) || '—'}
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  →
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
+                    fontWeight: overdue || dueSoon ? 600 : 400,
+                  }}
+                >
+                  {fmtDate(node.dueDate) || '—'}
+                  {overdue ? ' · 逾期' : dueSoon ? ' · 临期' : ''}
+                </Typography>
+              </Stack>
+            )}
             {/* R3-5：日志聚合徽标（n=0 弱化样式，仍可点击查看空态） */}
             <Chip
               size="small"
@@ -549,7 +616,7 @@ export function WbsPage(): JSX.Element {
       <Alert severity="info" variant="outlined">
         WBS 按 <strong>任务 → 子任务</strong> 组织：任务可继续下挂任务或子任务，子任务为最底层不可再分解；
         叶子任务须挂负责人与工时估算，
-        {projectType === 'B' ? `粒度建议 ≤ ${GRANULARITY_LIMIT[projectType]} 人日` : `A/C 类粒度建议 ≤ ${GRANULARITY_LIMIT[projectType]} 人日`}。
+        粒度建议 ≤ ${GRANULARITY_LIMIT[projectType]} 人日（超过仅提示拆分，不阻断保存）。
       </Alert>
 
       <SectionCard
@@ -680,13 +747,21 @@ export function WbsPage(): JSX.Element {
             </MenuItem>
           ))}
         </TextField>
+        {/* B16：开始日期字段——让工时估算的起止区间由用户真实定义，而非后端默认锚定今天 */}
+        <DatePicker
+          label="开始日期"
+          value={form.startDate ? dayjs(form.startDate) : null}
+          format={DATE_FMT}
+          onChange={(v) => handleStartDateChange(v)}
+          slotProps={{ textField: { fullWidth: true, size: 'small' } }}
+        />
         {/* 用户反馈③：截止日期字段（硬拦截在引擎层，前端预填父级日期） */}
         <DatePicker
           label="截止日期"
           value={form.dueDate ? dayjs(form.dueDate) : null}
           format={DATE_FMT}
           slotProps={{ textField: { size: 'small', fullWidth: true } }}
-          onChange={(v) => setForm({ ...form, dueDate: v && v.isValid() ? v.format(DATE_FMT) : '' })}
+          onChange={(v) => handleDueDateChange(v)}
         />
         <TextField
           select
@@ -718,9 +793,13 @@ export function WbsPage(): JSX.Element {
           label="工时估算（人日）"
           type="number"
           value={form.estimateDays}
-          onChange={(e) => setForm({ ...form, estimateDays: Number(e.target.value) })}
+          onChange={(e) => {
+            manualEstimateRef.current = true; // 用户手动接管，后续改日期不再自动覆盖
+            setForm({ ...form, estimateDays: Number(e.target.value) });
+          }}
           fullWidth
           InputProps={{ inputProps: { min: 0 } }}
+          helperText={`默认 1人 × 计划天数（${plannedDays} 天），可手动修改`}
         />
         {/* B8（R1）：累计实际工时（人日）只读展示 —— 不进 form state；
             唯一写入方 = 工作日志 submit / 已提交日志编辑（WBS 不再支持填写工时） */}

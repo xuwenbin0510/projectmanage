@@ -516,35 +516,7 @@ function validateWbsDeadline(input) {
   return null;
 }
 
-/**
- * 工时估算硬拦截：估算人日不得超过起止区间可用天数（`dueDate - startDate`）。
- * 无日期或可用天数非正时放行。
- * @param {{estimateDays: number, startDate: string, dueDate: string}} input
- * @returns {?{code: string, message: string, data: Object}} null = 放行
- */
-function validateWbsEstimate(input) {
-  const estimateDays = Number(input.estimateDays) || 0;
-  const startDate = input.startDate;
-  const dueDate = input.dueDate;
-  if (!startDate || !dueDate) return null;
-  const available = diffDays(startDate, dueDate);
-  if (available <= 0) return null;
-  if (estimateDays > available) {
-    return {
-      code: 'E_WBS_ESTIMATE_OVERFLOW',
-      message:
-        '工时估算 ' + estimateDays + ' 人日，超过起止区间可用天数 ' + available +
-        ' 天（' + startDate + ' → ' + dueDate + '）',
-      data: {
-        estimateDays: estimateDays,
-        startDate: startDate,
-        dueDate: dueDate,
-        available: available,
-      },
-    };
-  }
-  return null;
-}
+/* B16.x：原 validateWbsEstimate（估算超起止区间硬拦截）已移除——多人并行时工时可翻倍，不再硬卡。 */
 
 /* ═══════════════════════════════════════════════════
  * 六、状态流转 / WIP / 门 / 里程碑改期
@@ -651,7 +623,6 @@ module.exports = {
   allowedChildTypes,
   validateWbsPlacement,
   validateWbsDeadline,
-  validateWbsEstimate,
   // 状态 / WIP / 门 / 改期
   syncNodeStatusFromProgress,
   checkWip,

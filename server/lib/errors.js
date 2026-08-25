@@ -28,7 +28,6 @@ const ErrorCode = {
   E_WBS_TYPE_LOCKED: 'E_WBS_TYPE_LOCKED',
   E_WIP_EXCEEDED: 'E_WIP_EXCEEDED',
   E_WBS_DEADLINE_OVERFLOW: 'E_WBS_DEADLINE_OVERFLOW',
-  E_WBS_ESTIMATE_OVERFLOW: 'E_WBS_ESTIMATE_OVERFLOW',
   E_WBS_EFFORT_PARENT: 'E_WBS_EFFORT_PARENT',
   /* B8（D4）：WBS 写通道关闭 —— 工时唯一写入方 = 工作日志；携带 effortHours → 400 */
   E_WBS_EFFORT_WRITE_DISABLED: 'E_WBS_EFFORT_WRITE_DISABLED',
@@ -82,7 +81,6 @@ const CODE_HTTP = {
   [ErrorCode.E_WBS_DEPTH]: 400,
   [ErrorCode.E_WBS_LEAF_INCOMPLETE]: 400,
   [ErrorCode.E_WBS_DEADLINE_OVERFLOW]: 400,
-  [ErrorCode.E_WBS_ESTIMATE_OVERFLOW]: 400,
   [ErrorCode.E_WBS_EFFORT_PARENT]: 400,
   [ErrorCode.E_WBS_EFFORT_WRITE_DISABLED]: 400,
   [ErrorCode.E_REPORT_RISK_INCOMPLETE]: 400,
@@ -136,7 +134,6 @@ const ERROR_MESSAGE_ZH = {
   E_WBS_TYPE_LOCKED: '该节点已有子节点，不能再修改节点类型',
   E_WIP_EXCEEDED: 'WIP 已达上限，请先完成在办任务',
   E_WBS_DEADLINE_OVERFLOW: '子任务截止日期不能超过上级任务或关联里程碑的计划日期',
-  E_WBS_ESTIMATE_OVERFLOW: '工时估算不得超过起止区间的可用天数',
   E_WBS_EFFORT_PARENT: '有子节点的节点工时由子任务自动汇总，不可手填',
   E_WBS_EFFORT_WRITE_DISABLED: '工时登记已移至工作日志，WBS 不再支持填写工时',
   E_REPORT_RISK_INCOMPLETE: '风险条目缺少责任人或截止日',
