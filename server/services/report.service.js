@@ -882,10 +882,17 @@ function updateReport(db, id, payload, me) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '只能编辑本人提交的工作日志', { id: reportId });
   }
 
-  /* B8（R4）：冲正开关 —— 已提交日志编辑才先扣旧后加新；草稿编辑不触累计 */
-  const wasSubmitted = toStr(row.status) === '已提交';
-  /* 已提交日志编辑：本周完成内容必填（与 createReport 提交校验一致，防清空完成内容） */
-  if (wasSubmitted && !toStr(p.doneNote).trim()) {
+  const currentStatus = toStr(row.status);
+  /* B15：编辑态（重新）提交标记 —— 草稿/已打回 点「提交」→ 流转为「已提交」（清打回原因、写提交时间）；
+   *  纯「存草稿/保存」(submit 不置位) 保持原状态不变。 */
+  const wantSubmit = Boolean(p.submit) === true;
+
+  /* B8（R4）：工时冲正基准 —— 当前是否计入（已提交/已打回 均计；草稿不计） */
+  const wasCounted = currentStatus === '已提交' || currentStatus === '已打回';
+  /* 编辑后是否仍处于计入态：草稿/已打回 点提交 → 计入；已提交 编辑保持计入；纯草稿保存不计入 */
+  const willBeCounted = wantSubmit || wasCounted;
+  /* 进入计入态时本周完成内容必填（与 createReport 提交校验一致，防清空完成内容） */
+  if (willBeCounted && !toStr(p.doneNote).trim()) {
     throw new AppError(ErrorCode.E_REPORT_RISK_INCOMPLETE, '请填写本周完成内容', {
       messages: ['请填写本周完成内容'],
     });
@@ -903,11 +910,18 @@ function updateReport(db, id, payload, me) {
     .map(function (x) { return toStr(x); })
     .filter(function (x) { return x.trim(); });
 
+  /* B15：草稿/已打回 点提交 → 流转「已提交」，清打回原因、写提交时间；否则保持原状态 */
+  const toSubmitted = wantSubmit && (currentStatus === '草稿' || currentStatus === '已打回');
+  const newStatus = toSubmitted ? '已提交' : currentStatus;
+
   const updReport = db.prepare(`
     UPDATE work_reports
        SET done_note = @done_note,
            plan_items = @plan_items,
            resource_note = @resource_note,
+           status = @status,
+           reject_reason = @reject_reason,
+           submitted_at = @submitted_at,
            updated_at = @updated_at
      WHERE id = @id
   `);
@@ -915,12 +929,15 @@ function updateReport(db, id, payload, me) {
   const delRisks = db.prepare('DELETE FROM work_report_risks WHERE report_id = ?');
 
   const tx = db.transaction(function () {
-    /* B8（R4）：已提交日志先扣旧后加新（同事务，任一失败整体回滚）；净效果 = 每节点 new - old。
-       插入点：正文/子行重建之前 —— 冲正失败不产生半更新，编辑周次/正文/风险不影响累计 */
-    if (wasSubmitted) {
+    /* B8（R4）：工时冲正 —— 以「当前是否计入」为基准做净 delta；
+       草稿未计入故不扣旧；已提交/已打回 已计入故先扣旧，再按新值加回（净效果 = new - old）。
+       插入点：正文/子行重建之前，冲正失败整体回滚。 */
+    if (wasCounted) {
       oldTaskRows.forEach(function (t) {
         applyEffortDelta(db, toStr(t.node_id), -(Number(t.week_actual_days) || 0), ts);
       });
+    }
+    if (willBeCounted) {
       taskRefs
         .filter(function (t) { return t.selected && t.nodeId; })
         .forEach(function (t) {
@@ -933,6 +950,9 @@ function updateReport(db, id, payload, me) {
       done_note: toStr(p.doneNote),
       plan_items: JSON.stringify(planItems),
       resource_note: toStr(p.resourceNote),
+      status: newStatus,
+      reject_reason: toSubmitted ? null : row.reject_reason,
+      submitted_at: toSubmitted ? ts : row.submitted_at,
       updated_at: ts,
     });
     delTasks.run(reportId);
@@ -1067,7 +1087,8 @@ function confirmReport(db, id, me) {
 }
 
 /**
- * 打回周报：`已提交` → `草稿`，写 `reject_reason`（必填），清空 confirmed_* 。
+ * 打回周报：`已提交` → `已打回`，写 `reject_reason`（必填），清空 confirmed_* 。
+ * 注意：`已打回` 是独立状态 —— 作者可修改（只能改、不能删），修改后重新提交回到 `已提交`。
  *
  * 前置校验（顺序恒定，fail-fast）：
  *  1. `reason` 非空（否则 400 `E_VALIDATION`，架构 §5 结论 #2 必填）；
@@ -1079,7 +1100,7 @@ function confirmReport(db, id, me) {
  * @param {string} id 周报 id
  * @param {string} reason 打回原因（必填，去空白后非空）
  * @param {object} me 当前用户 users 行
- * @returns {object} Report（打回后，回到草稿）
+ * @returns {object} Report（打回后，进入「已打回」状态，仅可改不可删）
  * @throws {AppError} E_VALIDATION / E_NOT_FOUND / E_FORBIDDEN
  */
 function rejectReport(db, id, reason, me) {
@@ -1114,15 +1135,16 @@ function rejectReport(db, id, reason, me) {
     }
 
     const ts = dates.nowIso();
-    /* 打回回到「草稿」，作者可修改后重新提交；清 confirmed_*，保留 reject_reason 供作者查看 */
+    /* 打回进入独立「已打回」状态：作者可修改（只能改、不能删），修改后重新提交回到「已提交」；
+       清 confirmed_*，保留 reject_reason 供作者查看 */
     db.prepare(
       'UPDATE work_reports SET status = ?, reject_reason = ?, confirmed_by = NULL, confirmed_at = NULL, updated_at = ? WHERE id = ?'
-    ).run('草稿', rejectReason, ts, reportId);
+    ).run('已打回', rejectReason, ts, reportId);
 
     writeAudit(
       db, actor, 'report', reportId, 'update', toStr(row.project_id),
       '打回 ' + toStr(row.week) + ' 周报：' + rejectReason,
-      [{ field: 'status', label: '周报状态', before: '已提交', after: '草稿' }]
+      [{ field: 'status', label: '周报状态', before: '已提交', after: '已打回' }]
     );
   });
   tx();
@@ -1167,6 +1189,62 @@ function listPendingConfirmation(db, userOpenId) {
   });
 }
 
+/**
+ * 删除周报草稿：`草稿` → 物理删除（含级联子行）。
+ *
+ * 安全边界（fail-fast，顺序恒定）：
+ *  1. 周报存在（否则 404）；
+ *  2. 仅 `草稿` 可删 —— `已打回`（只改不可删）、`已提交`、`已确认` 一律锁死；
+ *  3. 仅作者本人或全局 admin 可删（与 `updateReport` D-2 一致）；
+ *  4. 项目已结项/终止由路由层 `rbac.assertWritable` 拦截（与编辑同口径）。
+ *
+ * 副作用：草稿从未计入 WBS 工时累计（B8），故删除零工时回退；
+ *  `work_report_tasks` / `work_report_risks` 均挂 `ON DELETE CASCADE`，随主表自动级联。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} id 周报 id
+ * @param {object} me 当前用户 users 行（`req.user`）
+ * @returns {{ id: string, deleted: boolean }}
+ * @throws {AppError} E_NOT_FOUND / E_VALIDATION / E_FORBIDDEN
+ */
+function deleteReport(db, id, me) {
+  const reportId = toStr(id).trim();
+  const actor = me || {};
+
+  const row = db.prepare('SELECT * FROM work_reports WHERE id = ?').get(reportId);
+  if (!row) {
+    throw new AppError(ErrorCode.E_NOT_FOUND, '周报不存在或已被删除', { id: reportId });
+  }
+
+  /* 仅草稿可删：已打回（只改不可删）、已提交、已确认均锁死 */
+  const status = toStr(row.status, '草稿');
+  if (status !== '草稿') {
+    throw new AppError(
+      ErrorCode.E_VALIDATION,
+      '仅「草稿」状态的工作日志可删除，当前状态为「' + status + '」',
+      { id: reportId, status: status }
+    );
+  }
+
+  /* 仅作者本人或全局 admin 可删（与 updateReport D-2 一致） */
+  const isAuthor = toStr(row.author_open_id) === toStr(actor.open_id);
+  const isAdmin = resolveGlobalRoles(actor).indexOf('admin') >= 0;
+  if (!isAuthor && !isAdmin) {
+    throw new AppError(ErrorCode.E_FORBIDDEN, '只能删除本人提交的工作日志草稿', { id: reportId });
+  }
+
+  db.prepare('DELETE FROM work_reports WHERE id = ?').run(reportId);
+  /* work_report_tasks / work_report_risks 均 ON DELETE CASCADE，随主表自动级联，无需手动清子行 */
+
+  writeAudit(
+    db, actor, 'report', reportId, 'delete', toStr(row.project_id),
+    '删除 ' + toStr(row.week) + ' 工作日志草稿',
+    [{ field: 'status', label: '周报状态', before: '草稿', after: '(已删除)' }]
+  );
+
+  return { id: reportId, deleted: true };
+}
+
 module.exports = {
   // 读
   listReports,
@@ -1176,6 +1254,7 @@ module.exports = {
   // 写
   createReport,
   updateReport,
+  deleteReport,
   // B14 块2 · 周报轻量闭环
   resolveConfirmers,
   confirmReport,

@@ -330,6 +330,11 @@ export class HttpApiClient implements ApiClient {
     return post<Report>(`/projects/${projectId}/reports/${id}/reject`, { reason });
   }
 
+  /** B15：删除草稿（仅「草稿」可删，作者本人或 admin）。返回 { id, deleted } */
+  deleteReport(projectId: string, id: string): Promise<{ id: string; deleted: boolean }> {
+    return del<{ id: string; deleted: boolean }>(`/projects/${projectId}/reports/${id}`);
+  }
+
   listPendingConfirmation(): Promise<Report[]> {
     return get<Report[]>('/reports/pending-confirmation');
   }

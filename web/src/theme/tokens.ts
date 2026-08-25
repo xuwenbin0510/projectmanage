@@ -243,6 +243,8 @@ const TONE_MAP: Record<string, SemanticTone> = {
   进行中: 'warning',
   审批中: 'warning',
   待评审: 'warning',
+  /** B15：周报「已打回」独立状态，仅可改不可删，语义色=warning（橙） */
+  已打回: 'warning',
   临期: 'warning',
   挂起: 'warning',
   current: 'warning',

@@ -183,6 +183,8 @@ export interface ReportPayload {
   doneNote: string;
   planItems: string[];
   resourceNote: string;
+  /** B15：编辑态携带 —— 草稿/已打回 点「提交」时置 true，服务端将其流转为「已提交」（清打回原因、写提交时间）；省略则保持原状态 */
+  submit?: boolean;
   /** B8（R2）：tasks[].actualDays 为本周实际工时（人日）入参，仅勾选叶子行携带 */
   tasks: Array<{ nodeId: string; progressAfter: number; selected: boolean; actualDays?: number }>;
   risks: Array<{ description: string; owner: string; dueDate: string }>;
@@ -348,6 +350,8 @@ export interface ApiClient {
   submitReport(payload: ReportPayload): Promise<Report>;
   /** 编辑提交必须原样回传原始 report.tasks（selected/progressAfter 不变），引擎按 payload.tasks 整体重建，否则关联被清空（R3-7） */
   updateReport(id: string, payload: ReportPayload): Promise<Report>;
+  /** B15：删除草稿（仅 `草稿` 可删，作者本人或 admin） */
+  deleteReport(projectId: string, id: string): Promise<{ id: string; deleted: boolean }>;
 
   /* 周报轻量闭环 B14-块2（草稿 → 已提交 → 已确认；确认人由服务端 resolveConfirmers 判定） */
   /** 确认周报：仅 status='已提交' 且当前用户在服务端确认人集合内才成功，成功后 status='已确认' */

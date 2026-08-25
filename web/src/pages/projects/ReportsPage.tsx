@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -6,10 +6,6 @@ import {
   Chip,
   CircularProgress,
   IconButton,
-  ListItemIcon,
-  ListItemText,
-  Menu,
-  MenuItem,
   Stack,
   TableSortLabel,
   TextField,
@@ -19,10 +15,10 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import TaskAltOutlinedIcon from '@mui/icons-material/TaskAltOutlined';
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useLocation, useParams } from 'react-router-dom';
 
 import {
@@ -44,6 +40,7 @@ import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
 import { useToast } from '@/hooks';
 import { api, USE_MOCK } from '@/api/client';
+import { useAuthStore } from '@/stores/authStore';
 import { REPORT_SECTION_TITLE, REJECT_REASON_MAX } from '@/config/enums';
 import { fmtDateTime } from '@/utils/date';
 import { csvDateStamp, downloadCsv, fetchCsv, toCsv } from '@/utils/csv';
@@ -132,11 +129,42 @@ export function ReportsPage(): JSX.Element {
   const [rejectReason, setRejectReason] = useState<string>('');
   /** 正在执行确认 / 打回动作的周报 id（禁重复点击） */
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [menuAnchor, setMenuAnchor] = useState<{ el: HTMLElement; report: Report } | null>(null);
-  const openMenu = (event: MouseEvent<HTMLElement>, report: Report): void => {
-    setMenuAnchor({ el: event.currentTarget, report });
+
+  /* ── B15：删除草稿（仅「草稿」可删，作者本人或 admin）──────────────────── */
+  const currentUser = useAuthStore((s) => s.user);
+  const userGlobalRoles = useMemo(() => {
+    if (!currentUser) return [] as string[];
+    return Array.isArray(currentUser.globalRoles) && currentUser.globalRoles.length
+      ? currentUser.globalRoles
+      : [currentUser.globalRole];
+  }, [currentUser]);
+  const isAdmin = userGlobalRoles.includes('admin');
+  /**
+   * 是否可管理（编辑 / 删除）：作者本人 或 全局 admin；mock 演示放开（演示自由编辑）。
+   * 注意：按钮可见性仅为前端体验，最终以服务端 `report.service#updateReport / deleteReport` 判定为准。
+   */
+  const canManage = (r: Report): boolean =>
+    USE_MOCK || !currentUser || isAdmin || currentUser.openId === r.author;
+
+  /** 删除目标（null = 关闭二次确认弹窗） */
+  const [deleteTarget, setDeleteTarget] = useState<Report | null>(null);
+  const openDelete = (r: Report): void => setDeleteTarget(r);
+  const closeDelete = (): void => setDeleteTarget(null);
+  const [deleteBusy, setDeleteBusy] = useState<boolean>(false);
+  const handleDelete = async (): Promise<void> => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await api.deleteReport(id, deleteTarget.id);
+      toast.success('工作日志草稿已删除');
+      closeDelete();
+      await fetchReports(id);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setDeleteBusy(false);
+    }
   };
-  const closeMenu = (): void => setMenuAnchor(null);
 
   const reloadConfirmable = useCallback((): void => {
     setConfirmableLoading(true);
@@ -332,12 +360,44 @@ export function ReportsPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 132,
+      width: 196,
       align: 'center',
       render: (r) => {
         const confirmable = isConfirmable(r);
+        const canM = canManage(r);
+        const editable = canM && (r.status === '草稿' || r.status === '已打回');
+        const deletable = canM && r.status === '草稿';
         return (
           <Stack direction="row" spacing={0.25} justifyContent="center" alignItems="center">
+            <Tooltip title="查看">
+              <IconButton
+                size="small"
+                onClick={(e) => { e.stopPropagation(); openDetail(r); }}
+              >
+                <VisibilityOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            {editable && (
+              <Tooltip title="编辑">
+                <IconButton
+                  size="small"
+                  onClick={(e) => { e.stopPropagation(); openEditReport(r); }}
+                >
+                  <EditOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+            {deletable && (
+              <Tooltip title="删除草稿">
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={(e) => { e.stopPropagation(); openDelete(r); }}
+                >
+                  <DeleteOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             {confirmable && (
               <>
                 <Tooltip title="确认该周报">
@@ -362,11 +422,6 @@ export function ReportsPage(): JSX.Element {
                 </Tooltip>
               </>
             )}
-            <Tooltip title="更多操作">
-              <IconButton size="small" onClick={(e) => { e.stopPropagation(); openMenu(e, r); }}>
-                <MoreVertOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
           </Stack>
         );
       },
@@ -434,32 +489,6 @@ export function ReportsPage(): JSX.Element {
         )}
       </SectionCard>
 
-      {/* 行操作「更多」菜单 */}
-      <Menu anchorEl={menuAnchor?.el} open={!!menuAnchor} onClose={closeMenu}>
-        <MenuItem
-          onClick={() => {
-            if (menuAnchor) openDetail(menuAnchor.report);
-            closeMenu();
-          }}
-        >
-          <ListItemIcon>
-            <VisibilityOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>查看</ListItemText>
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            if (menuAnchor) openEditReport(menuAnchor.report);
-            closeMenu();
-          }}
-        >
-          <ListItemIcon>
-            <EditOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>编辑</ListItemText>
-        </MenuItem>
-      </Menu>
-
       {/* R4-P0-4：共享日志表单（新建提交后关闭，行为与现状一致；旧链接 prefill 走 lockNodeId 锁定） */}
       <ReportFormModal
         open={open}
@@ -502,10 +531,10 @@ export function ReportsPage(): JSX.Element {
                 {detail.confirmedAt ? `（${fmtDateTime(detail.confirmedAt)}）` : ''}
               </Alert>
             )}
-            {detail.status === '草稿' && detail.rejectReason && (
+            {(detail.status === '草稿' || detail.status === '已打回') && detail.rejectReason && (
               <Alert severity="warning" variant="outlined" sx={{ fontSize: 13 }}>
                 <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                  打回原因：
+                  {detail.status === '已打回' ? '打回原因（请修改后重新提交）：' : '打回原因：'}
                 </Typography>
                 <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mt: 0.25 }}>
                   {detail.rejectReason}
@@ -601,7 +630,7 @@ export function ReportsPage(): JSX.Element {
         {rejectTarget && (
           <Stack spacing={1.5}>
             <Alert severity="info" variant="outlined" sx={{ fontSize: 13 }}>
-              打回后该周报状态回退为「草稿」，作者需重新提交。请填写明确的打回原因（必填）。
+              打回后该周报状态变为「已打回」，作者可修改后重新提交。请填写明确的打回原因（必填）。
             </Alert>
             <Typography variant="body2" color="text.secondary">
               周次：{rejectTarget.week}　填报人：{rejectTarget.authorName}
@@ -621,6 +650,29 @@ export function ReportsPage(): JSX.Element {
                   : `${rejectReason.trim().length}/${REJECT_REASON_MAX}`
               }
             />
+          </Stack>
+        )}
+      </FormDialog>
+
+      {/* B15：删除草稿二次确认（危险操作，必须显式确认） */}
+      <FormDialog
+        open={Boolean(deleteTarget)}
+        title="删除工作日志草稿"
+        submitText="确认删除"
+        submitting={deleteBusy}
+        disabled={deleteBusy}
+        maxWidth="xs"
+        onClose={closeDelete}
+        onSubmit={() => void handleDelete()}
+      >
+        {deleteTarget && (
+          <Stack spacing={1.5}>
+            <Alert severity="warning" variant="outlined" sx={{ fontSize: 13 }}>
+              将永久删除「{deleteTarget.week}」工作日志草稿及其关联的任务、风险明细，且不可恢复。草稿未计入工时，删除不影响 WBS 进度。
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              周次：{deleteTarget.week}　填报人：{deleteTarget.authorName}
+            </Typography>
           </Stack>
         )}
       </FormDialog>

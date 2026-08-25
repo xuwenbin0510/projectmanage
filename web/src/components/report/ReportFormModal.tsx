@@ -308,6 +308,9 @@ export function ReportFormModal({
       }
     }
     const payload = assemble(values);
+    /* B15：编辑态点「提交」→ 携带 submit 标记，服务端将 草稿/已打回 流转为「已提交」；
+     *  点「存草稿」则不携带，保持原状态（已打回 保存后仍停留该态，仅更新内容）。 */
+    if (editingReport && submit) payload.submit = true;
     try {
       let saved: Report;
       if (editingReport) {
