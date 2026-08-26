@@ -29,6 +29,10 @@ export interface ProgressDonutProps {
   summary: TaskProgressSummary;
   /** 加载中 */
   loading?: boolean;
+  /** 标题（B12 全局总览传「任务进度」整体口径；缺省保留工作台「我的任务进度」） */
+  title?: string;
+  /** 空态描述文案（缺省保留工作台「分配给你的任务都已完成」） */
+  emptyDescription?: string;
   /** B15 新增：点击某段（含图例 0 值段）下钻；不传则不可点（与 PriorityDonut 现行为一致） */
   onDrill?: (segment: ProgressSegment) => void;
 }
@@ -39,7 +43,7 @@ export interface ProgressDonutProps {
  * `summary.total === 0` 时走 `ChartCard` 空态「暂无进行中的任务」，
  * **不会**渲染 `NaN`（T04 完成标准 #3）。
  */
-export function ProgressDonut({ summary, loading = false, onDrill }: ProgressDonutProps): JSX.Element {
+export function ProgressDonut({ summary, loading = false, title = '我的任务进度', emptyDescription = '分配给你的任务都已完成', onDrill }: ProgressDonutProps): JSX.Element {
   const palette = useChartPalette();
 
   /* 品牌色阶：完成(最深) → 在办 → 未启动(最浅)，同一色系表达量级 */
@@ -51,7 +55,7 @@ export function ProgressDonut({ summary, loading = false, onDrill }: ProgressDon
 
   return (
     <DonutChart
-      title="我的任务进度"
+      title={title}
       subtitle={
         summary.total > 0
           ? `共 ${summary.total} 个任务 · 已完成 ${summary.done}`
@@ -63,7 +67,7 @@ export function ProgressDonut({ summary, loading = false, onDrill }: ProgressDon
       loading={loading}
       empty={summary.total === 0}
       emptyTitle="暂无进行中的任务"
-      emptyDescription="分配给你的任务都已完成"
+      emptyDescription={emptyDescription}
       onSegmentClick={onDrill ? (seg) => onDrill(seg.id as ProgressSegment) : undefined}
     />
   );

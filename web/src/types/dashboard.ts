@@ -8,7 +8,7 @@
  */
 import type { Paged } from '@/types/api';
 import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
-import type { Priority, TaskStatus } from '@/types/wbs';
+import type { Priority, TaskStatus, WbsNode } from '@/types/wbs';
 
 /** 进度环：我的任务三段分布 + 总完成度 */
 export interface TaskProgressSummary {
@@ -115,6 +115,8 @@ export interface OverviewStats {
   averageProgress: number;
   /** D11：范围内待确认周报数（work_reports.status='已提交'） */
   pendingReportConfirm: number;
+  /** D11：范围内已确认周报数（work_reports.status='已确认'），口径对齐「我的工作台」 */
+  reportClosureConfirmed: number;
   /** D11：周报闭环率 0~100（已确认 / (已提交+已确认)） */
   reportClosureRate: number;
 }
@@ -415,6 +417,47 @@ export interface WeeklyProgress {
   milestoneCompare: MilestoneCompare;
 }
 
+/**
+ * 任务时间轴三栏（B12 全局总览新增）。
+ * 每行 = `WbsNode`（已补 `projectName` 供跨项目展示）；三栏按「截止日相对今天」单一真源切分，零重叠：
+ *  - `overdue`  ：已逾期（gap < 0）
+ *  - `dueSoon`  ：临期（0 ≤ gap ≤ 3 天）
+ *  - `cycle`    ：计划周期内（4 ≤ gap ≤ 14 天）
+ */
+export interface TaskTimelineSummary {
+  overdue: WbsNode[];
+  dueSoon: WbsNode[];
+  cycle: WbsNode[];
+}
+
+/** 逐项目任务量（B12 · 「各项目任务量」横向条形面板数据源） */
+export interface ProjectTaskStat {
+  projectId: string;
+  projectName: string;
+  /** 叶子任务总数 */
+  total: number;
+  /** 已完成（状态=完成） */
+  done: number;
+  /** 在办（状态∈ 进行中/待评审） */
+  active: number;
+  /** 非完成且已过截止日 */
+  overdue: number;
+  /** 完成度 0~100（叶子进度均值四舍五入） */
+  completionRate: number;
+}
+
+/** 周报闭环逐项目明细行（B12 · 「周报闭环率」卡片下钻抽屉数据源） */
+export interface ReportClosureItem {
+  projectId: string;
+  projectName: string;
+  /** 已提交（status === '已提交'）周报数 */
+  submitted: number;
+  /** 已确认（status === '已确认'）周报数 */
+  confirmed: number;
+  /** 闭环率 0~100 = 已确认 / (已提交 + 已确认) */
+  rate: number;
+}
+
 /** 全局总览完整响应 */
 export interface DashboardOverview {
   /** 后端实际生效的范围（非特权角色即使传 all 也会被降为 mine） */
@@ -424,6 +467,10 @@ export interface DashboardOverview {
   stats: OverviewStats;
   statusDonut: StatusDonut;
   health: HealthDistribution;
+  /** B12：任务进度环（完成 / 在办 / 未启动 + 总完成度），口径与工作台逐字一致 */
+  taskProgress?: TaskProgressSummary;
+  /** B12：任务时间轴三栏（逾期 / 临期 / 计划周期内），行 = 跨项目叶子任务 */
+  taskTimeline?: TaskTimelineSummary;
   /** B17：在办叶子任务按 P0–P3 计数（脏值兜底 P2；分母与 B14 工作台一致） */
   priorityDist: PriorityDistribution;
   /** B17：全量叶子任务（含已完成）按任务状态五档计数 */
@@ -441,6 +488,10 @@ export interface DashboardOverview {
   /** 按「逾期 ↓ → 在办 ↓ → 姓名 ↑」排序，未分配恒最后 */
   ownerLoad: OwnerLoadRow[];
   reportMissing: ReportMissingRow[];
+  /** B12：周报闭环逐项目明细（「周报闭环率」卡片下钻抽屉） */
+  reportClosureItems?: ReportClosureItem[];
+  /** B12：逐项目任务量（「各项目任务量」横向条形面板） */
+  projectTaskStats?: ProjectTaskStat[];
   /** D01：上周工作进展（周报动态 / 任务进展 / 达成里程碑） */
   weeklyProgress?: WeeklyProgress;
   /** D01.5：任务负责人选项池（「负责人」筛选下拉数据源） */
@@ -513,9 +564,11 @@ export interface DashboardTasksQuery {
   /** 维度：优先级（P0-P3；脏值由服务端兜底 P2） */
   priority?: Priority;
   /** 维度：任务状态（五档；命中时基数含已完成） */
-  taskStatus?: TaskStatus;
+  taskStatus?: TaskStatus | TaskStatus[];
   /** 维度：逾期档位（1to7 / 8to30 / over30） */
   overdueBucket?: OverdueBucket;
+  /** B12：任务时间轴三栏下钻（overdue / dueSoon / cycle） */
+  dueWindow?: 'overdue' | 'dueSoon' | 'cycle';
   page?: number;
   pageSize?: number;
 }

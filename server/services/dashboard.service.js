@@ -41,6 +41,12 @@ const MANAGED_STATUSES = ['已批准', '进行中', '挂起'];
 /** B18：逾期档位白名单（与 portfolioAgg.overdueBucketOf 返回值逐字一致） */
 const OVERDUE_BUCKETS = ['1to7', '8to30', 'over30'];
 
+/** B12 任务时间轴：dueWindow 白名单（逾期 / 临期 / 计划周期内） */
+const DUE_WINDOWS = ['overdue', 'dueSoon', 'cycle'];
+
+/** B12 任务时间轴·计划周期前瞻窗口（天），与 portfolioAgg.CYCLE_LOOKAHEAD_DAYS 一致 */
+const CYCLE_LOOKAHEAD_DAYS = 14;
+
 /** 明细表分页默认值 */
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 20;
@@ -153,8 +159,15 @@ function normalizePriorityValue(raw) {
  */
 function resolveDimension(query) {
   const raw = query && typeof query === 'object' ? query : {};
-  if (enums.TASK_STATUSES.indexOf(raw.taskStatus) >= 0) {
-    return { kind: 'taskStatus', value: String(raw.taskStatus) };
+  /* taskStatus：支持单值或逗号分隔多值（进度环「在办」=进行中+待评审、「未启动」=待办+阻塞 下探） */
+  const tsRaw = raw.taskStatus;
+  if (typeof tsRaw === 'string' && tsRaw.length > 0) {
+    if (tsRaw.indexOf(',') >= 0) {
+      const valid = tsRaw.split(',').filter(function (v) { return enums.TASK_STATUSES.indexOf(v) >= 0; });
+      if (valid.length > 0) return { kind: 'taskStatus', value: valid };
+    } else if (enums.TASK_STATUSES.indexOf(tsRaw) >= 0) {
+      return { kind: 'taskStatus', value: tsRaw };
+    }
   }
   if (OVERDUE_BUCKETS.indexOf(raw.overdueBucket) >= 0) {
     return { kind: 'overdueBucket', value: String(raw.overdueBucket) };
@@ -163,6 +176,31 @@ function resolveDimension(query) {
     return { kind: 'priority', value: normalizePriorityValue(raw.priority) };
   }
   return { kind: 'none', value: '' };
+}
+
+/**
+ * 任务时间轴 dueWindow 维度过滤（B12 · GET /api/dashboard/tasks 新增）。
+ *
+ * 与 `portfolioAgg.aggregateTaskTimeline` 的三档切分逐字一致：
+ *  - `overdue`  ：gap = diffDays(today, dueDate) < 0
+ *  - `dueSoon`  ：0 ≤ gap ≤ DUE_SOON_DAYS（默认 3）
+ *  - `cycle`    ：4 ≤ gap ≤ CYCLE_LOOKAHEAD_DAYS（默认 14）
+ * `dw === ''` 或非法值 → 不过滤（返回在办叶子全集）。无 dueDate → 恒不匹配。
+ *
+ * @param {object} n WbsNode
+ * @param {string} todayStr
+ * @param {string} dw 'overdue' | 'dueSoon' | 'cycle' | ''
+ * @returns {boolean}
+ */
+function matchDueWindow(n, todayStr, dw) {
+  if (!dw) return true;
+  const due = String((n && n.dueDate) || '');
+  if (!due) return false;
+  const gap = dates.diffDays(todayStr, due);
+  if (dw === 'overdue') return gap < 0;
+  if (dw === 'dueSoon') return gap >= 0 && gap <= agg.DUE_SOON_DAYS;
+  if (dw === 'cycle') return gap >= 4 && gap <= CYCLE_LOOKAHEAD_DAYS;
+  return true;
 }
 
 /* ── 取数 ───────────────────────────────────────────── */
@@ -550,6 +588,58 @@ function countReportClosure(db, projectIds) {
 }
 
 /**
+ * 范围内各项目「周报闭环」明细（B12 全局总览·周报闭环率下钻数据源）。
+ *
+ * 与 `countReportClosure` 同源同口径（status IN ('已提交','已确认')），
+ * 但按 `project_id` 展开为**逐项目** { submitted, confirmed, rate }，
+ * 供全局总览「周报闭环率」卡片点开抽屉逐项目查看（对齐工作台 ReportClosureDrawer 心智）。
+ *
+ * 仅返回「有已提交或已确认周报」的项目（0/0 的项目不占位，避免抽屉噪声）。
+ * 排序：闭环率升序（待推进的在前）→ 项目名升序。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds 范围内项目 id
+ * @param {Object<string, string>} nameById projectId → 项目名
+ * @returns {Array<{projectId: string, projectName: string, submitted: number, confirmed: number, rate: number}>}
+ */
+function countReportClosureItems(db, projectIds, nameById) {
+  const ids = (projectIds || []).map(String).filter(Boolean);
+  const names = nameById && typeof nameById === 'object' ? nameById : {};
+  if (!ids.length) return [];
+
+  const cnt = {};
+  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+    db.prepare(
+      "SELECT project_id, status, COUNT(*) c FROM work_reports WHERE project_id IN (" + placeholders(part) + ") AND status IN ('已提交','已确认') GROUP BY project_id, status",
+    )
+      .all(part)
+      .forEach(function (r) {
+        const pid = mappers.toStr(r.project_id);
+        if (!cnt[pid]) cnt[pid] = { submitted: 0, confirmed: 0 };
+        if (r.status === '已提交') cnt[pid].submitted += mappers.toNum(r.c, 0);
+        else if (r.status === '已确认') cnt[pid].confirmed += mappers.toNum(r.c, 0);
+      });
+  });
+
+  return Object.keys(cnt)
+    .map(function (pid) {
+      const s = cnt[pid];
+      const denom = s.submitted + s.confirmed;
+      return {
+        projectId: pid,
+        projectName: names[pid] || agg.UNNAMED_PROJECT,
+        submitted: s.submitted,
+        confirmed: s.confirmed,
+        rate: denom ? Math.round((s.confirmed / denom) * 100) : 0,
+      };
+    })
+    .sort(function (a, b) {
+      if (a.rate !== b.rate) return a.rate - b.rate;
+      return agg.compareText(a.projectName, b.projectName);
+    });
+}
+
+/**
  * 上周工作进展（D01 · 全局总览面板「上周工作进展」）。
  *
  * 三个维度，全部基于「**上周**（上一自然 ISO 周 · 周一~周日）」范围——周一开周例会回顾的是
@@ -910,6 +1000,11 @@ function getDashboardOverview(db, query, me) {
   const ownerLoad = agg.aggregateOwnerLoad(tasks, todayStr, nameById);
   const overdueTasks = agg.countOverdueTasks(tasks, todayStr);
 
+  /* B12 新增：任务进度环 + 任务时间轴三栏（与工作台口径逐字一致） */
+  const taskProgress = agg.aggregateTaskProgress(allLeafTasks);   // 全量叶子（含已完成）
+  const taskTimeline = agg.aggregateTaskTimeline(items, allLeafTasks, nameById, todayStr);
+  const projectTaskStats = agg.aggregateProjectTaskStats(allLeafTasks, nameById, todayStr);   // 逐项目任务量（⑤各项目任务量面板）
+
   /* B17 追加三张分布图（放在 overdueTasks 之后） */
   const priorityDist = agg.aggregatePriorityDist(tasks);           // 在办叶子
   const statusDist = agg.aggregateStatusDist(allLeafTasks);        // 全量叶子（含已完成）
@@ -925,6 +1020,8 @@ function getDashboardOverview(db, query, me) {
   const gates = aggregateGates(db, projectIds);
   const deliverables = aggregateDeliverables(db, projectIds);
   const reportClosure = countReportClosure(db, projectIds);
+  /* B12：周报闭环逐项目明细（供「周报闭环率」卡片下钻抽屉） */
+  const reportClosureItems = countReportClosureItems(db, projectIds, nameById);
 
   /* 第一批：近 30 天到期里程碑（未完成 & 有计划日期 & ≤ 今天+30，分段 已过期/未来30天） */
   const milestoneDue = aggregateMilestones(db, projectIds);
@@ -967,13 +1064,19 @@ function getDashboardOverview(db, query, me) {
       reportFillRate: fill.due ? Math.round((fill.filled / fill.due) * 100) : 100,
       reportFilled: fill.filled,
       reportDue: fill.due,
-      /* D11：周报闭环（范围内待确认周报数 + 已闭环率） */
+      /* D11：周报闭环（口径对齐「我的工作台」：待确认=已提交、已确认=已确认、闭环率=已确认/(已提交+已确认)） */
       pendingReportConfirm: reportClosure.submitted,
+      reportClosureConfirmed: reportClosure.confirmed,
       reportClosureRate: reportClosure.closureRate,
       averageProgress: agg.averageProgress(items),
     },
     statusDonut: statusDonut,
     health: health,
+    /* B12：任务进度环 + 任务时间轴三栏（对齐工作台「我的任务」两块） */
+    taskProgress: taskProgress,
+    taskTimeline: taskTimeline,
+    /* B12：逐项目任务量（⑤「各项目任务量」横向条形面板） */
+    projectTaskStats: projectTaskStats,
     priorityDist: priorityDist,
     statusDist: statusDist,
     overdueDuration: overdueDuration,
@@ -985,6 +1088,8 @@ function getDashboardOverview(db, query, me) {
     overdue: overdue,
     ownerLoad: ownerLoad,
     reportMissing: reportMissing,
+    /* B12：周报闭环逐项目明细（「周报闭环率」卡片下钻） */
+    reportClosureItems: reportClosureItems,
     weeklyProgress: weeklyProgress,
     ownerOptions: ownerOptions,
     projects: paged(pageItems, items.length, q.page, q.pageSize),
@@ -1018,6 +1123,7 @@ function getDashboardTasks(db, query, me) {
   const projectIds = items.map(function (p) { return String(p.id); });
 
   const dim = resolveDimension(query);              // { kind, value }
+  const dueWindow = DUE_WINDOWS.indexOf(String((query && query.dueWindow) || '')) >= 0 ? String(query.dueWindow) : '';
 
   /* 基数：taskStatus → 全量叶子（含已完成）；否则 → 在办叶子 */
   const base = dim.kind === 'taskStatus'
@@ -1030,10 +1136,15 @@ function getDashboardTasks(db, query, me) {
 
   const rows = base
     .filter(function (n) {
-      if (dim.kind === 'taskStatus') return n.status === dim.value;
-      if (dim.kind === 'priority') return normalizePriorityValue(n.priority) === dim.value;
-      if (dim.kind === 'overdueBucket') return agg.overdueBucketOf(todayStr, n.dueDate) === dim.value;
-      return true;
+      if (dim.kind === 'taskStatus') {
+        const vs = Array.isArray(dim.value) ? dim.value : [dim.value];
+        if (vs.indexOf(n.status) < 0) return false;
+      } else if (dim.kind === 'priority') {
+        if (normalizePriorityValue(n.priority) !== dim.value) return false;
+      } else if (dim.kind === 'overdueBucket') {
+        if (agg.overdueBucketOf(todayStr, n.dueDate) !== dim.value) return false;
+      }
+      return matchDueWindow(n, todayStr, dueWindow);
     })
     .map(function (n) {
       return {

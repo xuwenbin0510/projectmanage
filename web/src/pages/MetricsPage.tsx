@@ -1,10 +1,10 @@
 /**
  * 全局总览（B12 · T05）
  *
- * 复用 `/metrics` 路由：顶部 4 张指标卡 + 筛选栏（分类 / 状态 / 健康度 /
- * 关键字 / 范围开关）+ 图表区（7 张：状态环 DonutChart / 健康环 HealthDonut /
- * 逾期 OverdueBarChart / 负责人负荷 OwnerLoadBarChart / 优先级 CategoryBarChart /
- * 状态 CategoryBarChart / 逾期时长 CategoryBarChart）+ 项目明细表（DataTable），
+ * 复用 `/metrics` 路由：顶部 8 张指标卡 + 筛选栏（分类 / 状态 / 健康度 /
+ * 关键字 / 负责人 / 范围开关）+ 图表区（任务执行：任务进度环 / 优先级 / 状态 /
+ * 逾期时长；项目健康：状态环 / 健康度 / 负责人负荷 / 各项目任务量；质量与交付：质量门 / 交付物）
+ * + 任务时间轴（逾期 / 临期 / 计划周期内 三栏，任务级），
  * 行点击钻取到 B11 单项目仪表盘，健康/状态色段下钻到同页筛选，负责人行
  * 下钻到 OwnerLoadDrawer（P1-6）。
  *
@@ -23,7 +23,6 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import {
   Box,
   Button,
-  Chip,
   FormControlLabel,
   InputAdornment,
   MenuItem,
@@ -43,16 +42,11 @@ import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import EventOutlinedIcon from '@mui/icons-material/EventOutlined';
 
 import {
-  DataTable,
-  ErrorState,
-  HealthDot,
+  EmptyState,
   PageHeader,
-  ProgressBar,
   SectionCard,
   StatCard,
-  StatusChip,
 } from '@/components/common';
-import type { Column } from '@/components/common';
 import {
   CategoryBarChart,
   DeliverableDetailDrawer,
@@ -60,21 +54,24 @@ import {
   DonutChart,
   GateDetailDrawer,
   HealthDonut,
-  OverdueBarChart,
   OwnerLoadBarChart,
   OwnerLoadDrawer,
-  OverdueTaskDrawer,
+  ProgressDonut,
+  ProjectTaskCountPanel,
+  ProjectCompletionRank,
+  ReportClosureListDrawer,
+  TaskTimeRow,
   WeeklyProgressPanel,
 } from '@/components/dashboard';
 import type { CategoryBarRow, DonutSegment } from '@/components/dashboard';
 import type {
   DashboardDeliverablesQuery,
   DashboardGatesQuery,
+  ReportClosureItem,
 } from '@/types/dashboard';
 import { useDashboardOverview, useDebounced } from '@/hooks';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
-import { useAuthStore } from '@/stores/authStore';
 import {
   HEALTH_LABEL,
   PRIORITIES,
@@ -83,11 +80,11 @@ import {
   PROJECT_TYPES,
   TASK_STATUSES,
 } from '@/config/enums';
-import { fmtDate } from '@/utils/date';
+import { diffDays, fmtDate, today } from '@/utils/date';
 import { hexAlpha, useChartPalette } from '@/theme/chartPalette';
-import type { Health, ProjectListItem, ProjectStatus, ProjectType } from '@/types/project';
-import type { DashboardTasksQuery, OverdueBucket, OwnerLoadRow, StatusDonutSegment } from '@/types/dashboard';
-import type { Priority, TaskStatus } from '@/types/wbs';
+import type { Health, ProjectStatus, ProjectType } from '@/types/project';
+import type { DashboardTasksQuery, OverdueBucket, OwnerLoadRow, ProgressSegment, StatusDonutSegment } from '@/types/dashboard';
+import type { Priority, TaskStatus, WbsNode } from '@/types/wbs';
 import type { SemanticTone } from '@/theme/tokens';
 
 /** 决策 ⑥：统计基线恒为「在管三态」，其余状态入参会被服务端丢弃（避免误导） */
@@ -114,112 +111,6 @@ const DURATION_TITLE: Record<string, string> = {
   daysOver30: '逾期 >30 天任务明细',
 };
 
-/* ── 项目明细表列（模块级常量，避免每次渲染重建） ───────────── */
-const projectColumns: Array<Column<ProjectListItem>> = [
-  {
-    key: 'name',
-    label: '项目',
-    /* 第二批：fixed 布局下限制项目列宽度（宽屏不再无限拉长），内容 ellipsis */
-    width: { xs: 'auto', md: 280, xl: 340 },
-    render: (r) => (
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-        <HealthDot health={r.health} />
-        <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
-          <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
-            {r.name}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap>
-            {r.code} · {r.customer || '内部'}
-          </Typography>
-        </Box>
-      </Stack>
-    ),
-  },
-  {
-    key: 'type',
-    label: '分类',
-    width: 78,
-    render: (r) => (
-      <Typography sx={{ fontSize: 13 }} variant="caption">
-        {PROJECT_TYPE_SHORT[r.type]}
-      </Typography>
-    ),
-  },
-  { key: 'status', label: '状态', width: 92, render: (r) => <StatusChip status={r.status} /> },
-  {
-    key: 'nextMilestone',
-    label: '下一里程碑 / 门',
-    width: 190,
-    hideOnMobile: true,
-    render: (r) => (
-      <Box>
-        <Typography sx={{ fontSize: 13 }} noWrap>
-          {r.nextMilestoneCode ? `${r.nextMilestoneCode} ${r.nextMilestoneName}` : '全部里程碑已达成'}
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          已过 {r.gatePassed}/{r.gateTotal} 道门
-          {r.currentGateCode ? ` · ${r.currentGateCode} ${r.currentGateStatus}` : ''}
-        </Typography>
-      </Box>
-    ),
-  },
-  {
-    key: 'progress',
-    label: '进度',
-    width: 140,
-    hideOnMobile: true,
-    render: (r) => <ProgressBar value={r.progress} tone={r.health === 'red' ? 'danger' : 'brand'} />,
-  },
-  {
-    key: 'milestone',
-    label: '里程碑',
-    width: 130,
-    hideOnMobile: true,
-    render: (r) => (
-      <Box>
-        <Typography sx={{ fontSize: 13 }}>
-          {r.milestoneDone} / {r.milestoneTotal}
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          下一个 {fmtDate(r.nextMilestoneDate)}
-        </Typography>
-      </Box>
-    ),
-  },
-  {
-    /* 第三批：近 30 天到期里程碑（数据来自后端 aggregateMilestones.byProject，已分页注入） */
-    key: 'milestoneDue',
-    label: '近30天里程碑',
-    width: 132,
-    hideOnMobile: true,
-    render: (r) => {
-      const d = r.milestoneDue;
-      if (!d || d.total === 0) {
-        return <Typography sx={{ fontSize: 13 }} color="text.secondary">—</Typography>;
-      }
-      const overdueOn = d.overdue > 0;
-      return (
-        <Box>
-          <Chip
-            size="small"
-            label={d.total}
-            sx={{
-              height: 20,
-              fontWeight: 700,
-              fontSize: 12,
-              bgcolor: overdueOn ? 'error.main' : 'warning.main',
-              color: '#fff',
-            }}
-          />
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-            {overdueOn ? `已过期 ${d.overdue}` : `未来30天 ${d.upcoming}`}
-          </Typography>
-        </Box>
-      );
-    },
-  },
-  { key: 'pmName', label: 'PM', width: 84, hideOnMobile: true },
-];
 
 /**
  * 全局总览页（多项目组合视图）。
@@ -230,7 +121,6 @@ const projectColumns: Array<Column<ProjectListItem>> = [
  */
 export function MetricsPage(): JSX.Element {
   const navigate = useNavigate();
-  const me = useAuthStore((s) => s.user);
   const {
     data,
     loading,
@@ -259,18 +149,6 @@ export function MetricsPage(): JSX.Element {
     setDrawerOpen(true);
   };
 
-  /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含） */
-  const [ovDrawer, setOvDrawer] = useState<{
-    open: boolean;
-    projectId: string;
-    projectName: string;
-  }>({ open: false, projectId: '', projectName: '' });
-
-  const openOverdue = (projectId: string): void => {
-    const name = data?.overdue?.find((o) => o.projectId === projectId)?.projectName ?? '';
-    setOvDrawer({ open: true, projectId, projectName: name });
-  };
-
   /* B18：分布图点档下钻抽屉（受控组件，query 存 state 保证身份稳定） */
   const [distDrawer, setDistDrawer] = useState<{
     open: boolean;
@@ -291,6 +169,17 @@ export function MetricsPage(): JSX.Element {
       onlyMine: query.onlyMine ?? false,
     };
     setDistDrawer({ open: true, title, query: { ...base, ...dim } });
+  };
+
+  /* ② 任务进度环三段下探（已完成 / 在办=进行中+待评审 / 未启动=待办+阻塞） */
+  const openProgressDrill = (segment: ProgressSegment): void => {
+    const map: Record<ProgressSegment, { title: string; taskStatus: TaskStatus[] }> = {
+      done: { title: '已完成任务', taskStatus: ['完成'] },
+      active: { title: '在办任务（进行中 / 待评审）', taskStatus: ['进行中', '待评审'] },
+      pending: { title: '未启动任务（待办 / 阻塞）', taskStatus: ['待办', '阻塞'] },
+    };
+    const m = map[segment];
+    openDist(m.title, { taskStatus: m.taskStatus });
   };
 
   /* 第二批：质量与交付下探抽屉（门控 / 交付物，受控组件，query 存 state 保证身份稳定） */
@@ -351,17 +240,80 @@ export function MetricsPage(): JSX.Element {
     });
   };
 
+  /* B12：周报闭环率卡片下钻抽屉（数据来自 overview.reportClosureItems，无需额外请求） */
+  const [closureOpen, setClosureOpen] = useState(false);
+
+  /* B12：任务时间轴「查看全部」→ 复用 DistributionTaskDrawer（dueWindow 维度下钻） */
+  const openTimelineAll = (dueWindow: 'overdue' | 'dueSoon' | 'cycle', title: string): void => {
+    setDistDrawer({
+      open: true,
+      title,
+      query: {
+        scope,
+        type: query.type ?? '',
+        status: query.status ?? '',
+        health: query.health ?? '',
+        keyword: query.keyword ?? '',
+        onlyMine: query.onlyMine ?? false,
+        dueWindow,
+      },
+    });
+  };
+
   /* 分组锚点 ref（指标卡下钻滚动目标） */
   const tasksRef = useRef<HTMLDivElement | null>(null);
+
+  /* B12：任务时间轴单栏渲染（逾期 / 临期 / 计划周期内 三栏同格式，复用共享 TaskTimeRow） */
+  const renderTimelineColumn = (
+    title: string,
+    subtitle: string,
+    rows: WbsNode[],
+    hintFn: (t: WbsNode) => string,
+    dueWindow: 'overdue' | 'dueSoon' | 'cycle',
+    allTitle: string,
+    emptyTitle: string,
+  ): JSX.Element => (
+    <SectionCard
+      title={title}
+      subtitle={subtitle}
+      actions={
+        rows.length > 0 ? (
+          <Button size="small" onClick={() => openTimelineAll(dueWindow, allTitle)}>
+            查看全部
+          </Button>
+        ) : undefined
+      }
+    >
+      {rows.length === 0 ? (
+        <EmptyState title={emptyTitle} dense />
+      ) : (
+        <Stack spacing={0.75}>
+          {rows.slice(0, 6).map((t) => (
+            <TaskTimeRow
+              key={t.id}
+              task={t}
+              hint={hintFn(t)}
+              onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
+            />
+          ))}
+        </Stack>
+      )}
+    </SectionCard>
+  );
+
+  const timeline = data?.taskTimeline;
+  const EMPTY_TITLE: Record<string, string> = {
+    overdue: '没有逾期任务',
+    dueSoon: '未来 3 天没有临期任务',
+    cycle: '未来两周内没有即将到期的任务',
+  };
   const qualityRef = useRef<HTMLDivElement | null>(null);
   const weeklyRef = useRef<HTMLDivElement | null>(null);
-  const tableRef = useRef<HTMLDivElement | null>(null);
   const scrollToRef = (ref: RefObject<HTMLDivElement | null>): void => {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const stats = data?.stats;
-  const projects = data?.projects;
 
   /* 状态环：在管三态计数 → DonutChart 段（颜色按品牌色阶自动轮转） */
   const statusSegments: DonutSegment[] = (data?.statusDonut.segments ?? []).map((s: StatusDonutSegment) => ({
@@ -582,7 +534,6 @@ export function MetricsPage(): JSX.Element {
           unit="个"
           tone="brand"
           hint={scopeLabel}
-          onClick={() => scrollToRef(tableRef)}
           icon={<BusinessOutlinedIcon fontSize="small" />}
         />
         <StatCard
@@ -629,7 +580,6 @@ export function MetricsPage(): JSX.Element {
           unit="个"
           tone={(data?.milestones?.overdue ?? 0) > 0 ? 'danger' : (data?.milestones?.total ?? 0) > 0 ? 'warning' : 'success'}
           hint={`已过期 ${data?.milestones?.overdue ?? 0} · 未来30天 ${data?.milestones?.upcoming ?? 0}`}
-          onClick={() => { setQuery({ sort: query.sort === 'nextMilestone' ? undefined : 'nextMilestone' }); scrollToRef(tableRef); }}
           icon={<EventOutlinedIcon fontSize="small" />}
         />
         {/* deliverable rate card 第二批点击下探交付物明细 */}
@@ -648,8 +598,8 @@ export function MetricsPage(): JSX.Element {
           value={stats?.reportClosureRate ?? 0}
           unit="%"
           tone={rateTone(stats?.reportClosureRate)}
-          hint={`待确认 ${stats?.pendingReportConfirm ?? 0} · 已闭环（已确认/已提交+已确认）`}
-          onClick={() => scrollToRef(weeklyRef)}
+          hint={`待确认 ${stats?.pendingReportConfirm ?? 0} · 已确认 ${stats?.reportClosureConfirmed ?? 0}`}
+          onClick={() => setClosureOpen(true)}
           icon={<AssignmentLateOutlinedIcon fontSize="small" />}
         />
       </Box>
@@ -657,12 +607,13 @@ export function MetricsPage(): JSX.Element {
       {/* ══ 图表区：按主题分组（项目健康 / 任务执行 / 质量与交付） ══ */}
 
       {/* ① 项目健康 */}
-      <SectionCard title="项目健康" subtitle="状态 · 健康度 · 负责人负荷" sx={{ mb: 2.5 }}>
+      <SectionCard title="项目健康" subtitle="状态 · 健康度 · 负责人负荷 · 各项目任务量 · 完成率排行" sx={{ mb: 2.5 }}>
         <Box
           sx={{
             display: 'grid',
             gap: 2.5,
-            gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
+            gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(4, 1fr)' },
+            alignItems: 'stretch',
           }}
         >
           {/* ① 项目状态分布 */}
@@ -689,12 +640,36 @@ export function MetricsPage(): JSX.Element {
           />
           {/* ④ 负责人负荷 */}
           <OwnerLoadBarChart rows={data?.ownerLoad ?? []} loading={loading} onDrill={openOwner} />
+          {/* ⑤ 各项目任务量（横向条形对比，作为①「项目健康」第 4 子面板，与三图并列） */}
+          <SectionCard
+            title="各项目任务量"
+            subtitle="面积=任务数，颜色越深任务越多 · 红角标=逾期"
+            sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+          >
+            <ProjectTaskCountPanel
+              items={data?.projectTaskStats ?? []}
+              loading={loading}
+              onSelect={(pid) => navigate(ROUTES.projectOverview(pid))}
+            />
+          </SectionCard>
+          {/* ⑥ 项目完成率排行（按完成率升序，最低的排最前、最该关注） */}
+          <SectionCard
+            title="项目完成率排行"
+            subtitle="按完成率升序，越低越该关注 · 红=落后"
+            sx={{ gridColumn: '1 / -1', height: '100%', display: 'flex', flexDirection: 'column' }}
+          >
+            <ProjectCompletionRank
+              items={data?.projectTaskStats ?? []}
+              loading={loading}
+              onSelect={(pid) => navigate(ROUTES.projectOverview(pid))}
+            />
+          </SectionCard>
         </Box>
       </SectionCard>
 
       {/* ② 任务执行 */}
       <Box ref={tasksRef}>
-        <SectionCard title="任务执行" subtitle="逾期 · 优先级 · 状态 · 时长" sx={{ mb: 2.5 }}>
+        <SectionCard title="任务执行" subtitle="任务进度 · 优先级 · 状态 · 时长" sx={{ mb: 2.5 }}>
           <Box
             sx={{
               display: 'grid',
@@ -702,8 +677,16 @@ export function MetricsPage(): JSX.Element {
               gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
             }}
           >
-            {/* ③ 逾期 / 临期任务 */}
-            <OverdueBarChart rows={data?.overdue ?? []} loading={loading} onDrill={openOverdue} />
+            {/* ① 任务进度环（B12 新增，对齐工作台「我的任务」进度环） */}
+            <ProgressDonut
+              title="任务进度"
+              emptyDescription="当前范围内暂无任务"
+              summary={
+                data?.taskProgress ?? { total: 0, done: 0, active: 0, pending: 0, completionRate: 0 }
+              }
+              loading={loading}
+              onDrill={openProgressDrill}
+            />
             {/* ⑤ 任务优先级分布 */}
             <CategoryBarChart
               title="任务优先级分布"
@@ -739,6 +722,44 @@ export function MetricsPage(): JSX.Element {
             />
           </Box>
         </SectionCard>
+
+        {/* ②-2 任务时间轴（B12 新增 · 任务级三栏，对齐工作台「时间轴」） */}
+        <Box
+          sx={{
+            display: 'grid',
+            gap: 2,
+            gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+            mb: 2.5,
+          }}
+        >
+          {renderTimelineColumn(
+            '逾期任务',
+            `${timeline?.overdue.length ?? 0} 个 · 已超截止日`,
+            timeline?.overdue ?? [],
+            (t) => `项目 ${t.projectName} · 截止 ${fmtDate(t.dueDate)} · 已逾期 ${-diffDays(today(), t.dueDate)} 天`,
+            'overdue',
+            '逾期任务明细',
+            EMPTY_TITLE.overdue,
+          )}
+          {renderTimelineColumn(
+            '临期任务',
+            `${timeline?.dueSoon.length ?? 0} 个 · 3 天内到期`,
+            timeline?.dueSoon ?? [],
+            (t) => `项目 ${t.projectName} · 截止 ${fmtDate(t.dueDate)} · 临期 · 还有 ${diffDays(today(), t.dueDate)} 天`,
+            'dueSoon',
+            '临期任务明细',
+            EMPTY_TITLE.dueSoon,
+          )}
+          {renderTimelineColumn(
+            '计划周期内的任务',
+            `${timeline?.cycle.length ?? 0} 个 · 未来 4–14 天到期`,
+            timeline?.cycle ?? [],
+            (t) => `项目 ${t.projectName} · 截止 ${fmtDate(t.dueDate)} · 还有 ${diffDays(today(), t.dueDate)} 天`,
+            'cycle',
+            '计划周期内任务明细',
+            EMPTY_TITLE.cycle,
+          )}
+        </Box>
       </Box>
 
       {/* ③ 质量与交付 */}
@@ -786,41 +807,8 @@ export function MetricsPage(): JSX.Element {
         <WeeklyProgressPanel data={data?.weeklyProgress} loading={loading} />
       </Box>
 
-      {/* ══ 项目明细表（整行下钻到单项目仪表盘） ══ */}
-      <Box ref={tableRef}>
-        <SectionCard flush>
-        {error ? (
-          <ErrorState error={error} onRetry={refresh} />
-        ) : (
-           <DataTable<ProjectListItem>
-             columns={projectColumns}
-             rows={projects?.items ?? []}
-             rowKey={(r) => r.id}
-             loading={loading}
-             emptyTitle="没有符合条件的项目"
-             emptyDescription="调整筛选条件，或切换到「我参与的」范围"
-             onRowClick={(r) => navigate(ROUTES.projectOverview(r.id))}
-             pagination={{
-               page: query.page ?? 1,
-               pageSize: query.pageSize ?? 20,
-               total: projects?.total ?? 0,
-               onChange: (page, pageSize) => setQuery({ page, pageSize }),
-             }}
-             tableLayout="fixed"
-           />
-        )}
-      </SectionCard>
-      </Box>
-
       <OwnerLoadDrawer open={drawerOpen} row={drawerRow} onClose={() => setDrawerOpen(false)} />
-      <OverdueTaskDrawer
-        open={ovDrawer.open}
-        projectId={ovDrawer.projectId}
-        projectName={ovDrawer.projectName}
-        currentUserId={me?.openId}
-        onClose={() => setOvDrawer((s) => ({ ...s, open: false }))}
-      />
-      {/* B18：分布图点档下钻任务明细抽屉（受控组件，query 存 state 保证身份稳定） */}
+      {/* B18：分布图点档下探任务明细抽屉（受控组件，query 存 state 保证身份稳定） */}
       <DistributionTaskDrawer
         open={distDrawer.open}
         title={distDrawer.title}
@@ -839,6 +827,12 @@ export function MetricsPage(): JSX.Element {
         title={delivDrawer.title}
         query={delivDrawer.query}
         onClose={() => setDelivDrawer((s) => ({ ...s, open: false }))}
+      />
+      {/* B12：周报闭环率下钻（逐项目明细，数据来自 overview.reportClosureItems） */}
+      <ReportClosureListDrawer
+        open={closureOpen}
+        items={data?.reportClosureItems ?? []}
+        onClose={() => setClosureOpen(false)}
       />
     </Box>
   );
