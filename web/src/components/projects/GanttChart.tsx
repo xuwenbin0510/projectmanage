@@ -8,6 +8,7 @@
  *   - 拖左端手柄 → 仅改 startDate
  *   - 拖右端手柄 → 仅改 dueDate
  *   - 拖行左侧 ⠿ 手柄 → 行内重排序（before/after/inside，复用 moveNode）
+ * - 增强（二期）：关键路径高亮（isCritical）、今日竖线（今天位置标记）。
  * - 后端零改动；日期落点按天吸附。
  *
  * 落点校验：startDate ≤ dueDate；禁止拖成自身子孙（isDescendantOf）。
@@ -57,6 +58,11 @@ interface GanttChartProps {
 
 type Band = 'before' | 'after' | 'inside' | null;
 
+/** 关键路径标识色（与图例、左列菱形一致） */
+const CRITICAL_COLOR = '#C0392B';
+/** 今日竖线色（品牌青） */
+const TODAY_COLOR = '#2E7D87';
+
 function isDescendantOf(flat: WbsNode[], ancestorId: string, maybeParentId?: string | null): boolean {
   if (!maybeParentId) return false;
   const byId = new Map(flat.map((n) => [n.id, n]));
@@ -89,6 +95,7 @@ function GanttBar({
   const x = xOf(start, rangeStart);
   const w = Math.max(DAY_WIDTH, xOf(due, rangeStart) - x + DAY_WIDTH);
   const color = GANTT_STATUS[node.status as TaskStatus] ?? GANTT_STATUS['待办'];
+  const critical = !!node.isCritical;
   const pct = Math.max(0, Math.min(100, Number(node.progress) || 0));
   const barTop = (GANTT_ROW_H - GANTT_BAR_H) / 2;
 
@@ -117,7 +124,7 @@ function GanttBar({
             inset: 0,
             borderRadius: 1,
             bgcolor: color.track,
-            border: `0.5px solid ${overdue ? '#A32D2D' : color.bar}`,
+            border: critical ? `2px solid ${CRITICAL_COLOR}` : `0.5px solid ${overdue ? '#A32D2D' : color.bar}`,
             overflow: 'hidden',
             cursor: editable ? 'grab' : 'default',
             opacity: unscheduled ? 0.75 : 1,
@@ -194,6 +201,24 @@ function GanttBar({
               title="拖拽调整截止日期"
             />
           </>
+        )}
+
+        {/* 关键路径标记：条体右上角红点 */}
+        {critical && (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: -4,
+              right: -4,
+              width: 9,
+              height: 9,
+              borderRadius: '50%',
+              bgcolor: CRITICAL_COLOR,
+              border: '1.5px solid #fff',
+              zIndex: 3,
+              pointerEvents: 'none',
+            }}
+          />
         )}
       </Box>
     </Tooltip>
@@ -368,6 +393,13 @@ export function GanttChart({
     return lines;
   }, [range.days]);
 
+  // 今日竖线位置（仅当今天落在可见区间内才渲染）
+  const todayX = useMemo(() => {
+    const x = xOf(dayjs(), range.start);
+    return x >= 0 && x <= timelineWidth ? x : null;
+  }, [range, timelineWidth]);
+  const todayLabel = dayjs().format('M/D');
+
   return (
     <DndContext
       sensors={sensors}
@@ -469,6 +501,41 @@ export function GanttChart({
                 />
               ))}
             </Box>
+
+            {/* 今日竖线（背景层，贯穿行区域；任务条在其上） */}
+            {todayX !== null && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  left: todayX,
+                  top: GANTT_HEADER_H,
+                  bottom: 0,
+                  width: 2,
+                  bgcolor: TODAY_COLOR,
+                  zIndex: 1,
+                  pointerEvents: 'none',
+                }}
+              >
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    top: 2,
+                    left: 4,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: '#fff',
+                    bgcolor: TODAY_COLOR,
+                    px: 0.5,
+                    borderRadius: 0.5,
+                    whiteSpace: 'nowrap',
+                    zIndex: 5,
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                  }}
+                >
+                  今天 {todayLabel}
+                </Box>
+              </Box>
+            )}
 
             {/* 表头（sticky top） */}
             <Box
@@ -573,8 +640,14 @@ export function GanttChart({
             </Typography>
           </Stack>
         ))}
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <Box sx={{ width: 12, height: 12, borderRadius: 0.5, border: `2px solid ${CRITICAL_COLOR}` }} />
+          <Typography variant="caption" color="text.secondary">
+            关键路径
+          </Typography>
+        </Stack>
         <Typography variant="caption" color="text.secondary">
-          拖任务名/条=排序（上/下=同级，中=子任务）· 拖条体=改期 · 拖两端=改工期
+          │ 今日 · 拖任务名/条=排序（上/下=同级，中=子任务）· 拖条体=改期 · 拖两端=改工期
         </Typography>
       </Stack>
 
@@ -585,7 +658,7 @@ export function GanttChart({
               px: 1,
               py: 0.5,
               borderRadius: 1,
-              bgcolor: '#2E7D87',
+              bgcolor: TODAY_COLOR,
               color: '#fff',
               fontSize: 13,
               fontWeight: 500,
@@ -663,6 +736,10 @@ function GanttLabelRow({
       }}
     >
       <DragIndicatorIcon sx={{ fontSize: 15, color: 'text.disabled', flexShrink: 0 }} />
+      {/* 关键路径标记：任务名左侧红菱形 */}
+      {node.isCritical && (
+        <Box sx={{ width: 7, height: 7, borderRadius: 1, transform: 'rotate(45deg)', bgcolor: CRITICAL_COLOR, flexShrink: 0 }} />
+      )}
 
       <Typography
         sx={{
