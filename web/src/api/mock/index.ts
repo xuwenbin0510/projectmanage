@@ -3412,8 +3412,9 @@ export class MockApiClient implements ApiClient {
         reportFillRate: reportDue ? Math.round((reportFilled / reportDue) * 100) : 100,
         reportFilled,
         reportDue,
-        /* D11：周报闭环（待确认周报数 + 已闭环率） */
+        /* D11：周报闭环（口径对齐「我的工作台」：待确认=已提交、已确认=已确认） */
         pendingReportConfirm: reportClosure.submitted,
+        reportClosureConfirmed: reportClosure.confirmed,
         reportClosureRate: reportClosure.closureRate,
         averageProgress,
       },
@@ -3499,14 +3500,20 @@ export class MockApiClient implements ApiClient {
     }
 
     /* 3. 维度解析（三选一互斥；priority 脏值兜底 P2 —— normalizePriority('')→P2 与服务端一致） */
-    const dim: { kind: 'taskStatus' | 'overdueBucket' | 'priority' | 'none'; value: string } = {
+    const dim: { kind: 'taskStatus' | 'overdueBucket' | 'priority' | 'none'; value: string | string[] } = {
       kind: 'none',
       value: '',
     };
-    if (query.taskStatus && TASK_STATUSES.includes(query.taskStatus)) {
-      dim.kind = 'taskStatus';
-      dim.value = query.taskStatus;
-    } else if (query.overdueBucket && (query.overdueBucket === '1to7' || query.overdueBucket === '8to30' || query.overdueBucket === 'over30')) {
+    const tsRaw = query.taskStatus;
+    if (tsRaw) {
+      const list = Array.isArray(tsRaw) ? tsRaw : String(tsRaw).split(',');
+      const valid = list.filter((v) => TASK_STATUSES.indexOf(v as TaskStatus) >= 0);
+      if (valid.length > 0) {
+        dim.kind = 'taskStatus';
+        dim.value = valid;
+      }
+    }
+    if (dim.kind === 'none' && query.overdueBucket && (query.overdueBucket === '1to7' || query.overdueBucket === '8to30' || query.overdueBucket === 'over30')) {
       dim.kind = 'overdueBucket';
       dim.value = query.overdueBucket;
     } else if (query.priority !== undefined && query.priority !== null) {
@@ -3525,7 +3532,10 @@ export class MockApiClient implements ApiClient {
 
     const rows: DashboardTaskRow[] = base
       .filter((n) => {
-        if (dim.kind === 'taskStatus') return n.status === dim.value;
+        if (dim.kind === 'taskStatus') {
+          const vs = Array.isArray(dim.value) ? dim.value : [dim.value];
+          return vs.indexOf(n.status) >= 0;
+        }
         if (dim.kind === 'priority') return normalizePriority(n.priority) === dim.value;
         if (dim.kind === 'overdueBucket') return overdueBucketOf(n.dueDate) === dim.value;
         return true;

@@ -25,7 +25,6 @@ import {
   HealthDot,
   LoadingState,
   PageHeader,
-  PriorityChip,
   ProgressBar,
   SectionCard,
   StatCard,
@@ -41,6 +40,7 @@ import {
   DeliverableDetailDrawer,
   ReportClosureDrawer,
   GateDetailDrawer,
+  TaskTimeRow,
 } from '@/components/dashboard';
 import { api } from '@/api/client';
 import { useAsync } from '@/hooks';
@@ -72,48 +72,6 @@ function rateTone(rate?: number): 'success' | 'warning' | 'danger' {
   if (r >= 100) return 'success';
   if (r >= 60) return 'warning';
   return 'danger';
-}
-
-/** 时间轴任务行（逾期 / 临期 / 计划周期内 三栏共用同格式） */
-function TaskTimeRow({
-  task,
-  hint,
-  onClick,
-}: {
-  task: WbsNode;
-  hint: string;
-  onClick: () => void;
-}): JSX.Element {
-  return (
-    <Stack
-      direction={{ xs: 'column', sm: 'row' }}
-      spacing={1}
-      alignItems={{ xs: 'stretch', sm: 'center' }}
-      justifyContent="space-between"
-      onClick={onClick}
-      sx={{
-        px: 1.5,
-        py: 1.25,
-        borderRadius: 1.5,
-        cursor: 'pointer',
-        border: `1px solid ${tokens.border.subtle}`,
-        '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) },
-      }}
-    >
-      <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-          <PriorityChip priority={task.priority} />
-          <Typography sx={{ fontSize: 13.5 }} noWrap>
-            {task.wbsCode} {task.name}
-          </Typography>
-        </Stack>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-          {hint}
-        </Typography>
-      </Box>
-      <ProgressBar value={task.progress} tone="brand" sx={{ maxWidth: 130, flexShrink: 0 }} />
-    </Stack>
-  );
 }
 
 /** 业务主题分隔标题（下面的“大面板”按同一主题分组，跨主题用分隔线切） */

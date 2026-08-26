@@ -22,6 +22,9 @@ const enums = require('../config/enums');
 /** 临期阈值（天）：与 `web/src/utils/dashboardAgg.ts#DUE_SOON_DAYS` 一致 */
 const DUE_SOON_DAYS = 3;
 
+/** 计划周期前瞻窗口（天）：与工作台 `myCycleTasks` 的 4–14 天口径一致（B12 新增 taskTimeline） */
+const CYCLE_LOOKAHEAD_DAYS = 14;
+
 /** 未分配负责人的 owner 取值（空串）与展示名 */
 const UNASSIGNED_OWNER = '';
 const UNASSIGNED_LABEL = '未分配';
@@ -370,8 +373,159 @@ function averageProgress(items) {
   return Math.round(sum / list.length);
 }
 
+/**
+ * 任务进度三段（B12 全局总览「任务进度环」数据源）。
+ *
+ * 输入 = 范围内**全量叶子任务（含已完成）**（与 B17 状态分布同一基数），
+ * 口径与工作台 `dashboardAgg#aggregateTaskProgress` 逐字一致：
+ *  - `done`    = status === '完成'
+ *  - `active`  = status ∈ {进行中, 待评审}
+ *  - `pending` = status ∈ {待办, 阻塞}
+ *  - `completionRate` = 所有叶子 progress 的算术平均（0~100，整数；total=0 时为 0）
+ *
+ * @param {Array<object>} allLeafTasks WbsNode[]（含已完成叶子）
+ * @returns {{total: number, done: number, active: number, pending: number, completionRate: number}}
+ */
+function aggregateTaskProgress(allLeafTasks) {
+  const list = asArray(allLeafTasks);
+  const total = list.length;
+  let done = 0;
+  let active = 0;
+  let pending = 0;
+  let sum = 0;
+  list.forEach(function (n) {
+    const s = String((n && n.status) || '');
+    if (s === '完成') done += 1;
+    else if (s === '进行中' || s === '待评审') active += 1;
+    else if (s === '待办' || s === '阻塞') pending += 1;
+    const p = Number((n && n.progress));
+    sum += Number.isFinite(p) ? p : 0;
+  });
+  return {
+    total: total,
+    done: done,
+    active: active,
+    pending: pending,
+    completionRate: total ? Math.round(sum / total) : 0,
+  };
+}
+
+/**
+ * 截止日升序比较（无 dueDate 恒最后；同截止日按名称升序）。
+ * @param {object} a WbsNode
+ * @param {object} b WbsNode
+ * @returns {number}
+ */
+function byDueAsc(a, b) {
+  const da = String((a && a.dueDate) || '');
+  const dbv = String((b && b.dueDate) || '');
+  if (!da !== !dbv) return da ? -1 : 1;     // 无截止日恒最后
+  if (da !== dbv) return da < dbv ? -1 : 1;
+  return compareText((a && a.name) || '', (b && b.name) || '');
+}
+
+/**
+ * 任务时间轴三栏（B12 全局总览「任务时间轴」数据源，对应工作台三栏同格式）。
+ *
+ * 输入 = 范围内**全量叶子任务（含已完成）** + projectId → projectName 映射；
+ * 仅取**非完成**叶子、且**有 dueDate** 者，按「截止日相对今天」单一真源切成三档，三栏零重叠：
+ *  - `overdue`：gap < 0（已逾期，最早截止的排最前）
+ *  - `dueSoon`：0 ≤ gap ≤ `DUE_SOON_DAYS`（临期，默认 3 天）
+ *  - `cycle`：4 ≤ gap ≤ `CYCLE_LOOKAHEAD_DAYS`（计划周期内，默认 14 天；与工作台「未来 4–14 天到期」口径一致）
+ *
+ * 每行 = 原 WbsNode 浅拷贝并补 `projectName`（跨项目展示用，缺失回落 UNNAMED_PROJECT）。
+ *
+ * @param {Array<object>} items ProjectListItem[]（仅取 projectId → projectName 映射，不直接用其任务）
+ * @param {Array<object>} allLeafTasks WbsNode[]（含已完成叶子）
+ * @param {Object<string, string>} nameById projectId → 项目名
+ * @param {string} [todayStr] 今天 `YYYY-MM-DD`；缺省取 dates.today()
+ * @returns {{overdue: Array<object>, dueSoon: Array<object>, cycle: Array<object>}}
+ */
+function aggregateTaskTimeline(items, allLeafTasks, nameById, todayStr) {
+  const t = todayStr || dates.today();
+  const names = nameById && typeof nameById === 'object' ? nameById : {};
+  const overdue = [];
+  const dueSoon = [];
+  const cycle = [];
+  asArray(allLeafTasks).forEach(function (n) {
+    if (String((n && n.status) || '') === '完成') return;   // 仅非完成叶子
+    const due = String((n && n.dueDate) || '');
+    if (!due) return;                                        // 无截止日不入三栏
+    const gap = dates.diffDays(t, due);                     // due - today（天）
+    const row = Object.assign({}, n, {
+      projectName: names[String(n.projectId)] || String((n && n.projectName) || '') || UNNAMED_PROJECT,
+    });
+    if (gap < 0) overdue.push(row);
+    else if (gap <= DUE_SOON_DAYS) dueSoon.push(row);
+    else if (gap >= 4 && gap <= CYCLE_LOOKAHEAD_DAYS) cycle.push(row);
+  });
+  [overdue, dueSoon, cycle].forEach(function (arr) { arr.sort(byDueAsc); });
+  return { overdue: overdue, dueSoon: dueSoon, cycle: cycle };
+}
+
+/**
+ * 逐项目任务量统计（B12 全局总览「各项目任务量」横向条形面板数据源）。
+ *
+ * 纯聚合：输入 `allLeafTasks`（全范围叶子任务，含已完成），按 `projectId` 归并。
+ * 口径：
+ *  - total   = 叶子任务总数
+ *  - done    = 状态=完成
+ *  - active  = 状态∈(进行中, 待评审)
+ *  - overdue = 非完成 且 dueDate 已早于 todayStr
+ *  - completionRate = round(mean(progress))
+ * `projectName` 优先取 `nameById`，回落 `n.projectName`，再回落 UNNAMED_PROJECT。
+ * 返回按 total 降序（任务量大的项目在前）。
+ *
+ * @param {Array<object>} allLeafTasks
+ * @param {Object<string,string>} nameById projectId → 项目名
+ * @param {string} todayStr 'YYYY-MM-DD'
+ * @returns {Array<{projectId:string,projectName:string,total:number,done:number,active:number,overdue:number,completionRate:number}>}
+ */
+function aggregateProjectTaskStats(allLeafTasks, nameById, todayStr) {
+  const t = todayStr || dates.today();
+  const names = nameById && typeof nameById === 'object' ? nameById : {};
+  const map = {};
+  asArray(allLeafTasks).forEach(function (n) {
+    const pid = String((n && n.projectId) || '');
+    if (!pid) return;
+    if (!map[pid]) {
+      map[pid] = {
+        projectId: pid,
+        projectName: names[pid] || String((n && n.projectName) || '') || UNNAMED_PROJECT,
+        total: 0, done: 0, active: 0, overdue: 0, sumProgress: 0,
+      };
+    }
+    const e = map[pid];
+    e.total += 1;
+    e.sumProgress += Number((n && n.progress) || 0) || 0;
+    const st = String((n && n.status) || '');
+    if (st === '完成') e.done += 1;
+    else if (st === '进行中' || st === '待评审') e.active += 1;
+    if (st !== '完成') {
+      const due = String((n && n.dueDate) || '').slice(0, 10);
+      if (due && due < t) e.overdue += 1;
+    }
+  });
+  return Object.keys(map)
+    .map(function (pid) {
+      const e = map[pid];
+      return {
+        projectId: e.projectId,
+        projectName: e.projectName,
+        total: e.total,
+        done: e.done,
+        active: e.active,
+        overdue: e.overdue,
+        completionRate: e.total ? Math.round(e.sumProgress / e.total) : 0,
+      };
+    })
+    .sort(function (a, b) { return b.total - a.total; });
+}
+
 module.exports = {
   DUE_SOON_DAYS,
+  aggregateProjectTaskStats,
+  CYCLE_LOOKAHEAD_DAYS,
   UNASSIGNED_OWNER,
   UNASSIGNED_LABEL,
   UNNAMED_PROJECT,
@@ -387,6 +541,8 @@ module.exports = {
   aggregatePriorityDist,
   aggregateStatusDist,
   aggregateOverdueDuration,
+  aggregateTaskProgress,
+  aggregateTaskTimeline,
   countOverdueTasks,
   averageProgress,
 };
