@@ -21,12 +21,22 @@ const { hashPassword } = require('../lib/password');
  *
  * 2026-08-23 清理：原 10 个占位演示账号已并入真实管理员、不再单独存在，
  * 避免 seed 在重启时把已删除的占位用户（含重复的「徐文斌」测试号 ou_xuwenbin01）重建。
- * 系统唯一管理员为真实飞书账号 ou_05a73dc49cbe53196fa42de2c616db21
- * （首次飞书登录即创建；devlogin 亦可直接用该 open_id 登入）。
+ * 系统管理员为独立 local_ 账号（open_id=local_Umt9vacpr00ab），纯账号密码登录、不绑定飞书，
+ * 由 ensureSystemAdmin 幂等创建（见下方常量 SYSTEM_ADMIN_ID）；脏数据收敛也指向它。
  * 如需恢复演示账号，按需在此数组回填，并同步前端 demoAccounts.ts。
  * @type {{openId: string, employeeId: string, name: string, globalRole: string, dept: string}[]}
  */
 const DEMO_ACCOUNTS = [];
+
+/**
+ * 独立系统管理员（不绑定飞书，纯账号密码登录）。
+ *
+ * open_id 固定为 local_ 前缀的自有账号，而非写死某个人的飞书 open_id/union_id
+ * —— open_id/union_id 可能变化，且系统管理员本就不该依赖任何个人的飞书身份。
+ * 由 `ensureSystemAdmin` 幂等创建（已存在则跳过，不覆盖已改密/已配置），
+ * `cleanupDirtyData` 收敛脏 `projects.pm` 时也指向它，确保落点是真实存在的 admin。
+ */
+const SYSTEM_ADMIN_ID = 'local_Umt9vacpr00ab';
 
 /**
  * 写入演示账号（幂等）。
@@ -74,6 +84,38 @@ function promoteConfiguredAdmins(db, ts) {
     n += upd.run(ts, openId).changes;
   });
   return n;
+}
+
+/**
+ * 确保独立系统管理员存在（幂等）。
+ *
+ * 以 `SYSTEM_ADMIN_ID`（如 local_Umt9vacpr00ab）创建纯账号密码登录的系统管理员，
+ * 不绑定飞书（union_id 置 NULL）。已存在则跳过，绝不覆盖既有账号/密码/角色。
+ * password_hash 留空，交由后续 `initializePasswords` 写入默认密码并标记 must_change_pwd=1。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} ts ISO 时间戳
+ * @returns {number} 新增条数（0 表示已存在）
+ */
+function ensureSystemAdmin(db, ts) {
+  const exists = db.prepare('SELECT open_id FROM users WHERE open_id = ?');
+  if (exists.get(SYSTEM_ADMIN_ID)) return 0;
+
+  const insert = db.prepare(`
+    INSERT INTO users (open_id, employee_id, name, email, dept, avatar_url, union_id, global_role, status, password_hash, must_change_pwd, created_at, updated_at)
+    VALUES (@open_id, @employee_id, @name, @email, @dept, NULL, NULL, 'admin', 'active', NULL, 1, @created_at, @updated_at)
+  `);
+  insert.run({
+    open_id: SYSTEM_ADMIN_ID,
+    employee_id: '0000',
+    name: '系统管理员',
+    email: 'admin@astrbyte.com',
+    dept: '平台运营',
+    created_at: ts,
+    updated_at: ts,
+  });
+  console.log('[seed] 已创建独立系统管理员 %s（请于首次登录后改密）', SYSTEM_ADMIN_ID);
+  return 1;
 }
 
 /**
@@ -162,8 +204,8 @@ function seedTemplates(db, ts) {
  * 待确认项。本函数一次性收敛：
  *
  *  1. 删除幻影用户 `dev_徐文斌` 及其全部成员关系（幂等）；
- *  2. 收敛脏 `projects.pm`：非合法 open_id 的脏值改写为种子主管理员
- *     `ou_xuwenbin01`（与「确认人权威源 = project_members」纪律一致）；
+ *  2. 收敛脏 `projects.pm`：非合法 open_id 的脏值改写为独立系统管理员
+ *     `local_Umt9vacpr00ab`（SYSTEM_ADMIN_ID，与「确认人权威源 = project_members」纪律一致）；
  *  3. 为「pm 合法但缺 pm 成员」的项目补一条 pm 成员，修复第 1 步删除后留下的空缺
  *     （仅补缺、不重复插入，避免覆盖已被 UI 改派的 pm 成员）。
  *
@@ -175,7 +217,7 @@ function seedTemplates(db, ts) {
  */
 function cleanupDirtyData(db, ts) {
   const PHANTOM = 'dev_徐文斌';
-  const DEFAULT_ADMIN = 'ou_05a73dc49cbe53196fa42de2c616db21';
+  const DEFAULT_ADMIN = SYSTEM_ADMIN_ID;
 
   let changed = 0;
 
@@ -210,9 +252,12 @@ function cleanupDirtyData(db, ts) {
     changed += gap.length;
   }
 
-  /* 4. 演示闭环打磨（非阻塞）：确保「pm 即 admin」的项目存在一名非 admin 本人的真实 TL。
-   *    周报确认人在「作者即 pm（或项目无 pm）」时会升级到 `tl ∪ admin`，
-   *    并恒剔除作者本人（禁止自确认，架构纪律）。
+  /* 4. 演示闭环打磨（非阻塞，legacy 防御）：确保「pm 即 admin」的项目存在一名非 admin 本人的真实 TL。
+   *    周报确认人在「作者即 pm（或项目无 pm）」时会升级到 `management ∪ admin`（全局领导层），
+   *    management 由 users.global_role='management' 或 user_roles.role_key='management' 构成，
+   *    并已恒剔除作者本人（禁止自确认，架构纪律）。
+   *    ⚠ 自「tl ∪ admin」改为「management ∪ admin」后，领导层（management/cto 兼 management 等真实用户）
+   *    已可兜底确认，本 TL 填充基本失效，仅作历史防御，不影响确认/打回逻辑与禁止自确认纪律。
    *    若作者恰为 sole-admin 兼 pm、且项目 TL 仅有作者自己（或无'别人'当 TL），
    *    升级路径剔除作者后确认人会退化为空集 → 演示闭环断裂
    *    （本项即 QA 复验观察到的 Pmslkpu9a00dx 7 条周报确认人空集：其 pm 与 tl 都是 ou_xuwenbin01）。
@@ -250,19 +295,20 @@ function cleanupDirtyData(db, ts) {
 /**
  * 执行全部种子写入（在单事务内，失败整体回滚）。
  * @param {import('better-sqlite3').Database} db
- * @returns {{users: number, admins: number, templates: {added: number, upgraded: number}, passwords?: number}}
+ * @returns {{users: number, admins: number, systemAdmin: number, templates: {added: number, upgraded: number}, passwords?: number}}
  */
 async function run(db) {
   const ts = nowIso();
-  let result = { users: 0, admins: 0, templates: { added: 0, upgraded: 0 } };
+  let result = { users: 0, admins: 0, systemAdmin: 0, templates: { added: 0, upgraded: 0 } };
 
   const tx = db.transaction(function () {
     result = {
       users: seedUsers(db, ts),
       admins: promoteConfiguredAdmins(db, ts),
+      systemAdmin: ensureSystemAdmin(db, ts),
       templates: seedTemplates(db, ts),
     };
-    /* 种子落定后再做脏数据收敛（依赖 users 已就绪） */
+    /* 种子落定后再做脏数据收敛（依赖 users 已就绪，含系统管理员） */
     const cleaned = cleanupDirtyData(db, ts);
     if (cleaned) {
       console.log('[seed] cleanup removed/converged %d dirty rows', cleaned);
@@ -274,11 +320,12 @@ async function run(db) {
   const pwdInit = await initializePasswords(db, ts);
   if (pwdInit) result.passwords = pwdInit;
 
-  if (result.users || result.admins || result.templates.added || result.templates.upgraded) {
+  if (result.users || result.admins || result.systemAdmin || result.templates.added || result.templates.upgraded) {
     console.log(
-      '[seed] users +%d, admins +%d, templates +%d (upgraded %d)',
+      '[seed] users +%d, admins +%d, systemAdmin +%d, templates +%d (upgraded %d)',
       result.users,
       result.admins,
+      result.systemAdmin,
       result.templates.added,
       result.templates.upgraded
     );
@@ -286,4 +333,4 @@ async function run(db) {
   return result;
 }
 
-module.exports = { run, DEMO_ACCOUNTS, DEFAULT_PASSWORD };
+module.exports = { run, DEMO_ACCOUNTS, DEFAULT_PASSWORD, SYSTEM_ADMIN_ID };

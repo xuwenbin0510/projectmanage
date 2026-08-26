@@ -24,6 +24,28 @@ const { nowIso } = require('../lib/dates');
 const feishu = require('../lib/feishu');
 const { verifyPassword, hashPassword } = require('../lib/password');
 
+/**
+ * E1.5：取用户「主职位（users.global_role）+ 额外职位（user_roles）」合并去重后的全局职位数组，
+ * 经 `toApiUser` 输出 `globalRoles` 合并数组（前端 RBAC 门禁/判权据此数组判定）。
+ * ⚠ 此前 auth 各端点只传 `toApiUser(row)` 而漏传 extraRoles，导致 user_roles 里的
+ *   admin/cto/pmo 等额外职位被丢弃，合并数组仅剩主职位 → 多职位用户门禁/判权失效。
+ * @param {object} row users 表行（含 open_id / global_role）
+ * @returns {object|null}
+ */
+function toApiUserWithRoles(row) {
+  if (!row) return toApiUser(row);
+  let extra = [];
+  try {
+    extra = db
+      .prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?')
+      .all(row.open_id || '')
+      .map(function (r) { return String(r.role_key); });
+  } catch (e) {
+    // user_roles 表尚未创建（迁移前）时安全降级为仅主职位
+  }
+  return toApiUser(row, extra);
+}
+
 const router = express.Router();
 
 /**
@@ -166,7 +188,7 @@ router.post(
       ok(
         {
           token: signToken(row),
-          user: toApiUser(row),
+          user: toApiUserWithRoles(row),
           mustChangePwd: row.must_change_pwd === 1,
         },
         '登录成功',
@@ -261,7 +283,7 @@ router.post(
     }
 
     const row = await upsertFeishuUser(openId, session.access_token, session.avatar_url, session);
-    res.json(ok({ token: signToken(row), user: toApiUser(row) }, '登录成功'));
+    res.json(ok({ token: signToken(row), user: toApiUserWithRoles(row) }, '登录成功'));
   }),
 );
 
@@ -284,7 +306,7 @@ router.post(
       if (cfg.ALLOW_DEV_LOGIN && /^dev:/.test(code)) {
         const devId = code.slice(4).trim() || (cfg.ADMIN_OPEN_IDS || [])[0] || 'dev';
         const devRow = requireEnabledUser(devId);
-        res.json(ok({ token: signToken(devRow), user: toApiUser(devRow) }, '登录成功（开发降级）'));
+        res.json(ok({ token: signToken(devRow), user: toApiUserWithRoles(devRow) }, '登录成功（开发降级）'));
         return;
       }
       throw new AppError(
@@ -309,7 +331,7 @@ router.post(
     }
 
     const row = await upsertFeishuUser(openId, session.access_token, '', session);
-    res.json(ok({ token: signToken(row), user: toApiUser(row) }, '登录成功'));
+    res.json(ok({ token: signToken(row), user: toApiUserWithRoles(row) }, '登录成功'));
   }),
 );
 
@@ -319,7 +341,7 @@ router.get(
   '/auth/me',
   requireAuth,
   asyncHandler(async function me(req, res) {
-    res.json(ok(toApiUser(req.user)));
+    res.json(ok(toApiUserWithRoles(req.user)));
   }),
 );
 

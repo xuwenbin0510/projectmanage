@@ -45,7 +45,9 @@ export function AdminAuditPage(): JSX.Element {
   const [action, setAction] = useState('');
 
   const me = useAuthStore((s) => s.user);
-  const canExportAudit = !!me && AUDIT_EXPORT_ROLES.indexOf(me.globalRole) >= 0;
+  const meRoles =
+    me?.globalRoles?.length ? me.globalRoles : me?.globalRole ? [me.globalRole] : [];
+  const canExportAudit = meRoles.some((r) => AUDIT_EXPORT_ROLES.includes(r));
 
   /** 导出审计 CSV（真实模式走服务端，mock 模式本地生成）。 */
   const handleExportAudit = async (): Promise<void> => {

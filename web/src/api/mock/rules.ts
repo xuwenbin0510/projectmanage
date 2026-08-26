@@ -557,14 +557,60 @@ export function rollupProjectProgress(nodes: WbsNode[]): number {
 /**
  * R4-P0-3 任务状态自动流转（D2 规则**唯一实现**，禁止页面散落判断）：
  * 1. 强规则：progress >= 100 → '完成'（无条件，含 阻塞/待评审）
- * 2. 弱规则：progress === 0 且当前 ∈ {进行中, 完成} → '待办'
+ * 2. 弱规则：progress === 0 且当前 = '完成' → '待办'
+ *    （2026-08-26 变更：允许零进度保留「进行中」，即未填进度也可标记开工）
  * 3. 弱规则：0 < progress < 100 且当前 ∈ {待办, 完成} → '进行中'
  * 4. 人工态边界：当前为 待评审/阻塞 时，除规则1外不被覆盖
  *
- * 引擎 `syncWbsProgressStatus` 与视图层共用；叶子与父节点同规则收敛。
+ * ⚠ 本函数只处理**叶子**收敛；父节点状态走 `rollupNodeStatus`（含子树状态传导）。
  */
 export function syncNodeStatusFromProgress(status: TaskStatus, progress: number): TaskStatus {
   if (progress >= 100) return '完成';
-  if (progress === 0) return status === '进行中' || status === '完成' ? '待办' : status;
+  if (progress === 0) return status === '完成' ? '待办' : status;
   return status === '待办' || status === '完成' ? '进行中' : status;
+}
+
+/** 「已启动」信号态：子节点处于这些状态即视为该分支已开工 */
+const STARTED_STATES: TaskStatus[] = ['进行中', '阻塞', '待评审', '完成'];
+
+/**
+ * 节点状态收敛（2026-08-26 · 父节点状态传导唯一实现，与后端 `lib/wbs.js` 逐字对齐）。
+ *
+ * 放开「零进度也允许进行中」后，子任务标进行中但 progress 仍为 0，父节点靠进度
+ * 加权汇总拿不到启动信号会卡在「待办」，故父节点状态改为 **进度 + 子树状态** 双输入派生：
+ *  叶子 → 等价 `syncNodeStatusFromProgress`
+ *  父节点（派生态）：progress>=100 → 完成；子树任一后代 ∈ 已启动态 → 进行中；
+ *                    子树无启动信号且 progress===0 → 待办；其余按进度收敛。
+ */
+export function rollupNodeStatus(
+  nodes: WbsNode[],
+  nodeId: string,
+  status: TaskStatus,
+  progress: number
+): TaskStatus {
+  const list = nodes ?? [];
+  const kids = list.filter((n) => n.parentId === nodeId);
+  if (!kids.length) return syncNodeStatusFromProgress(status, progress);
+  if (progress >= 100) return '完成';
+
+  /* 收集全部后代（迭代 + guard，防脏数据成环） */
+  const descendants: WbsNode[] = [];
+  const stack = [nodeId];
+  const seen = new Set<string>();
+  let guard = 0;
+  while (stack.length && guard < 100000) {
+    guard += 1;
+    const cur = stack.pop() as string;
+    list
+      .filter((n) => n.parentId === cur)
+      .forEach((k) => {
+        if (seen.has(k.id)) return;
+        seen.add(k.id);
+        descendants.push(k);
+        stack.push(k.id);
+      });
+  }
+  if (descendants.some((d) => STARTED_STATES.includes(d.status))) return '进行中';
+  if (progress === 0) return '待办';
+  return syncNodeStatusFromProgress(status, progress);
 }

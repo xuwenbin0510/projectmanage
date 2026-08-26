@@ -25,7 +25,7 @@ import { ROUTES } from '@/config/routes';
 /**
  * 统一待办中心铃铛（B14-块3）
  *
- * - 纯前端并发聚合六源（`useTodos`），零后端新增。
+ * - 纯前端并发聚合（`useTodos`）：仅 APPROVAL + REPORT_CONFIRM 两类「动作型」待办，零后端新增。
  * - 徽标数字 = 所有分组条目数之和；下拉按 `TODO_TYPE_ORDER` 分组展示，每组最多 `TODO_GROUP_MAX` 条。
  * - 点击条目 `navigate` 到 `targetRoute`（直接跳到可处理掉该待办的页面）。
  */

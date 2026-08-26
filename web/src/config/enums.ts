@@ -444,7 +444,6 @@ export const REJECT_REASON_MAX = 500;
 export const TODO_TYPE_ORDER: TodoType[] = [
   'APPROVAL',
   'REPORT_CONFIRM',
-  'REPORT_FILL',
   'OVERDUE',
   'BLOCKED',
   'ASSIGNED',
@@ -453,17 +452,15 @@ export const TODO_TYPE_ORDER: TodoType[] = [
 export const TODO_TYPE_LABEL: Record<TodoType, string> = {
   APPROVAL: '待我审批',
   REPORT_CONFIRM: '待我确认周报',
-  REPORT_FILL: '待我填写周报',
   OVERDUE: '我的逾期任务',
   BLOCKED: '我的阻塞任务',
-  ASSIGNED: '分配给我的任务',
+  ASSIGNED: '计划周期内的任务',
 };
 
 /** 分组标题色（MUI 语义色，逾期/阻塞用告警色） */
 export const TODO_TYPE_COLOR: Record<TodoType, 'error' | 'warning' | 'info' | 'primary'> = {
   APPROVAL: 'primary',
   REPORT_CONFIRM: 'primary',
-  REPORT_FILL: 'info',
   OVERDUE: 'error',
   BLOCKED: 'warning',
   ASSIGNED: 'info',

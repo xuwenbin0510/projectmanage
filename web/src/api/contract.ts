@@ -417,8 +417,8 @@ export interface ApiClient {
   /* 管理后台 */
   listUsers(): Promise<User[]>;
   updateUserRole(openId: string, role: GlobalRole): Promise<User>;
-  /** 阶段一：新增用户（仅 admin） */
-  createUser(payload: CreateUserPayload): Promise<User>;
+  /** 阶段一：新增用户（仅 admin）。响应 data 含 defaultPassword（创建即写入默认密码） */
+  createUser(payload: CreateUserPayload): Promise<User & { defaultPassword?: string }>;
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin；只传需要更新的字段） */
   updateUser(openId: string, patch: UpdateUserPayload): Promise<User>;
   /** 管理员重置用户密码（仅 admin）：重置为默认密码并强制下次改密，返回默认密码明文 */

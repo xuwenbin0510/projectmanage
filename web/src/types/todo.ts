@@ -8,8 +8,7 @@
  * | # | TodoType         | 来源端点                                        | 说明 |
  * |---|------------------|-------------------------------------------------|------|
  * | ① | `APPROVAL`       | `GET /api/approvals`（`api.listMyApprovals`）    | 待我审批的评审 |
- * | ② | `REPORT_FILL`    | B12 概览 `dashboard/overview.reportMissing`      | 待我填写的周报 |
- * | ③ | `ASSIGNED`       | `GET /api/workbench` → `myTasks`（未完成）        | 分配给我的任务 |
+ * | ② | `ASSIGNED`       | `GET /api/workbench` → `myCycleTasks`（计划周期内）| 计划周期内的任务 |
  * | ④ | `OVERDUE`        | `myTasks` 中 `isOverdue(dueDate)`（B13 口径）    | 我的逾期任务 |
  * | ⑤ | `BLOCKED`        | `myTasks` 中 `status === '阻塞'`                 | 我的阻塞任务 |
  * | ⑥ | `REPORT_CONFIRM` | `GET /api/reports/pending-confirmation`（块2）   | 待我确认的周报 |
@@ -20,7 +19,6 @@ import type { Priority } from './wbs';
 export type TodoType =
   | 'APPROVAL'
   | 'REPORT_CONFIRM'
-  | 'REPORT_FILL'
   | 'OVERDUE'
   | 'ASSIGNED'
   | 'BLOCKED';

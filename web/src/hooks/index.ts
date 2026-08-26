@@ -59,7 +59,8 @@ export function useAsync<T>(
 export function usePermission(): { can: (action: string) => boolean; isAdmin: boolean } {
   const can = useAuthStore((s) => s.can);
   const user = useAuthStore((s) => s.user);
-  return { can, isAdmin: user?.globalRole === 'admin' };
+  const isAdmin = !!user && (Array.isArray(user.globalRoles) ? user.globalRoles.includes('admin') : user.globalRole === 'admin');
+  return { can, isAdmin };
 }
 
 /** 响应式断点：移动端 375px 场景判定 */

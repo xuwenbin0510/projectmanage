@@ -93,6 +93,8 @@ export function AdminUsersPage(): JSX.Element {
 
   /* 新增用户弹窗状态 */
   const [createOpen, setCreateOpen] = useState(false);
+  /* 创建成功后的「默认密码」提示弹窗 */
+  const [createdPwd, setCreatedPwd] = useState<{ name: string; password: string } | null>(null);
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
   const [creating, setCreating] = useState(false);
 
@@ -202,6 +204,10 @@ export function AdminUsersPage(): JSX.Element {
       setCreateOpen(false);
       setForm(EMPTY_FORM);
       toast.success(`已创建用户 ${created.name}`);
+      // 创建即写入默认密码，直接把默认密码告知管理员，无需再走「重置密码」
+      if (created.defaultPassword) {
+        setCreatedPwd({ name: created.name, password: created.defaultPassword });
+      }
     } catch (e) {
       toast.error(e);
     } finally {
@@ -334,8 +340,8 @@ export function AdminUsersPage(): JSX.Element {
     {
       key: 'name',
       label: '用户',
-      width: 100,
-      align: 'center',
+      width: 120,
+      align: 'left',
       render: (u) => (
         <Stack direction="row" spacing={1} alignItems="center">
           <UserAvatar name={u.name} size={28} />
@@ -353,18 +359,18 @@ export function AdminUsersPage(): JSX.Element {
                 />
               )}
             </Stack>
-            <Typography variant="caption" color="text.secondary">{u.dept || '—'}</Typography>
+            <Typography variant="caption" color="text.secondary" display="block">{u.dept || '—'}</Typography>
           </Box>
         </Stack>
       ),
     },
-    { key: 'employeeId', label: '工号', width: 90, align: 'center', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.employeeId || '—'}</Typography> },
-    { key: 'email', label: '邮箱', width: 180, align: 'center', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.email || '—'}</Typography> },
+    { key: 'employeeId', label: '工号', width: 90, align: 'left', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.employeeId || '—'}</Typography> },
+    { key: 'email', label: '邮箱', width: 180, align: 'left', hideOnMobile: true, render: (u) => <Typography variant="caption">{u.email || '—'}</Typography> },
     {
       key: 'globalRoles',
       label: '公司职位',
       width: 240,
-      align: 'center',
+      align: 'left',
       render: (u) => {
         const all = (u.globalRoles && u.globalRoles.length ? u.globalRoles : [u.globalRole]).filter(Boolean);
         return (
@@ -547,12 +553,12 @@ export function AdminUsersPage(): JSX.Element {
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <TextField
-              label="openId（必填）"
+              label="openId（可选）"
               size="small"
               fullWidth
               value={form.openId}
               onChange={(e) => setForm((f) => ({ ...f, openId: e.target.value }))}
-              helperText="飞书用户 open_id，用于免登识别，创建后不可修改"
+              helperText="仅飞书免登用户需要；纯密码登录用户留空即可，系统自动生成占位"
             />
             <TextField
               label="姓名（必填）"
@@ -578,11 +584,12 @@ export function AdminUsersPage(): JSX.Element {
               />
             </Stack>
             <TextField
-              label="邮箱"
+              label="邮箱（密码登录必填）"
               size="small"
               fullWidth
               value={form.email}
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              helperText="密码登录依靠邮箱识别账号，纯密码用户请填写真实邮箱"
             />
             <Box>
               <Typography variant="caption" color="text.secondary">主职位（必选 1 个，权限兜底）</Typography>
@@ -631,9 +638,30 @@ export function AdminUsersPage(): JSX.Element {
           <Button size="small" onClick={() => setCreateOpen(false)} disabled={creating}>
             取消
           </Button>
-          <Button size="small" variant="contained" onClick={() => void createUser()} disabled={creating || !form.openId.trim() || !form.name.trim()}>
+          <Button size="small" variant="contained" onClick={() => void createUser()} disabled={creating || !form.name.trim() || (!form.openId.trim() && !form.email.trim())}>
             {creating ? '创建中…' : '创建'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 创建成功：告知默认密码（创建即写入，用户首次登录需修改） */}
+      <Dialog open={!!createdPwd} onClose={() => setCreatedPwd(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>用户已创建</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            已为 <b>{createdPwd?.name}</b> 生成默认密码，请通过飞书/微信等方式告知该用户，其首次登录时需修改密码。
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'action.hover', borderRadius: 1, px: 1.5, py: 1 }}>
+            <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 700, flex: 1 }}>{createdPwd?.password}</Typography>
+            <Tooltip title="复制默认密码">
+              <IconButton size="small" onClick={() => copyText(createdPwd?.password || '', '默认密码')}>
+                <ContentCopyOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" variant="contained" onClick={() => setCreatedPwd(null)}>知道了</Button>
         </DialogActions>
       </Dialog>
 

@@ -51,6 +51,8 @@ router.get(
   asyncHandler(async function getWorkbench(req, res) {
     const myProjects = projectService.listMyProjectItems(db, req.user);
     const myTasks = workbenchService.listMyTasks(db, req.user);
+    const myCompletedTasks = workbenchService.listMyCompletedTasks(db, req.user);
+    const myCycleTasks = workbenchService.listMyCycleTasks(db, req.user);
     const myApprovals = workbenchService.listMyApprovals(db, req.user);
     const reportReminders = workbenchService.listReportReminders(db, req.user);
     const gateTodos = workbenchService.listGateTodos(db, req.user);
@@ -74,6 +76,9 @@ router.get(
         },
         myProjects: myProjects,
         myTasks: myTasks,
+        /* Q4：我负责的已完成叶子任务（供「我的任务进度」环「已完成」段，不进入「我的任务」列表/逾期派生） */
+        completedTasks: myCompletedTasks,
+        myCycleTasks: myCycleTasks,
         myApprovals: myApprovals,
         reportReminders: reportReminders,
         gateTodos: gateTodos,

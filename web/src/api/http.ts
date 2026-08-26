@@ -447,9 +447,9 @@ export class HttpApiClient implements ApiClient {
     return patch<User>(`/admin/users/${openId}`, { globalRole: role });
   }
 
-  /** 阶段一：新增用户（仅 admin） */
-  createUser(payload: CreateUserPayload): Promise<User> {
-    return post<User>('/admin/users', payload);
+  /** 阶段一：新增用户（仅 admin）。响应含 defaultPassword 明文 */
+  createUser(payload: CreateUserPayload): Promise<User & { defaultPassword?: string }> {
+    return post<User & { defaultPassword?: string }>('/admin/users', payload);
   }
 
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin） */

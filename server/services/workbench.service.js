@@ -10,10 +10,12 @@
  *  - `listGateTodos`       我有决议权限（global admin/pmo/qa/tl，或项目成员 qa/tl/pmo）的
  *                          未决议门（status 未开始/待检查），含项目/里程碑上下文
  *
- * ⚠ 口径（docs/B10-任务分解.md D8 / §A3.4）：
- *  - `reportReminders` 仅「我参与（project_members 含我）且 status='进行中'」的项目；
+ * ⚠ 口径（docs/B10-任务分解.md D8 / §A3.4，2026-08-26 收窄）：
+ *  - `reportReminders` 仅在「我参与（project_members 含我）且 status='进行中'」的项目中，
+ *    **且我名下有 ≥1 个未完成叶子任务、其计划窗口与本周(周一~周日)相交** 才入选
+ *    （无 start_date/due_date 的任务视为「有活」，恒计入，避免库内大量无日期任务整批掉出）；
  *  - `filled` = 本周存在 `work_reports.status='已提交'`（项目级、任一成员提交即算，草稿不计）；
- *  - `week` = `dates.weekCode()`（如 `2026-W33`）；
+ *  - `week` = `dates.weekCode()`（如 `2026-W35`）；
  *  - `weekStart/weekEnd` = `dates.weekRange(week).start/end` **截前 10 位**（`YYYY-MM-DD`，
  *    与前端展示逐字一致；服务端 weekRange 返回 ISO 带时区串）。
  */
@@ -26,22 +28,24 @@ const reportService = require('./report.service');
 const { resolveGlobalRoles } = require('../middleware/auth');
 const permissionCatalog = require('../services/permissionCatalog');
 
+/** 待办中心「计划周期内的任务」前瞻窗口（天）：已启动或将在该天数内启动的计划任务纳入。 */
+const CYCLE_LOOKAHEAD_DAYS = 14;
+
 /**
- * 我负责且未完成的真叶子任务（按 dueDate 升序，与 Mock L2069 一致）。
+ * 我负责的真叶子任务（基础集合，不排序）。
  *
- * 只统计我参与项目里的节点，且排除已结项 / 已终止项目（与 `listMyProjectItems` 口径一致），
- * 避免归档项目的历史任务一直挂在工作台上。
+ * 过滤口径：我参与项目 + 未结项/未终止 + 叶子 + owner===我。
+ * `includeCompleted=true` 时包含 `status='完成'`（供「我的任务进度」环的「已完成」段），
+ * 否则仅未完成任务（与 `listMyTasks`/`listMyCycleTasks` 旧行为一致）。
  *
- * B11（**纯字段追加**，老客户端无感）：每行挂 `projectName`。
- *   逾期柱状图要按项目分组显示名称，而 `myTasks` 可能含「草稿 / 审批中 / 挂起」项目的任务，
- *   `myProjects` 只列在办 → 前端 join 会漏，服务端直接给名字最稳。
- *   ⚠ 过滤口径（叶子判定 / owner===me / status!=='完成' / 排除归档）与排序**一字未改**。
+ * B11（**纯字段追加**，老客户端无感）：每行挂 `projectName`（供逾期柱状图按项目分组）。
  *
  * @param {import('better-sqlite3').Database} db
  * @param {object} me 当前用户 users 行
+ * @param {boolean} [includeCompleted=false] 是否包含已完成任务
  * @returns {Array<object>} WbsNode[]（含 B11 追加的 `projectName`）
  */
-function listMyTasks(db, me) {
+function baseMyTasks(db, me, includeCompleted) {
   const openId = String((me && (me.open_id || me.openId)) || '');
   if (!openId) return [];
 
@@ -72,20 +76,72 @@ function listMyTasks(db, me) {
   const mine = [];
   Object.keys(byProject).forEach(function (pid) {
     wbs.leafNodesOf(byProject[pid]).forEach(function (n) {
-      if (n.owner === openId && n.status !== '完成') {
+      if (n.owner === openId && (includeCompleted || n.status !== '完成')) {
         /* B11 纯追加：不改任何既有字段，仅补 projectName */
         n.projectName = projectNameById[n.projectId] || '';
         mine.push(n);
       }
     });
   });
+  return mine;
+}
 
-  return mine.sort(function (a, b) {
-    const da = String(a.dueDate || '');
-    const dbv = String(b.dueDate || '');
-    if (da === dbv) return wbs.compareWbsCode(a.wbsCode, b.wbsCode);
-    return da < dbv ? -1 : 1;
-  });
+/** 按 dueDate 升序（同截止按 wbsCode 升序） */
+function compareByDueDate(a, b) {
+  const da = String(a.dueDate || '');
+  const dbv = String(b.dueDate || '');
+  if (da === dbv) return wbs.compareWbsCode(a.wbsCode, b.wbsCode);
+  return da < dbv ? -1 : 1;
+}
+
+/**
+ * 我负责且未完成的真叶子任务（全部，供工作台「我的任务」全景 / 逾期 / 阻塞派生）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me 当前用户 users 行
+ * @returns {Array<object>} WbsNode[]（含 B11 追加的 `projectName`）
+ */
+function listMyTasks(db, me) {
+  return baseMyTasks(db, me).sort(compareByDueDate);
+}
+
+/**
+ * 我负责且**已完成**的真叶子任务（与 `listMyTasks` 互补，供「我的任务进度」环的「已完成」段）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me 当前用户 users 行
+ * @returns {Array<object>} WbsNode[]（含 B11 追加的 `projectName`）
+ */
+function listMyCompletedTasks(db, me) {
+  return baseMyTasks(db, me, true)
+    .filter((n) => n.status === '完成')
+    .sort(compareByDueDate);
+}
+
+/**
+ * 计划周期内的任务：owner===我 & 未完成 & 叶子 & 处于计划执行窗口。
+ *
+ * 口径（与待办中心「计划周期内的任务」对齐）：
+ *  - 必须有计划截止日（dueDate），否则无法判定是否在周期内；
+ *  - 未逾期（dueDate >= 今天）—— 已逾期由 OVERDUE 源单独兜；
+ *  - 已开始（startDate 为空视为已纳入）或 startDate <= 今天 + CYCLE_LOOKAHEAD_DAYS，
+ *    即「当前正在推进 或 近 CYCLE_LOOKAHEAD_DAYS 天内将启动」的计划任务。
+ *
+ * 与 `listMyTasks`（我名下全部未完成）区别：本函数只返回「按计划当下/近期该推进」的聚焦子集，
+ * 避免待办中心与工作台「我的任务」全景重复列全量积压。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} me 当前用户 users 行
+ * @returns {Array<object>} WbsNode[]（含 projectName）
+ */
+function listMyCycleTasks(db, me) {
+  const horizon = dates.addDays(dates.today(), CYCLE_LOOKAHEAD_DAYS);
+  return baseMyTasks(db, me)
+    .filter(function (n) {
+      if (!n.dueDate) return false;                                  // 无计划截止 → 不纳入周期
+      if (dates.diffDays(dates.today(), n.dueDate) < 0) return false; // 已逾期 → 归 OVERDUE 源
+      if (n.startDate && dates.diffDays(n.startDate, horizon) < 0) return false; // 启动晚于 horizon → 尚未进入周期
+      return true;
+    })
+    .sort(compareByDueDate);
 }
 
 /**
@@ -122,7 +178,12 @@ function countPendingApprovals(db, me) {
 }
 
 /**
- * 周报提醒：我参与且进行中项目，每项目一行（D8 / Mock L2352-2364）。
+ * 周报提醒：我参与且进行中、且我名下有「本周计划窗口内未完成叶子任务」的项目，每项目一行。
+ *
+ * 入选门控（2026-08-26 收窄，与 dashboard `countReportFill` 同源）：
+ *  - 基础：我参与（project_members 含我）且 status='进行中'；
+ *  - 任务门控：我名下 ≥1 个未完成（status!='完成'）叶子任务，其计划窗口与本周(周一~周日)相交；
+ *  - 计划窗口相交判定：无日期任务恒计入（视为「有活」），否则 start_date<=weekEnd 且 due_date>=weekStart。
  *
  * 四态口径（与「待我确认周报」面板共用 resolveConfirmers 单一真源）：
  *  - `待填`：本周无「已提交」周报；
@@ -131,7 +192,7 @@ function countPendingApprovals(db, me) {
  *  - `已确认`：本周已有「已确认」周报（终态）。
  * @param {import('better-sqlite3').Database} db
  * @param {object} me users 行
- * @returns {Array<{projectId: string, projectName: string, week: string, weekStart: string, weekEnd: string, filled: boolean, state: string}>} ReportReminder[]
+ * @returns {Array<{projectId: string, projectName: string, week: string, weekStart: string, weekEnd: string, filled: boolean, state: string, tasks: Array<{id:string, wbsCode:string, name:string, startDate:string, dueDate:string, status:string, progress:number}>}>} ReportReminder[]
  */
 function listReportReminders(db, me) {
   const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
@@ -149,9 +210,22 @@ function listReportReminders(db, me) {
         WHERE p.deleted_at IS NULL
           AND p.status = '进行中'
           AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)
+          AND EXISTS (
+            SELECT 1 FROM wbs_nodes w
+             WHERE w.project_id = p.id
+               AND w.owner = ?
+               AND w.status != '完成'
+               AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)
+               AND (
+                 (w.start_date IS NULL AND w.due_date IS NULL)
+                 OR (w.start_date IS NULL AND date(w.due_date) >= date(?))
+                 OR (w.due_date IS NULL AND date(w.start_date) <= date(?))
+                 OR (date(w.start_date) <= date(?) AND date(w.due_date) >= date(?))
+               )
+          )
         ORDER BY p.updated_at DESC, p.id DESC`,
     )
-    .all(openId);
+    .all(openId, openId, weekStart, weekEnd, weekStart, weekEnd);
 
   const filledStmt = db.prepare(
     "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已提交'",
@@ -162,6 +236,22 @@ function listReportReminders(db, me) {
   /* 已提交未确认时取作者，用于确认人判定（resolveConfirmers 单一真源，与「待我确认周报」面板一致） */
   const authorStmt = db.prepare(
     "SELECT author_open_id FROM work_reports WHERE project_id = ? AND week = ? AND status = '已提交' LIMIT 1",
+  );
+  /* 命中任务：与入选门控同源——我名下、未完成叶子、计划窗口∩本周；仅用于前端「周报提醒」下钻展示 */
+  const taskStmt = db.prepare(
+    `SELECT id, wbs_code, name, start_date, due_date, status, progress
+       FROM wbs_nodes w
+      WHERE w.project_id = ?
+        AND w.owner = ?
+        AND w.status != '完成'
+        AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)
+        AND (
+          (w.start_date IS NULL AND w.due_date IS NULL)
+          OR (w.start_date IS NULL AND date(w.due_date) >= date(?))
+          OR (w.due_date IS NULL AND date(w.start_date) <= date(?))
+          OR (date(w.start_date) <= date(?) AND date(w.due_date) >= date(?))
+        )
+      ORDER BY (CASE WHEN w.due_date IS NULL THEN 1 ELSE 0 END), w.due_date ASC, w.wbs_code ASC`,
   );
 
   return rows.map(function (r) {
@@ -183,6 +273,19 @@ function listReportReminders(db, me) {
         : false;
       state = isConfirmer ? '待确认' : '待他人确认';
     }
+    const tasks = taskStmt
+      .all(pid, openId, weekStart, weekEnd, weekStart, weekEnd)
+      .map(function (t) {
+        return {
+          id: mappers.toStr(t.id),
+          wbsCode: mappers.toStr(t.wbs_code),
+          name: mappers.toStr(t.name),
+          startDate: t.start_date ? String(t.start_date).slice(0, 10) : '',
+          dueDate: t.due_date ? String(t.due_date).slice(0, 10) : '',
+          status: mappers.toStr(t.status),
+          progress: mappers.toNum(t.progress, 0),
+        };
+      });
     return {
       projectId: pid,
       projectName: mappers.toStr(r.name),
@@ -191,6 +294,7 @@ function listReportReminders(db, me) {
       weekEnd: weekEnd,
       filled: !!submitted,
       state: state,
+      tasks: tasks,
     };
   });
 }
@@ -323,6 +427,8 @@ function countPendingConfirmations(db, me) {
 
 module.exports = {
   listMyTasks,
+  listMyCompletedTasks,
+  listMyCycleTasks,
   countOverdue,
   listMyApprovals,
   countPendingApprovals,

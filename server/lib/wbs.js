@@ -531,9 +531,9 @@ function validateWbsDeadline(input) {
  *
  *  非人工态（待办 / 进行中）按进度收敛：
  *  1. 强规则：`progress >= 100` → 完成
- *  2. 弱规则：`progress === 0` 且当前 ∈ {进行中, 完成} → 待办
- *     （即「待办」想手动转「进行中」必须伴随 progress>0，否则被拉回待办；
- *      与用户拍板 2-A 一致：动手做了才算进行中）
+ *  2. 弱规则：`progress === 0` 且当前 ∈ {完成} → 待办
+ *     （「完成」与 0 进度矛盾，拉回待办；「进行中」允许零进度保留，
+ *      即 2026-08-26 用户变更：允许未填进度即标记为进行中）
  *  3. 弱规则：`0 < progress < 100` 且当前 ∈ {待办, 完成} → 进行中
  *  4. 其余保持原状态
  *
@@ -547,8 +547,54 @@ function syncNodeStatusFromProgress(status, progress) {
   // 人工态冻结：不被进度引擎改写（含 progress>=100 也不自动完成）
   if (MANUAL_STATES.includes(status)) return status;
   if (p >= 100) return '完成';
-  if (p === 0) return status === '进行中' || status === '完成' ? '待办' : status;
+  if (p === 0) return status === '完成' ? '待办' : status; // 2026-08-26：放开「零进度也允许进行中」
   return status === '待办' || status === '完成' ? '进行中' : status;
+}
+
+/* 「已启动」信号态：子节点处于这些状态即视为该分支已开工 */
+const STARTED_STATES = ['进行中', '阻塞', '待评审', '完成'];
+
+/**
+ * 节点状态收敛（2026-08-26 新增 · 父节点状态传导唯一实现）。
+ *
+ * 背景：放开「零进度也允许进行中」后，子任务标进行中但 progress 仍为 0，
+ * 父节点靠进度加权汇总拿不到启动信号，会一直卡在「待办」。
+ * 因此父节点状态改为 **进度 + 子树状态** 双输入派生：
+ *
+ *  叶子节点 → 完全等价 `syncNodeStatusFromProgress`（人工态冻结、进度收敛）
+ *  父节点（派生态，不冻结人工设置）：
+ *   1. `progress >= 100` → 完成
+ *   2. 子树内任一后代 ∈ {进行中, 阻塞, 待评审, 完成} → 进行中
+ *   3. 子树无启动信号 且 `progress === 0` → 待办（子节点回退时父节点同步回退）
+ *   4. 其余按 `syncNodeStatusFromProgress` 收敛
+ *
+ * @param {Array} nodes 同项目全部节点（扁平）
+ * @param {string} nodeId 目标节点 id
+ * @param {string} status 当前状态
+ * @param {number} progress 汇总后的进度 0~100
+ * @returns {string} 收敛后的状态
+ */
+function rollupNodeStatus(nodes, nodeId, status, progress) {
+  const list = nodes || [];
+  const childrenOf = indexChildren(list);
+  const kids = childrenOf.get(nodeId) || [];
+  /* 叶子：沿用原纯函数（人工态冻结在此生效） */
+  if (!kids.length) return syncNodeStatusFromProgress(status, progress);
+
+  const p = Number.isFinite(Number(progress)) ? Number(progress) : 0;
+  if (p >= 100) return '完成';
+
+  const byId = new Map(list.map(function (n) { return [n.id, n]; }));
+  const descendants = descendantIdsOf(list, nodeId);
+  let started = false;
+  descendants.forEach(function (id) {
+    if (started) return;
+    const d = byId.get(id);
+    if (d && STARTED_STATES.includes(d.status)) started = true;
+  });
+  if (started) return '进行中';
+  if (p === 0) return '待办';
+  return syncNodeStatusFromProgress(status, p);
 }
 
 /**
@@ -625,6 +671,7 @@ module.exports = {
   validateWbsDeadline,
   // 状态 / WIP / 门 / 改期
   syncNodeStatusFromProgress,
+  rollupNodeStatus,
   checkWip,
   gateReady,
   milestoneDelayNeedsChange,

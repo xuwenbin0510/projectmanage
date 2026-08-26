@@ -1002,16 +1002,19 @@ function resolveConfirmers(db, projectId, authorOpenId) {
     .all(pid);
   const pmSet = new Set(pmRows.map(function (r) { return toStr(r.user_open_id); }).filter(Boolean));
 
-  /* 2. 作者即 pm（或项目无 pm）→ 升级到 tl ∪ admin 兜底；否则确认人 = pm 集合 */
-  const authorIsPm = author && pmSet.has(author);
-  if (authorIsPm || pmSet.size === 0) {
-    const tlRows = db
+  /* 2. 确认人来源
+   *    - 项目有 PM：确认人 = 本项目的 PM 集合（团队成员写周报由本项目 PM 确认）。
+   *    - 项目无 PM：升级到 PMO ∪ admin 兜底（全局项目治理角色，先于管理层介入），
+   *      而非直接跳管理层。PMO 由「全局职位 pmo（users.global_role 或 user_roles.role_key='pmo'）」构成。 */
+  if (pmSet.size === 0) {
+    const pmoRows = db
       .prepare(
-        "SELECT user_open_id FROM project_members WHERE project_id = ? AND project_role = 'tl'"
+        "SELECT open_id FROM users WHERE global_role = 'pmo' "
+        + "UNION SELECT user_open_id FROM user_roles WHERE role_key = 'pmo'",
       )
-      .all(pid);
-    tlRows.forEach(function (r) {
-      const v = toStr(r.user_open_id);
+      .all();
+    pmoRows.forEach(function (r) {
+      const v = toStr(r.open_id);
       if (v) result.add(v);
     });
     const adminRows = db
@@ -1028,8 +1031,9 @@ function resolveConfirmers(db, projectId, authorOpenId) {
     pmSet.forEach(function (v) { result.add(v); });
   }
 
-  /* 3. 作者本人恒排除（禁止自确认） */
-  if (author) result.delete(author);
+  /* 3. 作者排除：仅当作者「不是 PM」时剔除（普通成员写的周报由 PM 批，禁止自确认）；
+   *    PM 写自己项目的周报可自批（PM 亲手跟进任务是常态，且全局总览已提供管理层审查通道）。 */
+  if (author && !pmSet.has(author)) result.delete(author);
   return result;
 }
 
