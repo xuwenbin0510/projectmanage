@@ -402,44 +402,11 @@ function migrationV1(db, now) {
   `);
 
   /* ---------- 7. 遗留基线表（原 db.js DDL，供 @deprecated 老路由使用 · D-9） ---------- */
+  // 注：tasks / reports / report_tasks 三张旧表已在 v20 清理迁移中彻底移除
+  // （分别被 wbs_nodes / work_reports / work_report_tasks 取代，且 legacy 对应路由已删除），
+  // 此处不再重建，避免历史垃圾表复生。
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id          TEXT PRIMARY KEY,
-      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      ms_id       TEXT,
-      code        TEXT,
-      name        TEXT,
-      owner       TEXT,
-      est         TEXT,
-      start       TEXT,
-      due         TEXT,
-      status      TEXT DEFAULT '待开始',
-      progress    INTEGER DEFAULT 0,
-      crit        INTEGER DEFAULT 0,
-      created_at  TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS reports (
-      id          TEXT PRIMARY KEY,
-      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      week        TEXT,
-      author      TEXT,
-      done        TEXT,
-      plan        TEXT,
-      risk        TEXT,
-      risk_due    TEXT,
-      res         TEXT,
-      snap        TEXT,
-      created_at  TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS report_tasks (
-      report_id   TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
-      task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-      PRIMARY KEY (report_id, task_id)
-    );
-
     CREATE TABLE IF NOT EXISTS approvals (
       id               TEXT PRIMARY KEY,
       project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -452,16 +419,8 @@ function migrationV1(db, now) {
       created_at       TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
-    CREATE INDEX IF NOT EXISTS idx_reports_project ON reports(project_id);
-    CREATE INDEX IF NOT EXISTS idx_report_tasks_task ON report_tasks(task_id);
     CREATE INDEX IF NOT EXISTS idx_approvals_project ON approvals(project_id);
   `);
-
-  // 遗留库可能缺 tasks.name（早期 schema 漏建）
-  if (!hasColumn(db, 'tasks', 'name')) {
-    db.exec('ALTER TABLE tasks ADD COLUMN name TEXT');
-  }
 }
 
 /* ── 迁移 v2：B3 WBS / 看板 / 审计 ────────────────── */
@@ -1459,6 +1418,28 @@ function migrationV19(db, now) {
   console.log('[migrations] v19 risks 表（风险登记册）');
 }
 
+/* ── 迁移 v20：清理历史遗留死表 ──────────────────────── */
+
+/**
+ * 彻底移除三张已被新体系取代的旧表：
+ *  - `tasks`         → 已被 `wbs_nodes` 取代（任务看板同源）
+ *  - `reports`       → 已被 `work_reports` 取代（结构化周报）
+ *  - `report_tasks`  → 已被 `work_report_tasks` 取代
+ * 这三张表仅被 @deprecated 的 legacy.routes.js 引用，对应端点已删除；
+ * devcheck.js / test_runner.js 不依赖它们。DROP IF EXISTS 幂等，安全重跑。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳（本迁移不需要）
+ */
+function migrationV20(db, now) { // eslint-disable-line no-unused-vars
+  db.exec(`
+    DROP TABLE IF EXISTS report_tasks;
+    DROP TABLE IF EXISTS tasks;
+    DROP TABLE IF EXISTS reports;
+  `);
+  console.log('[migrations] v20 已清理历史遗留死表 tasks / reports / report_tasks');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1485,6 +1466,7 @@ const MIGRATIONS = [
   { version: 17, name: 'connect-v17-union-id', up: migrationV17 },
   { version: 18, name: 'connect-v18-rbac-config', up: migrationV18 },
   { version: 19, name: 'connect-v19-risks', up: migrationV19 },
+  { version: 20, name: 'connect-v20-drop-legacy-tables', up: migrationV20 },
 ];
 
 /**

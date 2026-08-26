@@ -42,7 +42,17 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
   const { pathname } = useLocation();
   const { isDark } = useThemeMode();
 
-  const visible = MAIN_MENU.filter((m) => !m.roles || (user && m.roles.includes(user.globalRole)));
+  // 用户全部全局职位（并集）；后端 toApiUser 已回传 globalRoles 数组合并数组，
+  // 未回退到单值 globalRole 以兼容旧字段。门禁用「任一职位命中」判定。
+  const userGlobalRoles =
+    user?.globalRoles?.length
+      ? user.globalRoles
+      : user?.globalRole
+        ? [user.globalRole]
+        : [];
+  const visible = MAIN_MENU.filter(
+    (m) => !m.roles || m.roles.some((r) => userGlobalRoles.includes(r)),
+  );
 
   return (
     <Box

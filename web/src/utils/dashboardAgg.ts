@@ -62,15 +62,14 @@ function dueSoonOf(dueDate: string | null | undefined): boolean {
  * - `active`  = `进行中` + `待评审`
  * - `pending` = `待办` + `阻塞`
  *
- * > 说明：`GET /api/workbench` 的 `myTasks` 已在服务端滤掉 `status === '完成'`
- * > （`workbench.service.js#listMyTasks`），因此实际数据里 `done` 通常为 0，
- * > 环形图会渲染成两段。这里**仍按完整口径实现**：一来与设计文档逐字对齐，
- * > 二来若将来放开过滤（或复用本函数聚合 WBS 全量节点）无需改代码。
+ * 入参 `tasks` 应已含「未完成 + 已完成」两类（`buildDashboard` 将
+ * `data.myTasks` 与 `data.completedTasks` 合并传入），故 `done` 反映真实已完成数，
+ * 环形图三段齐备，`total === 0` 时恒为 `0`（**不返回 NaN**）。
  *
- * `completionRate` = 所有任务 `progress` 的算术平均（四舍五入取整），
- * `total === 0` 时恒为 `0`（**不返回 NaN**，T04 完成标准 #3）。
+ * `completionRate` = `done / total`（已完成占比，四舍五入取整），
+ * 即「我的任务进度」环中心的「总完成度」口径（用户 2026-08-26 确认：done/total）。
  *
- * @param tasks 我的任务（`WorkbenchData.myTasks`）
+ * @param tasks 我的任务（未完成 + 已完成，来自 `GET /api/workbench`）
  */
 export function aggregateTaskProgress(tasks: WbsNode[]): TaskProgressSummary {
   const list = Array.isArray(tasks) ? tasks : [];
@@ -83,7 +82,6 @@ export function aggregateTaskProgress(tasks: WbsNode[]): TaskProgressSummary {
   let done = 0;
   let active = 0;
   let pending = 0;
-  let progressSum = 0;
 
   list.forEach((t) => {
     switch (t.status) {
@@ -100,8 +98,6 @@ export function aggregateTaskProgress(tasks: WbsNode[]): TaskProgressSummary {
         pending += 1;
         break;
     }
-    const p = Number(t.progress);
-    progressSum += Number.isFinite(p) ? Math.max(0, Math.min(100, p)) : 0;
   });
 
   return {
@@ -109,7 +105,7 @@ export function aggregateTaskProgress(tasks: WbsNode[]): TaskProgressSummary {
     done,
     active,
     pending,
-    completionRate: Math.round(progressSum / total),
+    completionRate: Math.round((done / total) * 100),
   };
 }
 
@@ -271,15 +267,19 @@ export function sortByPriority<T extends { priority?: unknown; dueDate?: string 
  * @param data `GET /api/workbench` 返回值；`null`/`undefined` 时返回全零结构（不抛异常）
  */
 export function buildDashboard(data: WorkbenchData | null | undefined): DashboardSummary {
-  const tasks = data?.myTasks ?? [];
+  const incomplete = data?.myTasks ?? [];
+  const completed = data?.completedTasks ?? [];
+  /* Q4：进度环纳入「已完成」段（done 来自 completedTasks，total = 未完成 + 已完成） */
+  const progressTasks = [...incomplete, ...completed];
   const projects = data?.myProjects ?? [];
 
   return {
-    progress: aggregateTaskProgress(tasks),
-    overdue: aggregateOverdue(tasks, projects),
+    progress: aggregateTaskProgress(progressTasks),
+    /* 逾期/临期柱状、优先级环图仅基于「未完成任务」，已完成不入这些视图 */
+    overdue: aggregateOverdue(incomplete, projects),
     health: aggregateHealth(projects),
     /* B14-块1：优先级分布环图 */
-    priority: aggregatePriorityDistribution(tasks),
+    priority: aggregatePriorityDistribution(incomplete),
   };
 }
 

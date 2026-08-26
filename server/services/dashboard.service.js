@@ -315,8 +315,13 @@ function listScopeAllLeafTasks(db, projectIds) {
  *
  * `filled` = 该项目本周存在 `work_reports.status = '已提交'`（项目级，任一成员提交即算，草稿不计）。
  *
+ * 计划周期门控（2026-08-26，与工作台 `listReportReminders` 同源对齐）：
+ *  应填报项目**不再等于全部「进行中」项目**，而是「有 ≥1 个未完成（status!='完成'）叶子任务
+ *  （任意负责人）其计划窗口与本周(周一~周日)相交」的项目；无日期任务视为「有活」恒计入。
+ *  这样仪表盘「待填周报」与工作台「本周待填周报」口径一致，不再出现「全员必填」式冗余提醒。
+ *
  * @param {import('better-sqlite3').Database} db
- * @param {Array<string>} projectIds 应填报项目（范围内 status = '进行中'）
+ * @param {Array<string>} projectIds 范围内 status = '进行中' 的项目
  * @returns {{week: string, due: number, filled: number, missingIds: Array<string>}}
  */
 function countReportFill(db, projectIds) {
@@ -324,8 +329,33 @@ function countReportFill(db, projectIds) {
   const week = dates.weekCode();
   if (!ids.length) return { week: week, due: 0, filled: 0, missingIds: [] };
 
+  const range = dates.weekRange(week);
+  const weekStart = String((range && range.start) || '').slice(0, 10);
+  const weekEnd = String((range && range.end) || '').slice(0, 10);
+
+  /* 计划周期门控：仅「本周有 ≥1 未完成叶子任务（任意负责人）计划窗口相交」的项目才需填报 */
+  const dueIds = ids.filter(function (id) {
+    const hit = db
+      .prepare(
+        `SELECT 1 FROM wbs_nodes w
+          WHERE w.project_id = ?
+            AND w.status != '完成'
+            AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)
+            AND (
+              (w.start_date IS NULL AND w.due_date IS NULL)
+              OR (w.start_date IS NULL AND date(w.due_date) >= date(?))
+              OR (w.due_date IS NULL AND date(w.start_date) <= date(?))
+              OR (date(w.start_date) <= date(?) AND date(w.due_date) >= date(?))
+            )
+          LIMIT 1`,
+      )
+      .get(id, weekStart, weekEnd, weekStart, weekEnd);
+    return !!hit;
+  });
+  if (!dueIds.length) return { week: week, due: 0, filled: 0, missingIds: [] };
+
   const filledSet = {};
-  chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+  chunk(dueIds, SQL_IN_CHUNK).forEach(function (part) {
     db.prepare(
       'SELECT DISTINCT project_id FROM work_reports WHERE project_id IN ('
       + placeholders(part)
@@ -335,8 +365,8 @@ function countReportFill(db, projectIds) {
       .forEach(function (r) { filledSet[mappers.toStr(r.project_id)] = true; });
   });
 
-  const missingIds = ids.filter(function (id) { return !filledSet[id]; });
-  return { week: week, due: ids.length, filled: ids.length - missingIds.length, missingIds: missingIds };
+  const missingIds = dueIds.filter(function (id) { return !filledSet[id]; });
+  return { week: week, due: dueIds.length, filled: dueIds.length - missingIds.length, missingIds: missingIds };
 }
 
 /** 质量门状态白名单（与质量门状态机一致，顺序即分布图段序） */
@@ -885,7 +915,7 @@ function getDashboardOverview(db, query, me) {
   const statusDist = agg.aggregateStatusDist(allLeafTasks);        // 全量叶子（含已完成）
   const overdueDuration = agg.aggregateOverdueDuration(tasks, todayStr); // 在办叶子
 
-  /* 周报：只有「进行中」项目才需要填（与工作台提醒同一口径） */
+  /* 周报：只有「进行中」且「本周有未完成叶子任务计划窗口相交」的项目才需填（与工作台提醒同一口径） */
   const activeIds = items
     .filter(function (p) { return p.status === '进行中'; })
     .map(function (p) { return String(p.id); });

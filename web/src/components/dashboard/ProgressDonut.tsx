@@ -52,7 +52,11 @@ export function ProgressDonut({ summary, loading = false, onDrill }: ProgressDon
   return (
     <DonutChart
       title="我的任务进度"
-      subtitle={summary.total > 0 ? `共 ${summary.total} 个未完成任务` : ''}
+      subtitle={
+        summary.total > 0
+          ? `共 ${summary.total} 个任务 · 已完成 ${summary.done}`
+          : ''
+      }
       segments={segments}
       centerValue={`${summary.completionRate}%`}
       centerLabel="总完成度"

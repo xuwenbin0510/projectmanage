@@ -1,11 +1,10 @@
 import { useCallback, useMemo, useState, useRef } from 'react';
+import type { ReactNode } from 'react';
 import {
   Box,
   Button,
   Chip,
-  MenuItem,
   Paper,
-  Select,
   Stack,
   Typography,
 } from '@mui/material';
@@ -15,6 +14,8 @@ import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
 import VerifiedOutlinedIcon from '@mui/icons-material/VerifiedOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import AssignmentLateOutlinedIcon from '@mui/icons-material/AssignmentLateOutlined';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -34,30 +35,33 @@ import { ReviewStepper } from '@/components/review/ReviewStepper';
 import {
   HealthDistBar,
   MyTasksDrawer,
-  OverdueBarChart,
-  PriorityDonut,
   ProgressDonut,
+  PriorityDonut,
   OverdueTaskDrawer,
   DeliverableDetailDrawer,
   ReportClosureDrawer,
   GateDetailDrawer,
 } from '@/components/dashboard';
 import { api } from '@/api/client';
-import { useAsync, useToast } from '@/hooks';
+import { useAsync } from '@/hooks';
 import { ROUTES } from '@/config/routes';
-import { PROJECT_TYPE_SHORT, TASK_STATUSES } from '@/config/enums';
+import { PROJECT_TYPE_SHORT } from '@/config/enums';
 import type { ProgressSegment } from '@/types/dashboard';
-import type { Priority, TaskStatus } from '@/types/wbs';
+import type { Priority, WbsNode } from '@/types/wbs';
 import { buildDashboard, sortByPriority } from '@/utils/dashboardAgg';
 import { fmtDate, isOverdue, today, diffDays } from '@/utils/date';
-import { alphaOf as alpha, tokens, colorOf } from '@/theme/tokens';
+import { alphaOf as alpha, tokens } from '@/theme/tokens';
 
 /**
- * 我的工作台：仪表盘三图 + 待办审批 / 我的任务 / 我的项目 / 周报提醒
+ * 我的工作台布局：
+ *   ┌ 数据总览（顶部一条连续 KPI 带，按主题重排顺序：任务类 → 周报类 → 审批类）
+ *   ├ 【我的任务】  任务进度环 / 优先级环 → 时间轴(逾期/临期/计划周期内) → 我的项目 + 项目健康度
+ *   ├ 【周报】      待我确认周报 / 周报提醒
+ *   └ 【审批与决议】待我审批(列表) / 门控待办
  *
- * B11 增量：在 3 张 `StatCard` 与既有 4 区块之间插入「图表区」，
- * 数据由 `buildDashboard(data)` **纯前端聚合**（§1.3，不新增后端接口）。
- * 既有 4 区块与全部交互零改动。
+ * 顶部 8 个小面板保持一条连续「数据总览」带、只重排顺序；下面的大面板才按三大主题分组呈现。
+ *
+ * B11 增量：图表区由 `buildDashboard(data)` 纯前端聚合（不新增后端接口）。
  *
  * @prd P0-13 / B11
  */
@@ -70,12 +74,72 @@ function rateTone(rate?: number): 'success' | 'warning' | 'danger' {
   return 'danger';
 }
 
+/** 时间轴任务行（逾期 / 临期 / 计划周期内 三栏共用同格式） */
+function TaskTimeRow({
+  task,
+  hint,
+  onClick,
+}: {
+  task: WbsNode;
+  hint: string;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <Stack
+      direction={{ xs: 'column', sm: 'row' }}
+      spacing={1}
+      alignItems={{ xs: 'stretch', sm: 'center' }}
+      justifyContent="space-between"
+      onClick={onClick}
+      sx={{
+        px: 1.5,
+        py: 1.25,
+        borderRadius: 1.5,
+        cursor: 'pointer',
+        border: `1px solid ${tokens.border.subtle}`,
+        '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) },
+      }}
+    >
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+          <PriorityChip priority={task.priority} />
+          <Typography sx={{ fontSize: 13.5 }} noWrap>
+            {task.wbsCode} {task.name}
+          </Typography>
+        </Stack>
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+          {hint}
+        </Typography>
+      </Box>
+      <ProgressBar value={task.progress} tone="brand" sx={{ maxWidth: 130, flexShrink: 0 }} />
+    </Stack>
+  );
+}
+
+/** 业务主题分隔标题（下面的“大面板”按同一主题分组，跨主题用分隔线切） */
+function SectionTitle({
+  icon,
+  children,
+}: {
+  icon?: ReactNode;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 2.5, mb: 1.5 }}>
+      {icon && (
+        <Box sx={{ color: tokens.brand.primary, display: 'grid', placeItems: 'center' }}>{icon}</Box>
+      )}
+      <Typography variant="h6" sx={{ fontSize: 16, fontWeight: 700 }}>
+        {children}
+      </Typography>
+      <Box sx={{ flex: 1, height: 1, bgcolor: tokens.border.subtle, ml: 1 }} />
+    </Stack>
+  );
+}
+
 export function WorkbenchPage(): JSX.Element {
   const navigate = useNavigate();
   const me = useAuthStore((s) => s.user);
-  const toast = useToast();
-  const [busyTask, setBusyTask] = useState<string>('');
-
   /* B13：逾期/临期下探抽屉的本地状态（受控组件，props 自包含）；B15 追加 mode */
   const [ovDrawer, setOvDrawer] = useState<{
     open: boolean;
@@ -90,6 +154,10 @@ export function WorkbenchPage(): JSX.Element {
     progress?: ProgressSegment;
     priority?: Priority;
   }>({ open: false });
+  /* Q1：周报提醒命中任务展开态（projectId → 是否展开全部） */
+  const [reminderExpanded, setReminderExpanded] = useState<Record<string, boolean>>({});
+  /* 我的任务明细抽屉的当前数据源（默认合并已完成；按筛选下探时替换为对应子集） */
+  const [drawerTasks, setDrawerTasks] = useState<WbsNode[]>([]);
 
   /* 工作台快捷卡：交付物明细抽屉 */
   const [deliverableDrawerOpen, setDeliverableDrawerOpen] = useState(false);
@@ -120,6 +188,36 @@ export function WorkbenchPage(): JSX.Element {
    */
   const sortedTasks = useMemo(() => sortByPriority(data?.myTasks ?? []), [data]);
 
+  /* Q4：已完成任务（供进度环「已完成」段下钻，与 sortedTasks 合并入抽屉） */
+  const completedTasks = useMemo(() => data?.completedTasks ?? [], [data]);
+  const allMyTasks = useMemo(() => [...sortedTasks, ...completedTasks], [sortedTasks, completedTasks]);
+
+  /* 时间轴三栏的数据源（均取我名下未完成叶子，按截止日单一真源切分，三栏零重叠） */
+  const overdueTasks = useMemo(
+    () =>
+      (data?.myTasks ?? [])
+        .filter((t) => !!t.dueDate && isOverdue(t.dueDate))
+        .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? '')),
+    [data],
+  );
+  const soonTasks = useMemo(
+    () =>
+      (data?.myTasks ?? [])
+        .filter((t) => !!t.dueDate && !isOverdue(t.dueDate) && diffDays(today(), t.dueDate) <= 3)
+        .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? '')),
+    [data],
+  );
+  /* Q2：计划周期内的任务（干净边界：距今天截止日 d，4 ≤ d ≤ 14；与临期 0–3 天、逾期 <0 零重叠） */
+  const cycleTasks = useMemo(() => {
+    const list = data?.myCycleTasks ?? [];
+    return list
+      .filter((t) => !!t.dueDate)
+      .map((t) => ({ t, d: diffDays(today(), t.dueDate) }))
+      .filter(({ d }) => d >= 4 && d <= 14)
+      .sort((a, b) => a.d - b.d)
+      .map(({ t }) => t);
+  }, [data]);
+
   /** B13：打开逾期/临期任务下探抽屉（projectName 从本地 dashboard.overdue 解析；B15 补 mode） */
   const openOverdue = (projectId: string): void => {
     const name = dashboard.overdue.find((o) => o.projectId === projectId)?.projectName ?? '';
@@ -132,29 +230,19 @@ export function WorkbenchPage(): JSX.Element {
   };
 
   /** B15：打开我的任务明细抽屉（opts 为空 = 查看全部；可带进度段 / 优先级初始筛选） */
-  const openMyTasks = (opts: { progress?: ProgressSegment; priority?: Priority } = {}): void => {
+  const openMyTasks = (
+    opts: { progress?: ProgressSegment; priority?: Priority } = {},
+    tasksOverride?: WbsNode[],
+  ): void => {
+    setDrawerTasks(tasksOverride ?? allMyTasks);
     setMyTasksDrawer({ open: true, progress: opts.progress, priority: opts.priority });
-  };
-
-  /** 直接在工作台改任务状态（移动端四件事之一，走 moveTask 以保留 WIP 拦截） */
-  const handleStatus = async (nodeId: string, status: TaskStatus, order: number): Promise<void> => {
-    setBusyTask(nodeId);
-    try {
-      await api.moveTask(nodeId, status, order);
-      toast.success('任务状态已更新');
-      await run();
-    } catch (e) {
-      toast.error(e);
-    } finally {
-      setBusyTask('');
-    }
   };
 
   if (loading && !data) return <LoadingState variant="card" rows={3} />;
   if (error && !data) return <ErrorState error={error} onRetry={() => void run()} />;
   if (!data) return <EmptyState title="暂无工作台数据" />;
 
-  const { stats, myProjects, myTasks, myApprovals, reportReminders } = data;
+  const { stats, myProjects, myApprovals, reportReminders } = data;
   const deliverableRate =
     data.deliverables && data.deliverables.total
       ? Math.round((data.deliverables.delivered / data.deliverables.total) * 100)
@@ -173,6 +261,8 @@ export function WorkbenchPage(): JSX.Element {
         }
       />
 
+      {/* ══ 数据总览：顶部一条连续的 8 个小面板，按主题重排顺序（任务类 → 周报类 → 审批类） ══ */}
+      <SectionTitle icon={<Inventory2OutlinedIcon fontSize="small" />}>数据总览</SectionTitle>
       <Box
         sx={{
           display: 'grid',
@@ -181,14 +271,15 @@ export function WorkbenchPage(): JSX.Element {
           mb: 2.5,
         }}
       >
+        {/* —— 任务类 —— */}
         <StatCard
-          label="待我审批"
-          value={stats.pendingApprovals}
-          unit="项"
-          tone={stats.pendingApprovals > 0 ? 'warning' : 'success'}
-          hint="点击进入审批中心"
-          icon={<FactCheckOutlinedIcon fontSize="small" />}
-          onClick={() => navigate(ROUTES.approvals)}
+          label="我参与的项目"
+          value={myProjects.length}
+          unit="个"
+          tone="brand"
+          hint="点击查看全部项目"
+          icon={<FolderOutlinedIcon fontSize="small" />}
+          onClick={() => navigate(ROUTES.projects)}
         />
         <StatCard
           label="逾期任务"
@@ -200,30 +291,13 @@ export function WorkbenchPage(): JSX.Element {
           onClick={openGlobalOverdue}
         />
         <StatCard
-          label="本周待填周报"
-          value={stats.missingReports}
-          unit="份"
-          tone={stats.missingReports > 0 ? 'warning' : 'success'}
-          hint={missing.length > 0 ? (missing.length > 1 ? `还有 ${missing.length} 份待填，点击查看` : '点击前往填写') : '本周周报已全部填写'}
-          icon={<EditNoteOutlinedIcon fontSize="small" />}
-          onClick={() => {
-            if (missing.length === 1) {
-              navigate(ROUTES.projectReports(missing[0].projectId));
-            } else if (missing.length > 1) {
-              /* 多份待填：跳到「周报提醒」区块，每行各自「去填写」覆盖全部项目 */
-              reportRemindersRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-          }}
-        />
-        {/* D11：待决议质量门（= gateTodos.length，点击下钻待决议门列表，不再跳数据总览） */}
-        <StatCard
-          label="待决议质量门"
-          value={stats.pendingGates}
-          unit="道"
-          tone={stats.pendingGates > 0 ? 'warning' : 'success'}
-          hint="点击查看待决议门"
-          icon={<VerifiedOutlinedIcon fontSize="small" />}
-          onClick={() => setGateDrawer({ open: true, title: '待决议质量门明细' })}
+          label="已完成任务"
+          value={completedTasks.length}
+          unit="个"
+          tone="success"
+          hint="本期已完成的任务"
+          icon={<CheckCircleOutlinedIcon fontSize="small" />}
+          onClick={() => openMyTasks({}, completedTasks)}
         />
         {/* 交付物已交付率：大数字 + 细分 + 堆叠条 */}
         <Paper
@@ -291,6 +365,24 @@ export function WorkbenchPage(): JSX.Element {
             );
           })()}
         </Paper>
+
+        {/* —— 周报类 —— */}
+        <StatCard
+          label="本周待填周报"
+          value={stats.missingReports}
+          unit="份"
+          tone={stats.missingReports > 0 ? 'warning' : 'success'}
+          hint={missing.length > 0 ? (missing.length > 1 ? `还有 ${missing.length} 份待填，点击查看` : '点击前往填写') : '本周周报已全部填写'}
+          icon={<EditNoteOutlinedIcon fontSize="small" />}
+          onClick={() => {
+            if (missing.length === 1) {
+              navigate(ROUTES.projectReports(missing[0].projectId));
+            } else if (missing.length > 1) {
+              /* 多份待填：跳到「周报提醒」区块，每行各自「去填写」覆盖全部项目 */
+              reportRemindersRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }}
+        />
         <StatCard
           label="周报闭环率"
           value={data.reportClosure?.closureRate ?? 0}
@@ -300,18 +392,38 @@ export function WorkbenchPage(): JSX.Element {
           icon={<AssignmentLateOutlinedIcon fontSize="small" />}
           onClick={() => setClosureDrawerOpen(true)}
         />
+
+        {/* —— 审批决议类 —— */}
+        <StatCard
+          label="待我审批"
+          value={stats.pendingApprovals}
+          unit="项"
+          tone={stats.pendingApprovals > 0 ? 'warning' : 'success'}
+          hint="点击进入审批中心"
+          icon={<FactCheckOutlinedIcon fontSize="small" />}
+          onClick={() => navigate(ROUTES.approvals)}
+        />
+        {/* D11：待决议质量门（= gateTodos.length，点击下钻待决议门列表，不再跳数据总览） */}
+        <StatCard
+          label="待决议质量门"
+          value={stats.pendingGates}
+          unit="道"
+          tone={stats.pendingGates > 0 ? 'warning' : 'success'}
+          hint="点击查看待决议门"
+          icon={<VerifiedOutlinedIcon fontSize="small" />}
+          onClick={() => setGateDrawer({ open: true, title: '待决议质量门明细' })}
+        />
       </Box>
 
-      {/* ══ B11 · 仪表盘图表区（B14 追加优先级环 → 四图，栅格 xs:1 / md:2 / xl:4） ══ */}
+      {/* ══ 模块一：我的任务（大面板按主题分组） ══ */}
+      <SectionTitle icon={<FolderOutlinedIcon fontSize="small" />}>我的任务</SectionTitle>
+
+      {/* 图表：任务进度 / 优先级（纯前端聚合） */}
       <Box
         sx={{
           display: 'grid',
           gap: 2,
-          gridTemplateColumns: {
-            xs: '1fr',
-            md: 'repeat(2, 1fr)',
-            xl: 'repeat(4, 1fr)',
-          },
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' },
           alignItems: 'stretch',
           mb: 2.5,
         }}
@@ -319,24 +431,357 @@ export function WorkbenchPage(): JSX.Element {
         <ProgressDonut
           summary={dashboard.progress}
           loading={loading}
-          onDrill={(seg) => openMyTasks({ progress: seg })}
+          onDrill={(seg) => openMyTasks({ progress: seg }, allMyTasks)}
         />
         {/* B14-块1：优先级分布环，点段下钻我的任务明细（B15：带优先级筛选） */}
         <PriorityDonut
           dist={dashboard.priority}
           loading={loading}
-          onDrill={(pri) => openMyTasks({ priority: pri })}
-        />
-        <OverdueBarChart rows={dashboard.overdue} loading={loading} onDrill={openOverdue} />
-        <HealthDistBar
-          dist={dashboard.health}
-          loading={loading}
-          onDrill={() => navigate(ROUTES.projects)}
+          onDrill={(pri) => openMyTasks({ priority: pri }, allMyTasks)}
         />
       </Box>
 
-      <Box sx={{ display: 'grid', gap: 2.5, gridTemplateColumns: { xs: '1fr', lg: '1.35fr 1fr' } }}>
-        {/* ── 我的待办审批 ── */}
+      {/* 时间轴：逾期 / 临期 / 计划周期内（三栏同格式并列） */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2,
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+          mb: 2.5,
+        }}
+      >
+        {/* 逾期任务（d < 0） */}
+        <SectionCard
+          title="逾期任务"
+          subtitle={`${overdueTasks.length} 个 · 已超截止日`}
+          actions={
+            overdueTasks.length > 0 ? (
+              <Button size="small" onClick={openGlobalOverdue}>
+                查看全部
+              </Button>
+            ) : undefined
+          }
+        >
+          {overdueTasks.length === 0 ? (
+            <EmptyState title="没有逾期任务" dense />
+          ) : (
+            <Stack spacing={1}>
+              {overdueTasks.slice(0, 8).map((t) => (
+                <TaskTimeRow
+                  key={t.id}
+                  task={t}
+                  hint={`截止 ${fmtDate(t.dueDate)} · 已逾期 ${-diffDays(today(), t.dueDate)} 天`}
+                  onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
+                />
+              ))}
+            </Stack>
+          )}
+        </SectionCard>
+
+        {/* 临期任务（0 ≤ d ≤ 3） */}
+        <SectionCard
+          title="临期任务"
+          subtitle={`${soonTasks.length} 个 · 3 天内到期`}
+          actions={
+            soonTasks.length > 0 ? (
+              <Button size="small" onClick={() => openMyTasks({}, soonTasks)}>
+                查看全部
+              </Button>
+            ) : undefined
+          }
+        >
+          {soonTasks.length === 0 ? (
+            <EmptyState title="未来 3 天没有临期任务" dense />
+          ) : (
+            <Stack spacing={1}>
+              {soonTasks.slice(0, 8).map((t) => (
+                <TaskTimeRow
+                  key={t.id}
+                  task={t}
+                  hint={`截止 ${fmtDate(t.dueDate)} · 临期 · 还有 ${diffDays(today(), t.dueDate)} 天`}
+                  onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
+                />
+              ))}
+            </Stack>
+          )}
+        </SectionCard>
+
+        {/* 计划周期内的任务（4 ≤ d ≤ 14） */}
+        <SectionCard
+          title="计划周期内的任务"
+          subtitle={`${cycleTasks.length} 个 · 未来 4–14 天到期`}
+          actions={
+            cycleTasks.length > 0 ? (
+              <Button size="small" onClick={() => openMyTasks({}, cycleTasks)}>
+                查看全部
+              </Button>
+            ) : undefined
+          }
+        >
+          {cycleTasks.length === 0 ? (
+            <EmptyState title="未来两周内没有即将到期的任务" dense />
+          ) : (
+            <Stack spacing={1}>
+              {cycleTasks.slice(0, 8).map((t) => {
+                const d = diffDays(today(), t.dueDate);
+                return (
+                  <TaskTimeRow
+                    key={t.id}
+                    task={t}
+                    hint={`截止 ${fmtDate(t.dueDate)} · 还有 ${d} 天`}
+                    onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
+                  />
+                );
+              })}
+            </Stack>
+          )}
+        </SectionCard>
+      </Box>
+
+      {/* 我的项目 + 项目健康度（项目维度，并排） */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2.5,
+          gridTemplateColumns: { xs: '1fr', lg: '1.35fr 1fr' },
+          mb: 2.5,
+        }}
+      >
+        {/* ── 我的项目 ── */}
+        <SectionCard
+          title="我的项目"
+          subtitle={`${myProjects.length} 个在办`}
+          actions={
+            <Button size="small" onClick={() => navigate(ROUTES.projects)}>
+              全部项目
+            </Button>
+          }
+        >
+          {myProjects.length === 0 ? (
+            <EmptyState title="暂未参与任何在办项目" dense />
+          ) : (
+            <Stack spacing={1.25}>
+              {myProjects.map((p) => (
+                <Paper
+                  key={p.id}
+                  variant="outlined"
+                  onClick={() => navigate(ROUTES.projectOverview(p.id))}
+                  sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) } }}
+                >
+                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                      <HealthDot health={p.health} />
+                      <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
+                        {p.name}
+                      </Typography>
+                      <Chip size="small" label={PROJECT_TYPE_SHORT[p.type]} variant="outlined" sx={{ height: 20 }} />
+                    </Stack>
+                    <StatusChip status={p.status} />
+                  </Stack>
+                  <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mt: 1 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }} noWrap>
+                      {p.nextMilestoneCode ? `${p.nextMilestoneCode} ${p.nextMilestoneName}` : '里程碑已全部达成'}
+                      {` · 已过 ${p.gatePassed}/${p.gateTotal} 道门`}
+                    </Typography>
+                    <ProgressBar value={p.progress} tone={p.health === 'red' ? 'danger' : 'brand'} />
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </SectionCard>
+
+        {/* ── 项目健康度（紧贴我的项目） ── */}
+        <SectionCard title="项目健康度" subtitle={`${myProjects.length} 个项目的健康分布`}>
+          <HealthDistBar dist={dashboard.health} loading={loading} onDrill={() => navigate(ROUTES.projects)} />
+        </SectionCard>
+      </Box>
+
+      {/* ══ 模块二：周报 ══ */}
+      <SectionTitle icon={<EditNoteOutlinedIcon fontSize="small" />}>周报</SectionTitle>
+
+      {/* 面板：待我确认周报 / 周报提醒 */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2.5,
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' },
+          mb: 2.5,
+        }}
+      >
+        {/* ── 待我确认周报（D11：我是确认人的已提交周报，点击进项目周报确认） ── */}
+        <SectionCard
+          title="待我确认周报"
+          subtitle={`${(data?.reportConfirmations ?? []).length} 份待确认`}
+        >
+          {(data?.reportConfirmations ?? []).length === 0 ? (
+            <EmptyState title="没有待我确认的周报" description="已提交的周报都已确认完毕" dense />
+          ) : (
+            <Stack spacing={1}>
+              {(data?.reportConfirmations ?? []).slice(0, 5).map((c) => (
+                <Paper
+                  key={c.id}
+                  variant="outlined"
+                  onClick={() => navigate(ROUTES.projectReports(c.projectId))}
+                  sx={{
+                    p: 1.5,
+                    cursor: 'pointer',
+                    '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) },
+                  }}
+                >
+                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
+                        {c.projectName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {c.week} · 报告人 {c.authorName}
+                      </Typography>
+                    </Box>
+                    <Chip
+                      size="small"
+                      label="待确认"
+                      sx={{ height: 20, fontSize: 11, bgcolor: 'warning.main', color: '#fff', fontWeight: 700 }}
+                    />
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </SectionCard>
+
+        {/* ── 周报提醒 ── */}
+        <Box ref={reportRemindersRef}>
+          <SectionCard title="周报提醒" subtitle={reportReminders[0]?.week ?? ''}>
+            {reportReminders.length === 0 ? (
+              <EmptyState title="暂无需要填报的项目" dense />
+            ) : (
+              <Stack spacing={1}>
+                {reportReminders.map((r) => (
+                  <Box key={r.projectId}>
+                    <Stack
+                      direction="row"
+                      alignItems="center"
+                      justifyContent="space-between"
+                      spacing={1}
+                      sx={{
+                        px: 1.5,
+                        py: 1.25,
+                        borderRadius: 1.5,
+                        border: `1px solid ${
+                          r.state === '待填'
+                            ? alpha(tokens.status.warning, 0.5)
+                            : r.state === '待确认'
+                              ? alpha(tokens.brand.primary, 0.5)
+                              : tokens.border.subtle
+                        }`,
+                        bgcolor:
+                          r.state === '待填'
+                            ? alpha(tokens.status.warning, 0.08)
+                            : r.state === '待确认'
+                              ? alpha(tokens.brand.primary, 0.08)
+                              : 'transparent',
+                      }}
+                    >
+                      <Box sx={{ minWidth: 0 }}>
+                        <Stack direction="row" spacing={0.75} alignItems="center">
+                          {r.state === '待填' && (
+                            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.status.danger, flexShrink: 0 }} />
+                          )}
+                          {r.state === '待确认' && (
+                            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.brand.primary, flexShrink: 0 }} />
+                          )}
+                          {r.state === '待他人确认' && (
+                            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.text.secondary, flexShrink: 0 }} />
+                          )}
+                          {r.state === '已确认' && (
+                            <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.status.success, flexShrink: 0 }} />
+                          )}
+                          <Typography sx={{ fontSize: 13.5 }} noWrap>
+                            {r.projectName}
+                          </Typography>
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary">
+                          {r.weekStart} ~ {r.weekEnd}
+                        </Typography>
+                      </Box>
+                      <Button
+                        size="small"
+                        variant={r.state === '待填' || r.state === '待确认' ? 'contained' : 'text'}
+                        disabled={r.state === '待他人确认' || r.state === '已确认'}
+                        onClick={() => {
+                          if (r.state === '待填' || r.state === '待确认') navigate(ROUTES.projectReports(r.projectId));
+                        }}
+                      >
+                        {r.state === '待填' ? '去填写' : r.state === '待确认' ? '去确认' : r.state}
+                      </Button>
+                    </Stack>
+                    {/* Q1：命中任务下钻（本周计划窗口内、我名下未完成的任务） */}
+                    {r.tasks && r.tasks.length > 0 && (
+                      <Box sx={{ px: 1.5, pb: 1 }}>
+                        {(reminderExpanded[r.projectId] ? r.tasks : r.tasks.slice(0, 3)).map((t) => {
+                          const od = isOverdue(t.dueDate);
+                          const soon = !od && diffDays(today(), t.dueDate) <= 3 && !!t.dueDate;
+                          return (
+                            <Stack
+                              key={t.id}
+                              direction="row"
+                              spacing={1}
+                              justifyContent="space-between"
+                              alignItems="center"
+                              sx={{ py: 0.75, pl: 1, borderTop: `1px dashed ${tokens.border.subtle}` }}
+                            >
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography sx={{ fontSize: 12.5 }} noWrap>
+                                  {t.wbsCode} {t.name}
+                                </Typography>
+                                <Typography
+                                  variant="caption"
+                                  color={od ? 'error.main' : soon ? 'warning.main' : 'text.secondary'}
+                                >
+                                  {t.dueDate ? `截止 ${fmtDate(t.dueDate)}${od ? ' · 已逾期' : soon ? ' · 临期' : ''}` : '无计划日期'}
+                                </Typography>
+                              </Box>
+                              <ProgressBar value={t.progress} tone={od ? 'danger' : 'brand'} sx={{ width: 76, flexShrink: 0 }} />
+                            </Stack>
+                          );
+                        })}
+                        {r.tasks.length > 3 && (
+                          <Button
+                            size="small"
+                            sx={{ mt: 0.5 }}
+                            onClick={() => setReminderExpanded((e) => ({ ...e, [r.projectId]: !e[r.projectId] }))}
+                          >
+                            {reminderExpanded[r.projectId] ? '收起' : `展开全部 ${r.tasks.length} 条`}
+                          </Button>
+                        )}
+                      </Box>
+                    )}
+                  </Box>
+                ))}
+                {missing.length > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    还有 {missing.length} 个项目本周未提交周报。
+                  </Typography>
+                )}
+              </Stack>
+            )}
+          </SectionCard>
+        </Box>
+      </Box>
+
+      {/* ══ 模块三：审批与决议 ══ */}
+      <SectionTitle icon={<FactCheckOutlinedIcon fontSize="small" />}>审批与决议</SectionTitle>
+
+      {/* 面板：待我审批(列表) / 门控待办 */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2.5,
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' },
+        }}
+      >
+        {/* ── 待我审批（列表） ── */}
         <SectionCard
           title="待我审批"
           subtitle={`${myApprovals.length} 条`}
@@ -383,83 +828,6 @@ export function WorkbenchPage(): JSX.Element {
           )}
         </SectionCard>
 
-        {/* ── 周报提醒 ── */}
-        <Box ref={reportRemindersRef}>
-        <SectionCard title="周报提醒" subtitle={reportReminders[0]?.week ?? ''}>
-          {reportReminders.length === 0 ? (
-            <EmptyState title="暂无需要填报的项目" dense />
-          ) : (
-            <Stack spacing={1}>
-        {reportReminders.map((r) => (
-          <Stack
-            key={r.projectId}
-            direction="row"
-            alignItems="center"
-            justifyContent="space-between"
-            spacing={1}
-            sx={{
-              px: 1.5,
-              py: 1.25,
-              borderRadius: 1.5,
-              border: `1px solid ${
-                r.state === '待填'
-                  ? alpha(tokens.status.warning, 0.5)
-                  : r.state === '待确认'
-                    ? alpha(tokens.brand.primary, 0.5)
-                    : tokens.border.subtle
-              }`,
-              bgcolor:
-                r.state === '待填'
-                  ? alpha(tokens.status.warning, 0.08)
-                  : r.state === '待确认'
-                    ? alpha(tokens.brand.primary, 0.08)
-                    : 'transparent',
-            }}
-          >
-            <Box sx={{ minWidth: 0 }}>
-              <Stack direction="row" spacing={0.75} alignItems="center">
-                {r.state === '待填' && (
-                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.status.danger, flexShrink: 0 }} />
-                )}
-                {r.state === '待确认' && (
-                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.brand.primary, flexShrink: 0 }} />
-                )}
-                {r.state === '待他人确认' && (
-                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.text.secondary, flexShrink: 0 }} />
-                )}
-                {r.state === '已确认' && (
-                  <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: tokens.status.success, flexShrink: 0 }} />
-                )}
-                <Typography sx={{ fontSize: 13.5 }} noWrap>
-                  {r.projectName}
-                </Typography>
-              </Stack>
-              <Typography variant="caption" color="text.secondary">
-                {r.weekStart} ~ {r.weekEnd}
-              </Typography>
-            </Box>
-            <Button
-              size="small"
-              variant={r.state === '待填' || r.state === '待确认' ? 'contained' : 'text'}
-              disabled={r.state === '待他人确认' || r.state === '已确认'}
-              onClick={() => {
-                if (r.state === '待填' || r.state === '待确认') navigate(ROUTES.projectReports(r.projectId));
-              }}
-            >
-              {r.state === '待填' ? '去填写' : r.state === '待确认' ? '去确认' : r.state}
-            </Button>
-          </Stack>
-        ))}
-              {missing.length > 0 && (
-                <Typography variant="caption" color="text.secondary">
-                  还有 {missing.length} 个项目本周未提交周报。
-                </Typography>
-              )}
-            </Stack>
-          )}
-        </SectionCard>
-        </Box>
-
         {/* ── 门控待办（D10：我有决议权限的未决议门，点击下钻列表 / 单条跳项目概览） ── */}
         <SectionCard
           title="门控待办"
@@ -503,175 +871,6 @@ export function WorkbenchPage(): JSX.Element {
             </Stack>
           )}
         </SectionCard>
-
-        {/* ── 待我确认周报（D11：我是确认人的已提交周报，点击进项目周报确认） ── */}
-        <SectionCard
-          title="待我确认周报"
-          subtitle={`${(data?.reportConfirmations ?? []).length} 份待确认`}
-        >
-          {(data?.reportConfirmations ?? []).length === 0 ? (
-            <EmptyState title="没有待我确认的周报" description="已提交的周报都已确认完毕" dense />
-          ) : (
-            <Stack spacing={1}>
-              {(data?.reportConfirmations ?? []).slice(0, 5).map((c) => (
-                <Paper
-                  key={c.id}
-                  variant="outlined"
-                  onClick={() => navigate(ROUTES.projectReports(c.projectId))}
-                  sx={{
-                    p: 1.5,
-                    cursor: 'pointer',
-                    '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) },
-                  }}
-                >
-                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
-                        {c.projectName}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {c.week} · 报告人 {c.authorName}
-                      </Typography>
-                    </Box>
-                    <Chip
-                      size="small"
-                      label="待确认"
-                      sx={{ height: 20, fontSize: 11, bgcolor: 'warning.main', color: '#fff', fontWeight: 700 }}
-                    />
-                  </Stack>
-                </Paper>
-              ))}
-            </Stack>
-          )}
-        </SectionCard>
-
-        {/* ── 我的任务（B14-块1：P0 置顶排序 + 行内优先级色标；B15：查看全部入口） ── */}
-        <SectionCard
-          title="我的任务"
-          subtitle={`${myTasks.length} 个未完成 · 按优先级排序`}
-          actions={
-            myTasks.length > 0 ? (
-              <Button size="small" onClick={() => openMyTasks({})}>
-                查看全部
-              </Button>
-            ) : undefined
-          }
-        >
-          {myTasks.length === 0 ? (
-            <EmptyState title="没有分配给我的未完成任务" dense />
-          ) : (
-            <Stack spacing={1}>
-              {sortedTasks.slice(0, 8).map((t) => {
-                const overdue = isOverdue(t.dueDate);
-                const soon = !overdue && diffDays(today(), t.dueDate) <= 3;
-                return (
-                  <Stack
-                    key={t.id}
-                    direction={{ xs: 'column', sm: 'row' }}
-                    spacing={1}
-                    alignItems={{ xs: 'stretch', sm: 'center' }}
-                    justifyContent="space-between"
-                    /* B16：整行可点击下探 → 该项目 WBS 页（详情/编辑），与 B15 抽屉行行为一致；
-                       点状态下拉不触发跳转（Select 上已 stopPropagation） */
-                    onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
-                    sx={{
-                      px: 1.5,
-                      py: 1.25,
-                      borderRadius: 1.5,
-                      cursor: 'pointer',
-                      border: `1px solid ${
-                        overdue ? alpha(tokens.status.danger, 0.5) : tokens.border.subtle
-                      }`,
-                      '&:hover': {
-                        borderColor: overdue ? alpha(tokens.status.danger, 0.85) : alpha(tokens.brand.primary, 0.6),
-                      },
-                    }}
-                  >
-                    <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                        {/* B14-块1：优先级色标（P0 红 / P1 橙 / P2 蓝 / P3 灰） */}
-                        <PriorityChip priority={t.priority} />
-                        <Typography sx={{ fontSize: 13.5 }} noWrap>
-                          {t.wbsCode} {t.name}
-                        </Typography>
-                      </Stack>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
-                        <Typography
-                          variant="caption"
-                          sx={{ color: overdue ? tokens.status.danger : soon ? tokens.status.warning : 'text.secondary' }}
-                        >
-                          截止 {fmtDate(t.dueDate)}
-                          {overdue ? ' · 已逾期' : soon ? ' · 临期' : ''}
-                        </Typography>
-                        <ProgressBar value={t.progress} tone={overdue ? 'danger' : 'brand'} sx={{ maxWidth: 130 }} />
-                      </Stack>
-                    </Box>
-                    <Select
-                      size="small"
-                      value={t.status}
-                      disabled={busyTask === t.id}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => void handleStatus(t.id, e.target.value as TaskStatus, t.boardOrder)}
-                      sx={{ minWidth: 108, fontSize: 13 }}
-                    >
-                      {TASK_STATUSES.map((s) => (
-                        <MenuItem key={s} value={s} sx={{ fontSize: 13 }}>
-                          <Box component="span" sx={{ color: colorOf(s) }}>
-                            {s}
-                          </Box>
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </Stack>
-                );
-              })}
-            </Stack>
-          )}
-        </SectionCard>
-
-        {/* ── 我的项目 ── */}
-        <SectionCard
-          title="我的项目"
-          subtitle={`${myProjects.length} 个在办`}
-          actions={
-            <Button size="small" onClick={() => navigate(ROUTES.projects)}>
-              全部项目
-            </Button>
-          }
-        >
-          {myProjects.length === 0 ? (
-            <EmptyState title="暂未参与任何在办项目" dense />
-          ) : (
-            <Stack spacing={1.25}>
-              {myProjects.map((p) => (
-                <Paper
-                  key={p.id}
-                  variant="outlined"
-                  onClick={() => navigate(ROUTES.projectOverview(p.id))}
-                  sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: alpha(tokens.brand.primary, 0.6) } }}
-                >
-                  <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="center">
-                    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-                      <HealthDot health={p.health} />
-                      <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
-                        {p.name}
-                      </Typography>
-                      <Chip size="small" label={PROJECT_TYPE_SHORT[p.type]} variant="outlined" sx={{ height: 20 }} />
-                    </Stack>
-                    <StatusChip status={p.status} />
-                  </Stack>
-                  <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mt: 1 }}>
-                    <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }} noWrap>
-                      {p.nextMilestoneCode ? `${p.nextMilestoneCode} ${p.nextMilestoneName}` : '里程碑已全部达成'}
-                      {` · 已过 ${p.gatePassed}/${p.gateTotal} 道门`}
-                    </Typography>
-                    <ProgressBar value={p.progress} tone={p.health === 'red' ? 'danger' : 'brand'} />
-                  </Stack>
-                </Paper>
-              ))}
-            </Stack>
-          )}
-        </SectionCard>
       </Box>
 
       <OverdueTaskDrawer
@@ -687,7 +886,7 @@ export function WorkbenchPage(): JSX.Element {
       />
       <MyTasksDrawer
         open={myTasksDrawer.open}
-        tasks={sortedTasks}
+        tasks={drawerTasks.length ? drawerTasks : allMyTasks}
         initialProgress={myTasksDrawer.progress}
         initialPriority={myTasksDrawer.priority}
         onClose={() => setMyTasksDrawer((s) => ({ ...s, open: false }))}

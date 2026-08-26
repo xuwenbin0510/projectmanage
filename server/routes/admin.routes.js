@@ -119,8 +119,8 @@ router.patch(
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
       if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id)) && primary !== 'admin') {
-        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR role_key = 'admin') AND user_open_id <> ?").get(openId);
-        if (!cnt || Number(cnt.n) <= 1) {
+        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = 'admin')) AND open_id <> ?").get(openId);
+        if (!cnt || Number(cnt.n) < 1) {
           throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
         }
       }
@@ -141,7 +141,7 @@ router.patch(
       }
       if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id)) && role !== 'admin') {
         const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = 'admin')) AND open_id <> ?").get(openId);
-        if (!cnt || Number(cnt.n) <= 1) {
+        if (!cnt || Number(cnt.n) < 1) {
           throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
         }
       }
@@ -314,18 +314,18 @@ router.post(
   requireGlobalRole('admin'),
   asyncHandler(async function createUser(req, res) {
     const body = req.body || {};
-    const openId = String(body.openId || '').trim();
+    const openIdRaw = String(body.openId || '').trim();
     const name = String(body.name || '').trim();
-    if (!openId) {
-      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-        fields: [{ field: 'openId', message: 'openId 必填' }],
-      });
-    }
     if (!name) {
       throw new AppError(ErrorCode.E_VALIDATION, undefined, {
         fields: [{ field: 'name', message: '姓名必填' }],
       });
     }
+    // open_id 改为可选：纯密码登录用户（不走飞书免登）无需填飞书 open_id。
+    // 未提供时生成占位 open_id 满足 users.open_id UNIQUE NOT NULL 约束；
+    // 该值后续若用户改用飞书登录会被 upsertFeishuUser 按邮箱/姓名认回并覆盖，不会建重号。
+    const openId = openIdRaw || ('local_' + genId('U'));
+    const email = String(body.email || '').trim().toLowerCase();
     // E1.5：优先用 globalRoles 数组（首项主职位），否则回落单值 globalRole（默认 member）
     let primary = 'member';
     let extra = [];
@@ -350,11 +350,23 @@ router.post(
       }
       primary = single;
     }
-    const exists = db.prepare('SELECT 1 FROM users WHERE open_id = ?').get(openId);
-    if (exists) {
-      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-        fields: [{ field: 'openId', message: '该 openId 已存在' }],
-      });
+    // open_id 仅当用户显式提供时才查重（占位值由 genId 保证唯一，无需查）
+    if (openIdRaw) {
+      const exists = db.prepare('SELECT 1 FROM users WHERE open_id = ?').get(openId);
+      if (exists) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'openId', message: '该 openId 已存在' }],
+        });
+      }
+    }
+    // 邮箱作为密码登录标识，若填写需保证唯一（否则登录可能命中错误账号）
+    if (email) {
+      const emailDup = db.prepare('SELECT 1 FROM users WHERE LOWER(email) = ?').get(email);
+      if (emailDup) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'email', message: '该邮箱已存在' }],
+        });
+      }
     }
 
     const now = nowIso();
@@ -367,7 +379,7 @@ router.post(
         openId,
         String(body.employeeId || '').slice(0, 40),
         name.slice(0, 40),
-        String(body.email || '').trim().slice(0, 80),
+        email.slice(0, 80),
         String(body.dept || '').slice(0, 60),
         primary,
         'active',
@@ -386,7 +398,19 @@ router.post(
     }
 
     const extraRoles = loadExtraRoles([openId])[openId] || [];
-    res.json(ok(toApiUser(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid), extraRoles), '用户已创建'));
+    const newUser = toApiUser(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid), extraRoles);
+    // 创建即写入默认密码，避免新用户无密码、需再走一次「重置密码」才能登录；
+    // 同时置 must_change_pwd=1，强制其首次登录时修改。
+    const hashed = await hashPassword(DEFAULT_PASSWORD);
+    db.prepare('UPDATE users SET password_hash = ?, must_change_pwd = 1, updated_at = ? WHERE open_id = ?').run(
+      hashed,
+      now,
+      openId,
+    );
+    res.json(ok(
+      { ...newUser, defaultPassword: DEFAULT_PASSWORD },
+      '用户已创建，默认密码：' + DEFAULT_PASSWORD + '（首次登录需修改）',
+    ));
   }),
 );
 

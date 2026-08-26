@@ -92,6 +92,7 @@ import {
   sortMilestones,
   compareMilestones,
   syncNodeStatusFromProgress,
+  rollupNodeStatus,
 } from './rules';
 import {
   PROJECT_TRANSITIONS,
@@ -520,9 +521,14 @@ function syncWbsProgressStatus(db: MockDb, projectId: string): void {
   const nodes = db.wbsNodes.filter((n) => n.projectId === projectId);
   if (!nodes.length) return;
   const ts = nowIso();
-  nodes.forEach((n) => {
+  /* 2026-08-26：必须自底向上（深层先算），否则多层嵌套父节点状态会滞后一轮 */
+  const ordered = nodes
+    .slice()
+    .sort((a, b) => (b.wbsCode ?? '').split('.').length - (a.wbsCode ?? '').split('.').length);
+  ordered.forEach((n) => {
     const next = rollupProgressFlat(nodes, n.id);
-    const nextStatus = syncNodeStatusFromProgress(n.status, next);
+    /* 父节点状态由「进度 + 子树状态」双输入派生（叶子行为不变） */
+    const nextStatus = rollupNodeStatus(nodes, n.id, n.status, next);
     if (n.progress !== next || n.status !== nextStatus) {
       n.progress = next;
       n.status = nextStatus;
@@ -2790,12 +2796,38 @@ export class MockApiClient implements ApiClient {
       .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1))
       .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' }));
 
+    /* Q4：已完成任务（与真后端 listMyCompletedTasks 对齐，供进度环「已完成」段） */
+    const completedTasks = leafNodesOf(db.wbsNodes)
+      .filter((n) => n.owner === me.openId && n.status === '完成')
+      .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1))
+      .map((n) => ({ ...n, projectName: projectNameById.get(n.projectId) ?? '' }));
+
+    /* 计划周期内的任务：与真后端 listMyCycleTasks 口径对齐（前瞻 14 天） */
+    const CYCLE_LOOKAHEAD_DAYS = 14;
+    const myCycleTasks = myTasks.filter((t) => {
+      if (!t.dueDate) return false;
+      if (diffDays(today(), t.dueDate) < 0) return false; // 已逾期
+      if (t.startDate && diffDays(t.startDate, today()) < -CYCLE_LOOKAHEAD_DAYS) return false; // 启动晚于前瞻窗口
+      return true;
+    });
+
     const myApprovals = db.reviews.filter((r) => canDecide(r, me.openId) !== null);
 
     const curWeek = weekCode(today());
     const range = weekRange(curWeek);
+    /* 2026-08-26 计划周期门控（与真后端 listReportReminders 同源）：
+       仅当项目里有「我名下本周计划窗口内的未完成叶子任务」才入选（无日期任务视为有活） */
+    const weekStart = range.start; // 'YYYY-MM-DD'（mock weekRange 已是日粒度）
+    const weekEnd = range.end;
+    const planHitsWeek = (start?: string | null, due?: string | null): boolean => {
+      if (!start && !due) return true; // 无日期 → 视为有活
+      if (!start) return (due ?? '') >= weekStart;
+      if (!due) return (start ?? '') <= weekEnd;
+      return start <= weekEnd && due >= weekStart;
+    };
     const reportReminders: ReportReminder[] = db.projects
       .filter((p) => myProjectIds.has(p.id) && p.status === '进行中')
+      .filter((p) => myTasks.some((t) => t.projectId === p.id && planHitsWeek(t.startDate, t.dueDate)))
       .map((p) => {
         const submitted = db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交');
         const confirmed = db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已确认');
@@ -2810,6 +2842,18 @@ export class MockApiClient implements ApiClient {
           const isConfirmer = !!author && this.resolveConfirmers(db, p.id, author).has(me.openId);
           state = isConfirmer ? '待确认' : '待他人确认';
         }
+        /* Q1：命中任务（与真后端 listReportReminders.tasks 同源：我名下、本周计划窗口内、未完成叶子） */
+        const tasks = myTasks
+          .filter((t) => t.projectId === p.id && planHitsWeek(t.startDate, t.dueDate))
+          .map((t) => ({
+            id: t.id,
+            wbsCode: t.wbsCode,
+            name: t.name,
+            startDate: t.startDate ?? '',
+            dueDate: t.dueDate ?? '',
+            status: t.status,
+            progress: t.progress ?? 0,
+          }));
         return {
           projectId: p.id,
           projectName: p.name,
@@ -2818,6 +2862,7 @@ export class MockApiClient implements ApiClient {
           weekEnd: range.end,
           filled: submitted,
           state,
+          tasks,
         };
       });
 
@@ -2902,6 +2947,8 @@ export class MockApiClient implements ApiClient {
       },
       myProjects,
       myTasks,
+      completedTasks,
+      myCycleTasks,
       myApprovals,
       reportReminders,
       gateTodos,
@@ -3086,9 +3133,24 @@ export class MockApiClient implements ApiClient {
         return a.ownerName.localeCompare(b.ownerName, 'zh-CN');
       });
 
-    /* 5. 周报填报（口径与工作台提醒一致：仅「进行中」项目应填） */
+    /* 5. 周报填报（2026-08-26 与工作台提醒同源对齐：仅「进行中」且「本周有未完成叶子任务
+       计划窗口相交」的项目应填；无日期任务视为有活，任意负责人即可，不限于我） */
     const curWeek = weekCode(today());
-    const activeItems = items.filter((p) => p.status === '进行中');
+    const range = weekRange(curWeek);
+    const mWeekStart = range.start;
+    const mWeekEnd = range.end;
+    const mPlanHitsWeek = (start?: string | null, due?: string | null): boolean => {
+      if (!start && !due) return true;
+      if (!start) return (due ?? '') >= mWeekStart;
+      if (!due) return (start ?? '') <= mWeekEnd;
+      return start <= mWeekEnd && due >= mWeekStart;
+    };
+    const dueProjectIds = new Set(
+      leafNodesOf(db.wbsNodes)
+        .filter((n) => n.status !== '完成' && mPlanHitsWeek(n.startDate, n.dueDate))
+        .map((n) => n.projectId),
+    );
+    const activeItems = items.filter((p) => p.status === '进行中' && dueProjectIds.has(p.id));
     const reportMissing: ReportMissingRow[] = activeItems
       .filter((p) => !db.reports.some((r) => r.projectId === p.id && r.week === curWeek && r.status === '已提交'))
       .map((p) => ({ projectId: p.id, projectName: p.name, pmName: p.pmName }));

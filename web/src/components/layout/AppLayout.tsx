@@ -32,8 +32,15 @@ export function AppLayout(): JSX.Element {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
+  // 用户全部全局职位（并集）；与 Sidebar 门禁同源，用「任一职位命中」判定。
+  const userGlobalRoles =
+    user?.globalRoles?.length
+      ? user.globalRoles
+      : user?.globalRole
+        ? [user.globalRole]
+        : [];
   const mobileMenu = MAIN_MENU.filter(
-    (m) => m.mobile && (!m.roles || (user && m.roles.includes(user.globalRole))),
+    (m) => m.mobile && (!m.roles || m.roles.some((r) => userGlobalRoles.includes(r))),
   );
   const activeMobile = mobileMenu.find((m) => pathname.startsWith(m.path.split('/').slice(0, 2).join('/')));
 

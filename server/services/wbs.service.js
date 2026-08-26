@@ -178,9 +178,18 @@ function syncWbsProgressStatus(db, projectId) {
   const upd = db.prepare(
     'UPDATE wbs_nodes SET progress = ?, status = ?, actual_days = ?, updated_at = ? WHERE id = ?'
   );
-  nodes.forEach(function (n) {
+  /* 2026-08-26：必须**自底向上**（深层先算）遍历。父节点状态改为读子树状态后，
+     若父先算子后算，多层嵌套会滞后一轮才收敛。按 level 降序即可保证子先父后。 */
+  const ordered = nodes.slice().sort(function (a, b) {
+    const la = Number(a.level) || String(a.wbsCode || '').split('.').length;
+    const lb = Number(b.level) || String(b.wbsCode || '').split('.').length;
+    return lb - la;
+  });
+  ordered.forEach(function (n) {
     const next = wbs.rollupProgressFlat(nodes, n.id);
-    const nextStatus = wbs.syncNodeStatusFromProgress(n.status, next);
+    /* 父节点状态由「进度 + 子树状态」双输入派生（rollupNodeStatus），
+       否则子任务零进度标「进行中」时父节点会卡在「待办」。叶子行为不变。 */
+    const nextStatus = wbs.rollupNodeStatus(nodes, n.id, n.status, next);
     if (n.progress !== next || n.status !== nextStatus) {
       const actualDays = Number(((Number(n.estimateDays) || 0) * next / 100).toFixed(1));
       upd.run(next, nextStatus, actualDays, ts, n.id);

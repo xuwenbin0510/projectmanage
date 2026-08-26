@@ -250,7 +250,7 @@ export function MyTasksDrawer({
               我的任务明细
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              共 {tasks.length} 个未完成 · 按优先级排序
+              共 {tasks.length} 个任务（含已完成 {tasks.filter((t) => t.status === '完成').length}） · 按优先级排序
               {isFiltering ? ` · 筛选后 ${filteredRows.length}` : ''}
             </Typography>
           </Box>

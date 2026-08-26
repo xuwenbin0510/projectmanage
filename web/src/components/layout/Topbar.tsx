@@ -38,6 +38,10 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const setMobileDrawer = useUiStore((s) => s.setMobileDrawer);
   const { isDark, toggleMode } = useThemeMode();
+  // 主职位展示：优先取合并后的 globalRoles 首项，回落单值 globalRole（与门禁/判权同源）。
+  const primaryRole = user?.globalRoles?.length
+    ? user.globalRoles[0]
+    : user?.globalRole;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const navigate = useNavigate();
   const toast = useToast();
@@ -122,7 +126,7 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
             <Box sx={{ lineHeight: 1.2 }}>
               <Typography sx={{ fontSize: 13, fontWeight: 500 }}>{user?.name ?? '未登录'}</Typography>
               <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
-                {user ? GLOBAL_ROLE_LABEL[user.globalRole] : ''}
+                {user ? GLOBAL_ROLE_LABEL[primaryRole ?? ''] : ''}
               </Typography>
             </Box>
           )}
@@ -133,7 +137,7 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
         <Box sx={{ px: 2, py: 1 }}>
           <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{user?.name}</Typography>
           <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
-            {user?.dept} · {user ? GLOBAL_ROLE_LABEL[user.globalRole] : ''}
+            {user?.dept} · {user ? GLOBAL_ROLE_LABEL[primaryRole ?? ''] : ''}
           </Typography>
         </Box>
         <Divider />

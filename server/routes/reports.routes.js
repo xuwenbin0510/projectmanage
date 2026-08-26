@@ -17,7 +17,8 @@
  * `report:write` 的 `project: []` 为空 ⇒ 实际只校验全局角色，与 Mock 一致。
  *
  * ⚠ 确认/打回**不走** `assertCan('report.write')`：授权真源是
- *   `reportSvc.resolveConfirmers`（project_members pm → tl ∪ admin 兜底，作者恒排除）。
+ *   `reportSvc.resolveConfirmers`（项目有 PM → 本项目 PM 确认，PM 可自批自己的周报；
+ *   项目无 PM → PMO ∪ admin 兜底；普通成员写的周报由 PM 批、作者恒被排除）。
  *   若再叠加全局角色白名单，会把「是项目 pm 但全局角色为 management」的合法确认人误拒。
  *
  * ⚠ `GET /reports/pending-confirmation` 是**静态段**路径（`/reports/...`），

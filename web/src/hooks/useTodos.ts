@@ -7,26 +7,20 @@ import {
   TODO_TYPE_ORDER,
   TODO_TYPE_LABEL,
   TODO_TASK_TYPES,
-  priorityRankOf,
-  normalizePriority,
   REVIEW_TYPE_LABEL,
 } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
-import { isOverdue } from '@/utils/date';
-import type { WbsNode } from '@/types/wbs';
-import type { Review } from '@/types/review';
 
 /**
- * 统一待办中心（B14-块3）数据聚合 Hook。
+ * 统一待办中心（B14-块3）数据聚合 Hook —— 瘦身为「动作闹钟」。
  *
- * ⚠️ 零后端新增原则：六源**全部复用既有端点**，本 Hook 仅做并发聚合：
- *   ① `getWorkbench()` 一次性覆盖 APPROVAL / REPORT_FILL / ASSIGNED / OVERDUE / BLOCKED
- *      - `myApprovals`    → APPROVAL
- *      - `reportReminders`（filled=false）→ REPORT_FILL（与 B12 overview.reportMissing 同源）
- *      - `myTasks`        → ASSIGNED / OVERDUE / BLOCKED
- *   ② `listPendingConfirmation()` → REPORT_CONFIRM（跨项目，服务端按 resolveConfirmers 过滤）
+ * ⚠️ 零后端新增原则：两类**动作型**待办**全部复用既有端点**，本 Hook 仅做并发聚合：
+ *   ① `getWorkbench().myApprovals`     → APPROVAL（待我审批的评审）
+ *   ② `listPendingConfirmation()`      → REPORT_CONFIRM（待我确认的周报，跨项目，服务端按 resolveConfirmers 过滤）
  *
- * 六源结构各异，统一压平为 `TodoItem` 后再按 `TodoType` 分组渲染（见 `types/todo.ts`）。
+ * 设计取舍（2026-08-26）：OVERDUE / BLOCKED / ASSIGNED（计划周期内的任务）三类**任务态**待办
+ * 已从铃铛移出，统一收口到工作台面板（逾期 StatCard + 抽屉 / 进度环下钻 / 计划周期内面板），
+ * 避免与工作台重复渲染；铃铛只保留「有人在等我动作」的推送式待办，红点 = 真正需我处理的条数。
  * 部分源失败不阻断其余源（容错聚合），`error` 仅记录提示。
  */
 export function useTodos(): TodoState {
@@ -46,7 +40,7 @@ export function useTodos(): TodoState {
     const items: TodoItem[] = [];
     const failures: string[] = [];
 
-    /* ① getWorkbench：覆盖 5/6 源 */
+    /* ① getWorkbench：APPROVAL 源 */
     if (wbRes.status === 'fulfilled') {
       const wb = wbRes.value;
 
@@ -67,77 +61,6 @@ export function useTodos(): TodoState {
         });
       }
 
-      // REPORT_FILL：待我填写的周报（未填写提醒）
-      for (const rem of wb.reportReminders) {
-        if (rem.filled) continue;
-        items.push({
-          id: `REPORT_FILL:${rem.projectId}:${rem.week}`,
-          type: 'REPORT_FILL',
-          title: `填写周报 ${rem.week}`,
-          subtitle: rem.projectName,
-          projectId: rem.projectId,
-          projectName: rem.projectName,
-          priorityRank: -1,
-          priority: null,
-          dueDate: rem.weekEnd || null,
-          targetRoute: ROUTES.projectReports(rem.projectId),
-          payload: { reminder: rem } as Record<string, unknown>,
-        });
-      }
-
-      // ASSIGNED / OVERDUE / BLOCKED：我的任务
-      for (const t of wb.myTasks as WbsNode[]) {
-        if (t.status === '完成') continue;
-        const rank = priorityRankOf(t.priority);
-        const prio = normalizePriority(t.priority);
-        const projectName = t.projectName ?? '';
-
-        items.push({
-          id: `ASSIGNED:${t.id}`,
-          type: 'ASSIGNED',
-          title: `${t.wbsCode} ${t.name}`,
-          subtitle: `${projectName} · ${t.ownerName || '未指派'}`,
-          projectId: t.projectId,
-          projectName,
-          priorityRank: rank,
-          priority: prio,
-          dueDate: t.dueDate || null,
-          targetRoute: ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id,
-          payload: { node: t } as Record<string, unknown>,
-        });
-
-        if (isOverdue(t.dueDate)) {
-          items.push({
-            id: `OVERDUE:${t.id}`,
-            type: 'OVERDUE',
-            title: `${t.wbsCode} ${t.name}`,
-            subtitle: `${projectName} · 截止 ${t.dueDate}`,
-            projectId: t.projectId,
-            projectName,
-            priorityRank: rank,
-            priority: prio,
-            dueDate: t.dueDate || null,
-            targetRoute: ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id,
-            payload: { node: t } as Record<string, unknown>,
-          });
-        }
-
-        if (t.status === '阻塞') {
-          items.push({
-            id: `BLOCKED:${t.id}`,
-            type: 'BLOCKED',
-            title: `${t.wbsCode} ${t.name}`,
-            subtitle: `${projectName} · 阻塞中`,
-            projectId: t.projectId,
-            projectName,
-            priorityRank: rank,
-            priority: prio,
-            dueDate: t.dueDate || null,
-            targetRoute: ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id,
-            payload: { node: t } as Record<string, unknown>,
-          });
-        }
-      }
     } else {
       failures.push('工作台数据加载失败');
     }

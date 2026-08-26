@@ -1,8 +1,20 @@
 import type { ProjectListItem } from './project';
 import type { WbsNode } from './wbs';
 import type { Review } from './review';
+import type { TaskStatus } from './wbs';
 
 /** 我的工作台聚合数据（P0-13） */
+
+/** 周报提醒命中任务（「周报提醒」卡片下钻展示） */
+export interface ReportReminderTask {
+  id: string;
+  wbsCode: string;
+  name: string;
+  startDate: string;
+  dueDate: string;
+  status: TaskStatus;
+  progress: number;
+}
 
 export interface ReportReminder {
   projectId: string;
@@ -13,6 +25,8 @@ export interface ReportReminder {
   filled: boolean;
   /** D11：周报状态四态（待填 / 待确认 / 待他人确认 / 已确认） */
   state: '待填' | '待确认' | '待他人确认' | '已确认';
+  /** Q1：本周计划窗口内、我名下未完成的命中任务（下钻展示） */
+  tasks?: ReportReminderTask[];
 }
 
 /** D10：门控待办（我有决议权限的未决议门） */
@@ -49,6 +63,10 @@ export interface WorkbenchData {
   };
   myProjects: ProjectListItem[];
   myTasks: WbsNode[];
+  /** Q4：我负责的已完成真叶子任务（供「我的任务进度」环「已完成」段；不进入「我的任务」列表/逾期派生） */
+  completedTasks?: WbsNode[];
+  /** 计划周期内的任务（待办中心「计划周期内的任务」聚焦子集，前瞻 CYCLE_LOOKAHEAD_DAYS 天） */
+  myCycleTasks?: WbsNode[];
   myApprovals: Review[];
   reportReminders: ReportReminder[];
   /** D10：门控待办明细（点击跳项目概览门区） */
