@@ -57,7 +57,7 @@ export function LoginPage(): JSX.Element {
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const ok = await waitSdkReady(1500);
+      const ok = await waitSdkReady(3000);
       if (alive) setFeishuReady(ok && hasFeishuSdk());
       const id = await api.getAppId();
       if (alive) setAppId(id || '');
