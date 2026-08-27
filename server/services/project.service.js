@@ -387,7 +387,7 @@ function loadListContext(db, projectIds) {
  * @param {import('better-sqlite3').Database} db
  * @returns {object} ProjectListItem
  */
-function toListItem(row, ctx, todayStr, db) {
+function toListItem(row, ctx, todayStr, db, highRiskMap) {
   const projectId = mappers.toStr(row.id);
   const msList = (ctx.milestones[projectId] || []).slice();
   const gates = ctx.gates[projectId] || [];
@@ -418,8 +418,11 @@ function toListItem(row, ctx, todayStr, db) {
     milestoneDone: milestoneDone,
     milestoneTotal: sorted.length,
     nextMilestoneDate: next ? next.currentDate || null : null,
-    /* 高风险数：risk_value >= 12（与前端 Mock `toListItem` 逐字一致），现由风险表实时统计 */
-    highRiskCount: riskService.countHighRisks(db, projectId),
+    /* 高风险数：risk_value >= 12（与前端 Mock `toListItem` 逐字一致），现由风险表实时统计；
+       优先用调用方一次性批量算好的 Map（消除逐项目 N+1），缺失时回退单查以保兼容 */
+    highRiskCount: highRiskMap
+      ? (highRiskMap.get(projectId) || 0)
+      : riskService.countHighRisks(db, projectId),
   });
 }
 
@@ -463,7 +466,9 @@ function listProjects(db, query, me) {
 
   const ctx = loadListContext(db, rows.map(function (r) { return String(r.id); }));
   const todayStr = dates.today();
-  let items = rows.map(function (r) { return toListItem(r, ctx, todayStr, db); });
+  /* 一次性批量统计所有项目高风险数（替代 toListItem 内逐项目 N+1 查询） */
+  const highRiskMap = riskService.countHighRisksBatch(db, rows.map(function (r) { return String(r.id); }));
+  let items = rows.map(function (r) { return toListItem(r, ctx, todayStr, db, highRiskMap); });
 
   /* pm 过滤按「PM 姓名」匹配（与前端 Mock 口径一致），须在聚合后进行 */
   if (q.pm) {

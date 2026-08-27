@@ -109,6 +109,29 @@ function countHighRisks(db, projectId) {
   return (row && row.c) || 0;
 }
 
+/**
+ * 批量统计多项目高风险数（消除逐项目 N+1）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds
+ * @returns {Map<string, number>} projectId -> 高风险数（缺失项目记为 0）
+ */
+function countHighRisksBatch(db, projectIds) {
+  const map = new Map();
+  if (!db) return map;
+  const ids = (projectIds || []).map(function (x) { return String(x); }).filter(Boolean);
+  ids.forEach(function (id) { map.set(id, 0); });
+  if (!ids.length) return map;
+  const rows = db
+    .prepare(
+      'SELECT project_id AS pid, COUNT(*) AS c FROM risks WHERE project_id IN (' +
+        ids.map(function () { return '?'; }).join(',') +
+        ') AND risk_value >= ? GROUP BY project_id'
+    )
+    .all(...ids, RISK_HIGH_THRESHOLD);
+  rows.forEach(function (r) { map.set(String(r.pid), r.c); });
+  return map;
+}
+
 /* ═══════════════════════════════════════════════════
  * 二、code 自增
  * ═══════════════════════════════════════════════════ */
@@ -328,6 +351,7 @@ module.exports = {
   listRisks,
   requireRiskRow,
   countHighRisks,
+  countHighRisksBatch,
   createRisk,
   updateRisk,
   deleteRisk,
