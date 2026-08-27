@@ -143,7 +143,7 @@ router.delete(
     rbac.assertWritable(db, projectId);
     rbac.assertCan(db, req, 'document:delete', projectId);
 
-    const doc = documentSvc.deleteDocument(db, req.params.id);
+    const doc = documentSvc.deleteDocument(db, req, req.params.id);
     res.json(ok(doc, '已删除'));
   }),
 );
