@@ -24,6 +24,8 @@ try {
 const db = new Database(cfg.DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+// 并发写碰撞时等待而非直接报 SQLITE_BUSY（低配单机多请求场景必备）
+db.pragma('busy_timeout = 5000');
 
 migrations.run(db);
 seed.run(db);
