@@ -1477,6 +1477,35 @@ function migrationV21(db, now) {
   console.log('[migrations] v21 notifications 表（站内通知）');
 }
 
+/* ── 迁移 v22：模板交付物删除记忆表 ─────────────────── */
+
+/**
+ * 迁移 v22 —— 记录用户「有意删除」的模板派生交付物 key。
+ *
+ * 背景：deriveTemplateDocs 的「保证清单常驻」逻辑原本只以「行是否还在」判重，
+ * 用户删除后行消失 → 列表派生判定为「缺失」→ 整组复活（D-BUG：删了又复现）。
+ * 本表记下被删 key，派生时跳过，使删除生效。
+ * 自定义项（CUS- 前缀）删除即真删，不写本表。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ */
+function migrationV22(db, now) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS removed_template_docs (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id   TEXT NOT NULL,
+      template_key TEXT NOT NULL,
+      removed_by   TEXT NOT NULL DEFAULT '',
+      removed_at   TEXT NOT NULL,
+      UNIQUE(project_id, template_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_removed_tpl_docs
+      ON removed_template_docs(project_id, template_key);
+  `);
+  console.log('[migrations] v22 removed_template_docs 表（模板交付物删除记忆）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1505,6 +1534,7 @@ const MIGRATIONS = [
   { version: 19, name: 'connect-v19-risks', up: migrationV19 },
   { version: 20, name: 'connect-v20-drop-legacy-tables', up: migrationV20 },
   { version: 21, name: 'connect-v21-notifications', up: migrationV21 },
+  { version: 22, name: 'connect-v22-removed-template-docs', up: migrationV22 },
 ];
 
 /**
