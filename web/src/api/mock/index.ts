@@ -4154,7 +4154,7 @@ export class MockApiClient implements ApiClient {
     await delay();
     const db = getDb();
     const me = assertCan(db, 'user.manage');
-    if (['A', 'B', 'C'].indexOf(payload.projectType) < 0) throw new ApiError(ErrorCode.E_VALIDATION, '适用分类必须为 A / B / C');
+    if (['A', 'B', 'C', 'D'].indexOf(payload.projectType) < 0) throw new ApiError(ErrorCode.E_VALIDATION, '适用分类必须为 A / B / C / D');
     if (!payload.name || !String(payload.name).trim()) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
     const tpl: LifecycleTemplate = {
       id: genId('TMP'),

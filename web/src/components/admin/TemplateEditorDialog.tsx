@@ -38,11 +38,13 @@ interface GateForm {
 function GateEditor({
   open,
   gate,
+  suggestedCode,
   onClose,
   onSave,
 }: {
   open: boolean;
   gate: GateForm | null;
+  suggestedCode?: string;
   onClose: () => void;
   onSave: (g: GateForm) => void;
 }): JSX.Element {
@@ -69,12 +71,12 @@ function GateEditor({
     };
   }, []);
 
-  /* 每次打开时从外部 gate 初始化（新增 = 空表单） */
+  /* 每次打开时从外部 gate 初始化（新增 = 空表单；门编码按规则自动预填 QG{n}） */
   useEffect(() => {
     if (!open) return;
     setForm(gate ? { code: gate.code, name: gate.name, ownerRole: gate.ownerRole, items: gate.items.map((x) => ({ ...x })) }
-      : { code: '', name: '', ownerRole: 'tl', items: [{ content: '', ownerRole: 'tl' }] });
-  }, [open, gate]);
+      : { code: suggestedCode ?? '', name: '', ownerRole: 'tl', items: [{ content: '', ownerRole: 'tl' }] });
+  }, [open, gate, suggestedCode]);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -88,7 +90,7 @@ function GateEditor({
               fullWidth
               value={form.code}
               onChange={(e) => setForm({ ...form, code: e.target.value })}
-              helperText="如 QC1"
+              helperText="按规则自动生成（QG+顺序号），可手动修改"
             />
             <TextField
               label="门名称（必填）"
@@ -559,6 +561,7 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
       <GateEditor
         open={gateFor !== null}
         gate={gateFor !== null ? (milestones[gateFor]?.gate ?? null) : null}
+        suggestedCode={`QG${milestones.filter((m) => m.gate).length + 1}`}
         onClose={() => setGateFor(null)}
         onSave={(g) => {
           if (gateFor !== null) {

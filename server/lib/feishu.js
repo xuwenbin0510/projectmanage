@@ -182,6 +182,17 @@ async function fetchDocTitle(url) {
   if (!cfg.FEISHU_APP_ID || !cfg.FEISHU_APP_SECRET) return '';
   try {
     const at = await getAppAccessToken();
+    /* wiki 节点走专用接口（GET，参数走 query），drive/v1/metas/batch_query 对 wiki 不生效 */
+    if (p.docType === 'wiki') {
+      const q = '?token=' + encodeURIComponent(p.token) + '&obj_type=wiki';
+      const r = await fetch(FS_API + '/wiki/v2/spaces/get_node' + q, {
+        method: 'GET',
+        headers: { Authorization: 'Bearer ' + at },
+      });
+      const d = await r.json();
+      const node = d && d.data && d.data.node;
+      return (node && node.title) || '';
+    }
     const r = await fetch(FS_API + '/drive/v1/metas/batch_query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + at },
@@ -191,6 +202,7 @@ async function fetchDocTitle(url) {
     const meta = d && d.data && Array.isArray(d.data.metas) ? d.data.metas[0] : null;
     return (meta && meta.title) || '';
   } catch (e) {
+    console.warn('[feishu] fetchDocTitle 失败 url=' + url + ' : ' + (e && e.message));
     return '';
   }
 }

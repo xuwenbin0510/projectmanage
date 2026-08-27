@@ -342,11 +342,36 @@ function templateC() {
 }
 
 /**
- * 生成三套模板的全新副本（调用方可安全改写，不会污染模块常量）。
+ * D 类（通用轻量型）：3 碑 0 门 0 文档
+ * 用于专利 / 软著 / 资质 / 投标 / 培训等不归属 A/B/C 的「公司运营 / 职能」类项目。
+ * 不强约束：无强制质量门、不自动派生文档，WBS 完全由用户自建。
+ * @returns {Object}
+ */
+function templateD() {
+  return {
+    id: 'TPL-D',
+    projectType: 'D',
+    version: TEMPLATE_VERSION,
+    name: 'D 类（通用轻量型）生命周期',
+    isActive: true,
+    definition: {
+      milestones: [
+        { code: 'M1', name: '启动与规划', offsetDays: 0, required: true },
+        { code: 'M2', name: '执行与跟进', offsetDays: 15, required: false },
+        { code: 'M3', name: '结项与归档', offsetDays: 30, required: false },
+      ],
+      docs: [],
+      wbsRules: { maxDepth: 4, skeleton: 'per-milestone' },
+    },
+  };
+}
+
+/**
+ * 生成四套模板的全新副本（调用方可安全改写，不会污染模块常量）。
  * @returns {Object[]}
  */
 function createTemplates() {
-  return [templateA(), templateB(), templateC()];
+  return [templateA(), templateB(), templateC(), templateD()];
 }
 
 module.exports = { TEMPLATE_VERSION, createTemplates };

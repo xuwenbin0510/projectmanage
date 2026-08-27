@@ -121,7 +121,7 @@ function classifyProject(rawInput) {
 function assertOverrideReason(finalType, suggested, overrideReason) {
   if (PROJECT_TYPES.indexOf(finalType) < 0) {
     throw new AppError(ErrorCode.E_VALIDATION, '项目类型不合法', {
-      fields: [{ field: 'type', message: '项目类型必须为 A / B / C 之一' }],
+      fields: [{ field: 'type', message: '项目类型必须为 A / B / C / D 之一' }],
     });
   }
   if (finalType !== suggested && !String(overrideReason || '').trim()) {

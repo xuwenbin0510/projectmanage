@@ -198,7 +198,7 @@ export function ProjectListPage(): JSX.Element {
     <Box>
       <PageHeader
         title="项目"
-        subtitle={`共 ${total} 个项目 · A 类交付型 / B 类产品型 / C 类基建型 走不同生命周期`}
+        subtitle={`共 ${total} 个项目 · A 类交付型 / B 类产品型 / C 类基建型 / D 类通用轻量型 走不同生命周期`}
         actions={
           <Stack direction="row" spacing={1}>
             <Button

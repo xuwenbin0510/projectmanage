@@ -78,15 +78,17 @@ export const PROJECT_TYPE_LABEL: Record<ProjectType, string> = {
   A: 'A 类（交付型）',
   B: 'B 类（产品型）',
   C: 'C 类（基建型）',
+  D: 'D 类（通用轻量型）',
 };
 
 export const PROJECT_TYPE_SHORT: Record<ProjectType, string> = {
   A: 'A类',
   B: 'B类',
   C: 'C类',
+  D: 'D类',
 };
 
-export const PROJECT_TYPES: ProjectType[] = ['A', 'B', 'C'];
+export const PROJECT_TYPES: ProjectType[] = ['A', 'B', 'C', 'D'];
 
 export const PROJECT_STATUSES: ProjectStatus[] = [
   '草稿',
@@ -188,7 +190,7 @@ export const DEFAULT_WBS_RULES: WbsRules = {
 };
 
 /** 粒度上限（人日）：三类一致，叶子任务 >5 人日告警（非阻塞，仅建议拆分） */
-export const GRANULARITY_LIMIT: Record<ProjectType, number> = { A: 5, B: 5, C: 5 };
+export const GRANULARITY_LIMIT: Record<ProjectType, number> = { A: 5, B: 5, C: 5, D: 5 };
 
 /** 本周实际工时登记上限（人日/次）：B8 R5，工作日志单行 actualDays 上限，与后端 server/config/enums.js 一致 */
 export const WEEK_ACTUAL_DAYS_MAX = 100;

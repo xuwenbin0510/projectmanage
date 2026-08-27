@@ -193,8 +193,18 @@ export function DocumentsPage(): JSX.Element {
 
   const openUpload = () => {
     setUploadFile(null);
-    setUploadKind('none' as FilterKind);
-    setUploadTarget('');
+    /* D06：从 WBS 任务 / 里程碑节点进入时，默认关联当前筛选的节点（仍可在对话框改） */
+    let initKind: FilterKind = 'none' as FilterKind;
+    let initTarget = '';
+    if (filter.kind === 'node') {
+      initKind = 'node';
+      initTarget = filter.id;
+    } else if (filter.kind === 'milestone') {
+      initKind = 'milestone';
+      initTarget = filter.id;
+    }
+    setUploadKind(initKind);
+    setUploadTarget(initTarget);
     setLinkMode(false);
     setLinkName('');
     setLinkUrl('');
