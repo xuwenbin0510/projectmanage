@@ -22,6 +22,7 @@ const rbac = require('../middleware/rbac');
 const enums = require('../config/enums');
 const reviewService = require('./review.service');
 const milestoneService = require('./milestone.service');
+const notificationService = require('./notification.service');
 
 /* ── 行 → API 对象 ────────────────────────────────── */
 
@@ -143,16 +144,20 @@ function getChange(db, id) {
  */
 function createChange(db, req, projectId, payload) {
   const p = payload || {};
+  const title = mappers.toStr(p.title).trim();
+  if (!title) throw new AppError(ErrorCode.E_VALIDATION, '请填写变更标题');
+  const changeType = mappers.toStr(p.changeType);
+  if (enums.CHANGE_TYPES.indexOf(changeType) < 0) {
+    throw new AppError(ErrorCode.E_VALIDATION, '变更类型非法，允许值：' + enums.CHANGE_TYPES.join(' / '));
+  }
+
+  const id = genId('CHG');
+  const code = 'CHG-' + String(id).replace(/^CHG-/, '').slice(-6).toUpperCase();
+  const openId = mappers.toStr(req.user && (req.user.open_id !== undefined ? req.user.open_id : req.user.openId));
+
   const tx = db.transaction(function () {
     rbac.assertWritable(db, projectId);
     const me = rbac.assertCan(db, req, 'change:create', projectId);
-
-    const title = mappers.toStr(p.title).trim();
-    if (!title) throw new AppError(ErrorCode.E_VALIDATION, '请填写变更标题');
-    const changeType = mappers.toStr(p.changeType);
-    if (enums.CHANGE_TYPES.indexOf(changeType) < 0) {
-      throw new AppError(ErrorCode.E_VALIDATION, '变更类型非法，允许值：' + enums.CHANGE_TYPES.join(' / '));
-    }
 
     const routing = routeChange(db, {
       changeType: changeType,
@@ -160,10 +165,7 @@ function createChange(db, req, projectId, payload) {
       targetType: mappers.toStr(p.targetType),
     });
 
-    const id = genId('CHG');
-    const code = 'CHG-' + String(id).replace(/^CHG-/, '').slice(-6).toUpperCase();
     const ts = dates.nowIso();
-    const openId = mappers.toStr(me.open_id !== undefined ? me.open_id : me.openId);
     const payloadJson = JSON.stringify(p.payload || {});
 
     db.prepare(
@@ -182,7 +184,25 @@ function createChange(db, req, projectId, payload) {
     writeAudit(db, me, 'change', id, 'create', String(projectId), '创建变更单 ' + code + '「' + title + '」（路由：' + routing.route + '）');
     return toApiChange(db, getChangeRow(db, id));
   });
-  return tx();
+  const created = tx();
+
+  /* 通知：项目 PM + 全局 admin/pmo（剔除创建人自身） */
+  notificationService.notify(db, {
+    recipients: notificationService.resolveRecipients(db, {
+      projectId: String(projectId),
+      projectRoles: ['pm'],
+      globalRoles: ['admin', 'pmo'],
+      excludeOpenId: openId,
+    }),
+    type: notificationService.NOTIFICATION_TYPES.CHANGE_CREATED,
+    title: '新的变更单：' + code + ' ' + title,
+    body: '「' + code + ' ' + title + '」已创建，待提交审批',
+    projectId: String(projectId),
+    refType: 'change',
+    refId: id,
+  });
+
+  return created;
 }
 
 /**
@@ -196,6 +216,7 @@ function createChange(db, req, projectId, payload) {
  * @throws {AppError} E_VALIDATION / E_FORBIDDEN
  */
 function submitChange(db, req, id) {
+  const openId = mappers.toStr(req.user && (req.user.open_id !== undefined ? req.user.open_id : req.user.openId));
   const tx = db.transaction(function () {
     const row = getChangeRow(db, id);
     const projectId = mappers.toStr(row.project_id);
@@ -225,7 +246,25 @@ function submitChange(db, req, id) {
     writeAudit(db, me, 'change', String(row.id), 'update', projectId, '变更单 ' + mappers.toStr(row.code) + ' 提交' + tpl.label);
     return toApiChange(db, getChangeRow(db, id));
   });
-  return tx();
+  const result = tx();
+
+  /* 通知：项目 PM + 全局 admin/pmo（剔除提交人自身） */
+  notificationService.notify(db, {
+    recipients: notificationService.resolveRecipients(db, {
+      projectId: mappers.toStr(result.projectId),
+      projectRoles: ['pm'],
+      globalRoles: ['admin', 'pmo'],
+      excludeOpenId: openId,
+    }),
+    type: notificationService.NOTIFICATION_TYPES.CHANGE_SUBMITTED,
+    title: '变更单待审批：' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title),
+    body: '「' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title) + '」已提交，待审批',
+    projectId: mappers.toStr(result.projectId),
+    refType: 'change',
+    refId: id,
+  });
+
+  return result;
 }
 
 /**
@@ -240,6 +279,7 @@ function submitChange(db, req, id) {
  * @throws {AppError} E_VALIDATION / E_FORBIDDEN
  */
 function applyChange(db, req, id) {
+  const openId = mappers.toStr(req.user && (req.user.open_id !== undefined ? req.user.open_id : req.user.openId));
   const tx = db.transaction(function () {
     const row = getChangeRow(db, id);
     const projectId = mappers.toStr(row.project_id);
@@ -274,7 +314,23 @@ function applyChange(db, req, id) {
     writeAudit(db, me, 'change', String(row.id), 'apply', projectId, '变更单 ' + mappers.toStr(row.code) + ' 已实施');
     return toApiChange(db, getChangeRow(db, id));
   });
-  return tx();
+  const result = tx();
+
+  /* 通知变更创建人（剔除实施人自身） */
+  const creatorOpenId = mappers.toStr(result.createdBy !== undefined ? result.createdBy : '');
+  if (creatorOpenId && creatorOpenId !== openId) {
+    notificationService.notify(db, {
+      recipients: [creatorOpenId],
+      type: notificationService.NOTIFICATION_TYPES.CHANGE_APPLIED,
+      title: '变更单已实施：' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title),
+      body: '「' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title) + '」已实施',
+      projectId: mappers.toStr(result.projectId),
+      refType: 'change',
+      refId: id,
+    });
+  }
+
+  return result;
 }
 
 module.exports = {

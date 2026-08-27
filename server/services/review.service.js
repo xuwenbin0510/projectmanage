@@ -36,6 +36,7 @@ const enums = require('../config/enums');
 const milestoneService = require('./milestone.service');
 const { resolveGlobalRoles } = require('../middleware/auth');
 const roleCatalog = require('./roleCatalog');
+const notificationService = require('./notification.service');
 
 /* ── 行 → API 对象 ──────────────────────────────────── */
 
@@ -454,6 +455,22 @@ function createReview(db, payload, me) {
   });
   tx();
 
+  /* 通知：项目 PM + 全局 admin/pmo（剔除发起人自身），点开跳项目评审 tab */
+  notificationService.notify(db, {
+    recipients: notificationService.resolveRecipients(db, {
+      projectId: projectId,
+      projectRoles: ['pm'],
+      globalRoles: ['admin', 'pmo'],
+      excludeOpenId: openId,
+    }),
+    type: notificationService.NOTIFICATION_TYPES.REVIEW_CREATED,
+    title: '新的评审待处理：' + title,
+    body: '「' + (project.name || projectId) + '」发起评审「' + title + '」，请你审批',
+    projectId: projectId,
+    refType: 'review',
+    refId: id,
+  });
+
   writeAudit(db, me, 'review', id, 'create', projectId, '发起评审「' + title + '」（' + tplLabel + '·' + mode + '）');
 
   return toApiReview(db, getReviewRow(db, id));
@@ -610,6 +627,21 @@ function decide(db, id, action, payload, me) {
   /* 审计 + 终态联动（事务外，沿用铁律） */
   const updated = toApiReview(db, getReviewRow(db, id));
 
+  /* 终态 → 通知发起人（变更类评审由变更单决议通知覆盖，避免重复） */
+  if ((updated.status === '已通过' || updated.status === '已驳回') && row.ref_type !== 'change') {
+    if (row.initiator_open_id && row.initiator_open_id !== openId) {
+      notificationService.notify(db, {
+        recipients: [row.initiator_open_id],
+        type: notificationService.NOTIFICATION_TYPES.REVIEW_DECIDED,
+        title: '评审已' + (updated.status === '已通过' ? '通过' : '驳回') + '：' + row.title,
+        body: '「' + row.title + '」已由 ' + actorName + (updated.status === '已通过' ? ' 通过' : ' 驳回') + (comment ? '：' + comment : ''),
+        projectId: row.project_id,
+        refType: 'review',
+        refId: id,
+      });
+    }
+  }
+
   if (action === 'reject') {
     writeAudit(db, me, 'review', id, 'reject', row.project_id, '驳回评审「' + row.title + '」：' + comment, [
       diffEntry('status', '评审状态', '审批中', '已驳回'),
@@ -760,6 +792,18 @@ function onReviewApproved(db, review, actor) {
     if (c && c.status === '审批中') {
       db.prepare("UPDATE changes SET status = '已批准', updated_at = ? WHERE id = ?").run(dates.nowIso(), c.id);
       writeAudit(db, actor, 'change', c.id, 'approve', mappers.toStr(c.project_id), '变更单 ' + mappers.toStr(c.code) + ' 审批通过，待实施');
+      /* 通知变更单创建人（剔除决议人自身） */
+      if (c.created_by && c.created_by !== actorOpenId) {
+        notificationService.notify(db, {
+          recipients: [c.created_by],
+          type: notificationService.NOTIFICATION_TYPES.CHANGE_DECIDED,
+          title: '变更单已批准：' + mappers.toStr(c.code) + ' ' + mappers.toStr(c.title),
+          body: '「' + mappers.toStr(c.code) + ' ' + mappers.toStr(c.title) + '」已审批通过，待实施',
+          projectId: mappers.toStr(c.project_id),
+          refType: 'change',
+          refId: c.id,
+        });
+      }
     }
   }
 }
@@ -800,6 +844,18 @@ function onReviewRejected(db, review, actor) {
       writeAudit(db, actor, 'change', String(c.id), 'reject', mappers.toStr(c.project_id),
         '变更单 ' + mappers.toStr(c.code) + ' 审批驳回',
         [diffEntry('status', '变更状态', '审批中', '已驳回')]);
+      /* 通知变更单创建人（剔除决议人自身） */
+      if (c.created_by && c.created_by !== actorOpenId) {
+        notificationService.notify(db, {
+          recipients: [c.created_by],
+          type: notificationService.NOTIFICATION_TYPES.CHANGE_DECIDED,
+          title: '变更单已驳回：' + mappers.toStr(c.code) + ' ' + mappers.toStr(c.title),
+          body: '「' + mappers.toStr(c.code) + ' ' + mappers.toStr(c.title) + '」审批被驳回',
+          projectId: mappers.toStr(c.project_id),
+          refType: 'change',
+          refId: c.id,
+        });
+      }
     }
   }
 }

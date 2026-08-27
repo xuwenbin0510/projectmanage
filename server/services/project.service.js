@@ -814,7 +814,7 @@ function createProject(db, payload, me) {
       plan_end: String(payload.planEnd),
       approval_step: 0,
       template_id: tpl.id,
-      pm: pmMember ? String(pmMember.userOpenId) : '',
+      pm: pmMember ? String(pmMember.userOpenId) : createdBy,
       created_by: createdBy,
       created_at: ts,
       updated_at: ts,
@@ -830,6 +830,15 @@ function createProject(db, payload, me) {
         ts,
       );
     });
+
+    /* 决策「开放自建 + 自己是 PM」：创建人恒登记为 PM 成员
+       —— 若其已在 payload.members 中以 pm 角色出现则跳过，避免 (project_id, user_open_id, project_role) UNIQUE 冲突 */
+    const creatorIsPm = (payload.members || []).some(function (m) {
+      return m.role === 'pm' && String(m.userOpenId) === createdBy;
+    });
+    if (createdBy && !creatorIsPm) {
+      insMember.run(projectId + '-MBC', projectId, createdBy, 'pm', createdBy, ts);
+    }
 
     specList.forEach(function (spec, idx) {
       const msId = projectId + '-MS' + (idx + 1);
@@ -921,6 +930,24 @@ function createProject(db, payload, me) {
   return getProject(db, projectId);
 }
 
+/**
+ * 删除项目（管理员专属，路由层已 `assertCan(db, req, 'project:delete')`）。
+ *
+ * 采用**软删**（置 `deleted_at`），保留项目成员 / 里程碑 / WBS 等关联数据以便必要时恢复，
+ * 列表与详情均按 `deleted_at IS NULL` 过滤，软删后即对所有普通用户不可见。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} id 项目 id
+ * @returns {{ id: string, deleted: boolean }}
+ * @throws {AppError} E_NOT_FOUND
+ */
+function deleteProject(db, id) {
+  const p = requireProjectRow(db, id); // 已软删 / 不存在 → E_NOT_FOUND
+  const ts = dates.nowIso();
+  db.prepare('UPDATE projects SET deleted_at = ?, updated_at = ? WHERE id = ?').run(ts, ts, p.id);
+  return { id: p.id, deleted: true };
+}
+
 module.exports = {
   NO_PM_PLACEHOLDER,
   findProjectRow,
@@ -941,4 +968,5 @@ module.exports = {
   assertMemberCardinality,
   createProject,
   updateProjectBasic,
+  deleteProject,
 };

@@ -172,6 +172,21 @@ router.get(
 );
 
 /**
+ * 删除项目（管理员专属）。
+ * 路由层 `assertCan(db, req, 'project:delete')` 拦截——权限矩阵 `project:delete` 仅 admin 角色命中。
+ * 业务层 `deleteProject` 仅做软删（置 `deleted_at`），不触碰关联数据。
+ */
+router.delete(
+  '/projects/:id',
+  requireAuth,
+  asyncHandler(async function deleteProject(req, res) {
+    rbac.assertCan(db, req, 'project:delete', req.params.id);
+    const result = projectService.deleteProject(db, req.params.id);
+    res.json(ok(result, '项目已删除'));
+  }),
+);
+
+/**
  * 项目基本信息编辑（E1：管理员/项目负责人可改类型、成员等必要信息）。
  *
  * 仅更新基础字段（code/name/type/customer/contractAmount/background/goal/planStart/planEnd），

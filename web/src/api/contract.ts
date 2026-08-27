@@ -32,6 +32,7 @@ import type { Review, ReviewType, ReviewRefType } from '@/types/review';
 import type { Change, ChangeType, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, CreateRiskPayload, UpdateRiskPayload, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, WorkbenchReportClosure, Session } from '@/types/workbench';
+import type { NotificationItem, NotificationListResult } from '@/types/notification';
 import type {
   DashboardDeliverableRow,
   DashboardDeliverablesQuery,
@@ -492,4 +493,12 @@ export interface ApiClient {
   deleteGate(gateId: string): Promise<MilestoneWithGate[]>;
   /** 取附件文件流（http 走真实端点，mock 合成占位文件）；asDownload 控制下载/预览 */
   downloadDocument(projectId: string, id: string, opts?: { asDownload?: boolean }): Promise<Blob>;
+
+  /* 站内通知（顶栏铃铛） */
+  /** 我的通知列表（?unread=1 仅未读；返回 items + 总未读数 unreadCount） */
+  listNotifications(opts?: { unread?: boolean; page?: number; pageSize?: number }): Promise<NotificationListResult>;
+  /** 标记单条已读 */
+  markNotificationRead(id: string): Promise<{ id: string; isRead: number }>;
+  /** 全部标已读 */
+  markAllNotificationsRead(): Promise<{ count: number }>;
 }

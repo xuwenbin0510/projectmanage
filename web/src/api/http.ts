@@ -31,6 +31,7 @@ import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, CreateRiskPayload, UpdateRiskPayload, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
+import type { NotificationItem, NotificationListResult } from '@/types/notification';
 import type { WorkbenchData, WorkbenchReportClosure, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
@@ -696,6 +697,19 @@ export class HttpApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_NOT_FOUND, '文件不存在或无权访问', undefined, res.status);
     }
     return res.blob();
+  }
+
+  /* 站内通知（顶栏铃铛） */
+  listNotifications(opts?: { unread?: boolean; page?: number; pageSize?: number }): Promise<NotificationListResult> {
+    return get<NotificationListResult>(`/notifications${qs((opts || {}) as Record<string, unknown>)}`);
+  }
+
+  markNotificationRead(id: string): Promise<{ id: string; isRead: number }> {
+    return post<{ id: string; isRead: number }>(`/notifications/${id}/read`);
+  }
+
+  markAllNotificationsRead(): Promise<{ count: number }> {
+    return post<{ count: number }>('/notifications/read-all');
   }
 }
 
