@@ -1,0 +1,18 @@
+# 依赖与构建产物（容器内重新安装/构建）
+node_modules
+web/node_modules
+web/dist
+
+# 密钥与本地数据（绝不进镜像，运行时通过 env_file / volume 注入）
+.env
+*.db
+*.db-shm
+*.db-wal
+attachments
+
+# 仓库/工具杂项
+.git
+.cache
+.workbuddy
+pm-app-deploy*
+*.log
