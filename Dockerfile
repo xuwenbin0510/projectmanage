@@ -1,10 +1,15 @@
-# ── 构建阶段：装依赖 + 编译 better-sqlite3（原生模块）+ 构建前端 ──
+# ── 构建阶段：装依赖 + 构建前端 ──
 FROM node:22-slim AS build
 WORKDIR /app
-# better-sqlite3 需要编译工具链
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 make g++ \
+
+# better-sqlite3 是原生模块，ECS 上 GitHub 预编译不通，必须 node-gyp 源码编译，
+# 需 python3 + make + g++；apt 改用华为云镜像（实测 InRelease 0.05s，远快于阿里云 1.5s）
+RUN sed -i 's/deb.debian.org/mirrors.huaweicloud.com/g; s/security.debian.org/mirrors.huaweicloud.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirrors.huaweicloud.com/g; s/security.debian.org/mirrors.huaweicloud.com/g' /etc/apt/sources.list
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
+RUN npm config set registry https://registry.npmmirror.com
+
 COPY package.json ./
 RUN npm install
 COPY . .
