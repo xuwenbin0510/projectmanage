@@ -2,7 +2,7 @@
 
 > 适用环境：**阿里云 ECS** + 已安装 **Docker / docker compose** + 已安装 **Nginx**（HTTPS 终止与反向代理）。  
 > 本方案沿用你既往的 Docker 工作流，取代此前「tar 包 + npm + pm2」的旧方案。  
-> 代码已推到 GitHub `main`（当前 HEAD `90541d90`，含 D 类模板 / WBS 文档关联 / 质量门编码自动生成 / 飞书标题修复等全部本轮修复）。
+> 代码与部署文件均已推到 GitHub `main`（当前 HEAD `138eab51`，含 D 类模板 / WBS 文档关联 / 质量门编码自动生成 / 飞书标题修复，以及 Dockerfile / docker-compose / nginx / DEPLOY.md 等部署配置）。
 
 ---
 
@@ -15,12 +15,12 @@
                           └─ Docker 容器 pm-app (node server.js)
                                   ├─ 前端 web/dist（镜像内构建）
                                   ├─ API  /api
-                                  └─ SQLite  /app/data/pm.db  ──▶ 卷 pm-data（持久化）
-                                              /app/data/attachments（上传附件，同卷）
+                                  └─ SQLite  /app/data/pm.db  ──▶ 绑定挂载 ./pm-data（持久化）
+                                              /app/data/attachments（上传附件，同挂载）
 ```
 
 - 容器只把 `3000` 暴露给**宿主机回环**；公网仅开放 `80/443`，由 Nginx 反代。
-- 数据库文件与上传附件都落在 `/app/data` 卷，**重建镜像不丢数据**。
+- 数据库文件与上传附件都落在宿主机 `./pm-data` 绑定挂载，**重建镜像不丢数据**；本地已有数据可整包解压进 `./pm-data` 导入（见 §4.5）。
 
 ---
 
@@ -96,6 +96,35 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ---
 
+## 4.5 导入本地已有数据（首次部署可选）
+
+如果你在本地已有真实数据（`pm.db` + 上传的 `attachments`），希望服务器直接带上，按此步导入。
+
+1. 在本机把本地数据导出为整包（已为你生成）：
+   `C:/Users/xuwen/WorkBuddy/AstrBytes/pm-data-backup/pm-app-data-2026-08-27.tar.gz`
+   （内含 `pm.db` / `pm.db-wal` / `pm.db-shm` / `attachments/`）。
+2. 把该 tar.gz 传到 ECS（任意方式，如 scp / 阿里云工作台上传）：
+   ```bash
+   scp pm-app-data-2026-08-27.tar.gz 用户名@ECS公网IP:~/pm-app-data.tar.gz
+   ```
+3. 在 ECS 的 `pm-app` 目录内解压到 `./pm-data`（**必须在首次 `docker compose up` 之前**，或先停容器再覆盖）：
+   ```bash
+   cd pm-app
+   mkdir -p pm-data
+   tar xzf ~/pm-app-data.tar.gz -C pm-data
+   ls pm-data          # 应见 pm.db 与 attachments/
+   ```
+4. 若容器已先启动过（生成了空 `pm.db`），需重建数据目录再启动：
+   ```bash
+   docker compose down
+   rm -rf pm-data && mkdir -p pm-data
+   tar xzf ~/pm-app-data.tar.gz -C pm-data
+   docker compose up -d --build
+   ```
+5. 启动后 `server.js` 会自动跑迁移（含 v22 risks 表等），旧 schema 的库也能安全升级。
+
+> ⚠ 迁移由程序自动完成，不要手动改 `pm.db`。导入后原本地库与服务端库相互独立，各自继续写各自的位置。
+
 ## 5. 构建并启动容器
 
 ```bash
@@ -111,7 +140,7 @@ docker logs -f pm-app
 [PM] 免密登录(ALLOW_DEV_LOGIN): false
 ```
 
-卷 `pm-data` 自动创建，`pm.db` 与 `attachments` 落在其内。
+首次启动会在 `./pm-data` 下生成 `pm.db` 与 `attachments`；**若有本地数据，请先按 §4.5 解压导入再启动**（或在启动后 `docker compose down` 再覆盖）。
 
 ---
 
@@ -160,11 +189,11 @@ docker compose up -d --build     # 重建镜像；卷内 pm.db 不动，迁移�
 
 ## 9. 备份与回滚
 
-**备份数据库 + 附件（卷）：**
+**备份数据库 + 附件（宿主机 `./pm-data` 绑定挂载，直接打包即可）：**
 
 ```bash
-docker run --rm -v pm-app_pm-data:/data -v $PWD/backup:/backup \
-  alpine tar czf /backup/pm-$(date +%F).tar.gz -C /data .
+# 数据在宿主机 ./pm-data 绑定挂载，直接打包即可
+tar czf pm-$(date +%F).tar.gz -C pm-app/pm-data .
 ```
 
 建议写入 cron，每日一次。
@@ -204,7 +233,7 @@ docker run --rm -v pm-app_pm-data:/data -v $PWD/backup:/backup \
 ### 附：文件清单（本仓库新增）
 
 - `Dockerfile` — 多阶段构建（编译 better-sqlite3 + 构建前端）
-- `docker-compose.yml` — 服务定义 + `pm-data` 卷 + 健康检查
+- `docker-compose.yml` — 服务定义 + `./pm-data` 绑定挂载 + 健康检查
 - `.dockerignore` — 排除依赖/密钥/本地数据进镜像
 - `.env.example` — 生产环境变量模板
 - `nginx/pm-app.conf` — Nginx 反向代理 + HTTPS 示例

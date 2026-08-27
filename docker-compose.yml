@@ -15,13 +15,11 @@ services:
       ATTACHMENT_ROOT: /app/data/attachments
       ALLOW_DEV_LOGIN: "false"
     volumes:
-      - pm-data:/app/data
+      # 绑定挂载：服务器上把本地导出的数据整包解压进 ./pm-data 即可（pm.db + attachments）
+      - ./pm-data:/app/data
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
-
-volumes:
-  pm-data:
