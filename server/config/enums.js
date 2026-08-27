@@ -15,7 +15,7 @@
 
 /* ── 项目 ─────────────────────────────────────────── */
 
-const PROJECT_TYPES = ['A', 'B', 'C'];
+const PROJECT_TYPES = ['A', 'B', 'C', 'D'];
 
 const PROJECT_STATUSES = [
   '草稿',
@@ -123,7 +123,7 @@ const DEFAULT_WBS_RULES = {
 };
 
 /** 粒度上限（人日）：三类一致，叶子任务 >5 人日告警（非阻塞，仅建议拆分） */
-const GRANULARITY_LIMIT = { A: 5, B: 5, C: 5 };
+const GRANULARITY_LIMIT = { A: 5, B: 5, C: 5, D: 5 };
 
 /**
  * 本周实际工时登记上限（人日/次）：B8 R5，工作日志单行 actualDays 上限，

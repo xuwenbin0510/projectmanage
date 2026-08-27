@@ -259,7 +259,7 @@ export function AdminTemplatesPage(): JSX.Element {
       <AdminTabs />
       <PageHeader
         title="内置模板"
-        subtitle="A / B / C 三类项目各自的生命周期定义：里程碑（含质量门）与交付物；停用后建项向导改用其他启用模板"
+        subtitle="A / B / C / D 四类项目各自的生命周期定义：里程碑（含质量门）与交付物；停用后建项向导改用其他启用模板"
         actions={
           <PermissionButton action="admin:user:role" fallback="disable">
             <Button variant="contained" size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
@@ -328,6 +328,7 @@ export function AdminTemplatesPage(): JSX.Element {
               <MenuItem value="A">A 类（交付型）</MenuItem>
               <MenuItem value="B">B 类（产品型）</MenuItem>
               <MenuItem value="C">C 类（基建型）</MenuItem>
+              <MenuItem value="D">D 类（通用轻量型）</MenuItem>
             </TextField>
             <TextField
               label="模板名称（必填）"

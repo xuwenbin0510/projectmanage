@@ -515,7 +515,7 @@ function assertCreatePayload(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
 
   if (!String(p.name || '').trim()) fields.push({ field: 'name', message: '项目名称不能为空' });
-  if (enums.PROJECT_TYPES.indexOf(p.type) < 0) fields.push({ field: 'type', message: '项目类型必须为 A / B / C 之一' });
+  if (enums.PROJECT_TYPES.indexOf(p.type) < 0) fields.push({ field: 'type', message: '项目类型必须为 A / B / C / D 之一' });
   if (!dates.isDate(p.planStart)) fields.push({ field: 'planStart', message: '计划开始日期格式须为 YYYY-MM-DD' });
   if (!dates.isDate(p.planEnd)) fields.push({ field: 'planEnd', message: '计划结束日期格式须为 YYYY-MM-DD' });
   if (dates.isDate(p.planStart) && dates.isDate(p.planEnd) && dates.diffDays(p.planStart, p.planEnd) < 0) {

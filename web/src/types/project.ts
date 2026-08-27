@@ -25,7 +25,7 @@ export type GlobalRole = RoleKey;
 
 export type ProjectRole = RoleKey;
 
-export type ProjectType = 'A' | 'B' | 'C';
+export type ProjectType = 'A' | 'B' | 'C' | 'D';
 
 export type ProjectStatus =
   | '草稿'

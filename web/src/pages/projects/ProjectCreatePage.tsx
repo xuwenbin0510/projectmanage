@@ -906,7 +906,7 @@ export function ProjectCreatePage(): JSX.Element {
       <PageHeader
         title="新建项目"
         crumbs={[{ label: '项目', to: ROUTES.projects }, { label: '新建' }]}
-        subtitle="分类决定生命周期：A 类交付型 / B 类产品型 / C 类基建型"
+        subtitle="分类决定生命周期：A 类交付型 / B 类产品型 / C 类基建型 / D 类通用轻量型"
       />
 
       <SectionCard>

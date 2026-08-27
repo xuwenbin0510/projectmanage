@@ -678,7 +678,7 @@ router.delete(
 
 /* ── 生命周期模板管理（阶段三：内置模板 CRUD + 节点编辑） ────── */
 
-const PROJECT_TYPES = ['A', 'B', 'C'];
+const PROJECT_TYPES = ['A', 'B', 'C', 'D'];
 
 /**
  * 校验并规范化模板 definition（整包替换语义）。
@@ -814,7 +814,7 @@ router.post(
     const name = String(body.name || '').trim();
     if (PROJECT_TYPES.indexOf(projectType) < 0) {
       throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-        fields: [{ field: 'projectType', message: '适用分类必须为 A / B / C' }],
+        fields: [{ field: 'projectType', message: '适用分类必须为 A / B / C / D' }],
       });
     }
     if (!name) {
