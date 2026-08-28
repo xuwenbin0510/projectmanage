@@ -893,20 +893,25 @@ function computeOwnerOptions(db, projectIds) {
   const ids = (projectIds || []).map(String).filter(Boolean);
   if (!ids.length) return [];
 
-  const map = {}; // openId → name（先到先得）
+  const map = {}; // openId → name
   chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
     db.prepare(
-      'SELECT DISTINCT w.owner AS open_id, u.name AS user_name '
+      'SELECT DISTINCT w.owner AS open_id, w.owner_user_id AS user_id, '
+      + 'u.name AS name_by_uid, u2.name AS name_by_oid '
       + 'FROM wbs_nodes w '
-      + 'LEFT JOIN users u ON u.open_id = w.owner '
+      + 'LEFT JOIN users u ON u.id = w.owner_user_id '
+      + 'LEFT JOIN users u2 ON u2.open_id = w.owner '
       + 'WHERE w.project_id IN (' + placeholders(part) + ') '
       + "AND w.owner IS NOT NULL AND w.owner != '' "
       + 'AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)',
     )
       .all(part)
       .forEach(function (r) {
-        if (map[r.open_id] === undefined) {
-          map[r.open_id] = r.user_name || mappers.REMOVED_USER_NAME;
+        const name = r.name_by_uid || r.name_by_oid || mappers.REMOVED_USER_NAME;
+        // 同 open_id 可能因「首行 owner_user_id 未回填」而先写入 (已移除)，
+        // 后续已解析行应覆盖；已回填的 user_id 路径优先于遗留 open_id 回退路径。
+        if (map[r.open_id] === undefined || map[r.open_id] === mappers.REMOVED_USER_NAME) {
+          map[r.open_id] = name;
         }
       });
   });
@@ -1208,7 +1213,7 @@ function getDashboardGates(db, query, me) {
     const args = part.slice();
     if (gateStatus) { where.push('g.status = ?'); args.push(gateStatus); }
     db.prepare(
-      'SELECT g.id, g.project_id, g.milestone_id, g.code, g.name, g.status, g.decided_by, g.decided_at, m.name AS milestone_name '
+      'SELECT g.id, g.project_id, g.milestone_id, g.code, g.name, g.status, g.decided_by, g.decided_by_user_id, g.decided_at, m.name AS milestone_name '
       + 'FROM quality_gates g LEFT JOIN milestones m ON m.id = g.milestone_id '
       + 'WHERE ' + where.join(' AND '),
     )
@@ -1227,7 +1232,8 @@ function getDashboardGates(db, query, me) {
         code: mappers.toStr(r.code),
         name: mappers.toStr(r.name),
         status: mappers.toStr(r.status, '未开始'),
-        decidedByName: nameOf(mappers.toStr(r.decided_by)),
+        // 设计修正：优先用 users.id（decided_by_user_id）解析姓名，open_id 仅兜底
+        decidedByName: nameOf(mappers.toStr(r.decided_by_user_id)) || nameOf(mappers.toStr(r.decided_by)),
         decidedAt: mappers.toStr(r.decided_at),
       };
     })
@@ -1274,7 +1280,7 @@ function getDashboardDeliverables(db, query, me) {
     const args = part.slice();
     if (docStatus) { where.push('d.status = ?'); args.push(docStatus); }
     db.prepare(
-      'SELECT d.id, d.project_id, d.template_key, d.name, d.version, d.status, d.baseline_flag, d.baselined_at, d.baselined_by, d.uploaded_by, d.uploaded_at '
+      'SELECT d.id, d.project_id, d.template_key, d.name, d.version, d.status, d.baseline_flag, d.baselined_at, d.baselined_by, d.baselined_by_user_id, d.uploaded_by, d.uploaded_by_user_id, d.uploaded_at '
       + 'FROM project_documents d WHERE ' + where.join(' AND '),
     )
       .all(args)
@@ -1293,8 +1299,9 @@ function getDashboardDeliverables(db, query, me) {
         status: mappers.toStr(r.status, '已交付'),
         baselineFlag: mappers.toNum(r.baseline_flag, 0) === 1,
         baselinedAt: mappers.toStr(r.baselined_at),
-        baselinedByName: nameOf(mappers.toStr(r.baselined_by)),
-        uploadedByName: nameOf(mappers.toStr(r.uploaded_by)),
+        // 设计修正：优先用 users.id 解析姓名，open_id 仅兜底
+        baselinedByName: nameOf(mappers.toStr(r.baselined_by_user_id)) || nameOf(mappers.toStr(r.baselined_by)),
+        uploadedByName: nameOf(mappers.toStr(r.uploaded_by_user_id)) || nameOf(mappers.toStr(r.uploaded_by)),
         uploadedAt: mappers.toStr(r.uploaded_at),
       };
     })

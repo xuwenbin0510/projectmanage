@@ -56,8 +56,7 @@ export interface WeeklyProgressPanelProps {
   loading?: boolean;
 }
 
-/** 单块列表最多展示条数（其余以「共 N 条」提示，避免长列表撑爆面板） */
-const MAX_ITEMS = 10;
+/** 各区块不再硬截断：列表统一由 Block 的 maxHeight:340 滚动区承载，顶部 chip 显示真实总数 */
 
 /* ── 单块容器 ───────────────────────────────────────── */
 interface BlockProps {
@@ -617,14 +616,9 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
                 gridTemplateColumns: { xs: '1fr', xl: 'repeat(2, 1fr)' },
               }}
             >
-              {data.delta.tasks.slice(0, MAX_ITEMS).map((t) => (
+              {data.delta.tasks.map((t) => (
                 <DeltaRow key={t.nodeId} t={t} />
               ))}
-              {data.delta.tasks.length > MAX_ITEMS && (
-                <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center', gridColumn: '1 / -1' }}>
-                  共 {data.delta.tasks.length} 条变化，仅显示前 {MAX_ITEMS} 条
-                </Typography>
-              )}
             </Box>
           )}
         </Box>
@@ -649,14 +643,9 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             emptyText="上周暂无周报"
             caption="按提交时间倒序 · 点击卡片查看完整周报"
           >
-            {reports.slice(0, MAX_ITEMS).map((r) => (
+            {reports.map((r) => (
               <ReportRow key={r.id} r={r} onOpen={openReportDetail} />
             ))}
-            {reports.length > MAX_ITEMS && (
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
-                共 {reports.length} 条，仅显示前 {MAX_ITEMS} 条
-              </Typography>
-            )}
           </Block>
 
           <Block
@@ -667,14 +656,9 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             emptyDescription="周报里勾选的关键任务进度会自动汇总到这里，便于周例会快速回顾。"
             caption="按任务最后更新时间（物理时间）落在上周统计"
           >
-            {tasks.slice(0, MAX_ITEMS).map((t) => (
+            {tasks.map((t) => (
               <TaskRow key={t.id} t={t} />
             ))}
-            {tasks.length > MAX_ITEMS && (
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
-                共 {tasks.length} 条，仅显示前 {MAX_ITEMS} 条
-              </Typography>
-            )}
           </Block>
 
           <Block
@@ -684,14 +668,9 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             emptyText="上周暂无里程碑达成"
             fullWidth
           >
-            {milestones.slice(0, MAX_ITEMS).map((m) => (
+            {milestones.map((m) => (
               <MilestoneRow key={m.id} m={m} />
             ))}
-            {milestones.length > MAX_ITEMS && (
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
-                共 {milestones.length} 条，仅显示前 {MAX_ITEMS} 条
-              </Typography>
-            )}
           </Block>
         </Box>
       )}

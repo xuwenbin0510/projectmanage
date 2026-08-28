@@ -165,13 +165,16 @@ function decideGate(db, req, projectId, gateId, payload) {
     }
 
     const before = mappers.toStr(gate.status, '未开始');
+    // 设计修正：边界把 open_id 解析为系统稳定身份键 users.id 落库
+    const decidedByUserId = mappers.resolveUserId(db, me.open_id !== undefined ? me.open_id : me.openId);
     db.prepare(
-      'UPDATE quality_gates SET status = ?, conclusion = ?, comment = ?, decided_by = ?, decided_at = ? WHERE id = ?'
+      'UPDATE quality_gates SET status = ?, conclusion = ?, comment = ?, decided_by = ?, decided_by_user_id = ?, decided_at = ? WHERE id = ?'
     ).run(
       conclusion,
       conclusion,
       String(p.comment === undefined || p.comment === null ? '' : p.comment),
       mappers.toStr(me.open_id !== undefined ? me.open_id : me.openId),
+      decidedByUserId,
       dates.today(),
       String(gate.id)
     );
@@ -375,7 +378,7 @@ function addGateToMilestone(db, req, projectId, milestoneId, payload) {
     const gateId = String(projectId) + '-' + String(milestoneId) + '-G';
     const now = new Date().toISOString();
     db.prepare(
-      'INSERT INTO quality_gates (id, project_id, milestone_id, code, name, owner_role, status, conclusion, comment, decided_by, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)',
+      'INSERT INTO quality_gates (id, project_id, milestone_id, code, name, owner_role, status, conclusion, comment, decided_by, decided_by_user_id, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?)',
     ).run(gateId, String(projectId), String(milestoneId), code, name, ownerRole, '未开始', now);
 
     items.forEach(function (it) {

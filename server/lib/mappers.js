@@ -152,21 +152,65 @@ function parseClassifyInput(raw) {
  */
 function makeNameLookup(db) {
   const cache = new Map();
-  const stmt = db.prepare('SELECT name FROM users WHERE open_id = ?');
-  return function nameOf(openId) {
-    const key = toStr(openId);
-    if (!key) return '';
-    if (cache.has(key)) return cache.get(key);
+  const byOpen = db.prepare('SELECT name FROM users WHERE open_id = ?');
+  const byId = db.prepare('SELECT name FROM users WHERE id = ?');
+  return function nameOf(key) {
+    const k = toStr(key);
+    if (!k) return '';
+    if (cache.has(k)) return cache.get(k);
     let name = REMOVED_USER_NAME;
     try {
-      const row = stmt.get(key);
+      // 设计修正：身份键统一为 users.id；open_id 仅作边界解析用，此处两者皆接受
+      const row = /^\d+$/.test(k) ? byId.get(k) : byOpen.get(k);
       if (row && row.name) name = String(row.name);
     } catch (e) {
       name = REMOVED_USER_NAME;
     }
-    cache.set(key, name);
+    cache.set(k, name);
     return name;
   };
+}
+
+/**
+ * 边界解析：把飞书 `open_id` / `union_id` 解析为系统稳定身份键 `users.id`。
+ *
+ * 设计修正核心：open_id 仅用于飞书免登 / 导入边界，系统内部一律只认、只存 `users.id`。
+ * 任何写路径在落库前都应调用本函数把身份归一为 `users.id`，再写入 `xxx_user_id` 列。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string|number|null} [openId] 飞书 open_id / union_id；本地账号为 `local_...` 形式（同样存于 users.open_id）
+ * @returns {number|null} 命中返回 users.id（数字），未命中返回 null
+ */
+function resolveUserId(db, openId) {
+  if (openId == null || openId === '') return null;
+  const s = toStr(openId);
+  try {
+    const row = db.prepare('SELECT id FROM users WHERE open_id = ? OR union_id = ?').get(s, s);
+    return row ? row.id : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 边界解析（姓名型来源）：把责任人姓名解析为系统稳定身份键 `users.id`。
+ *
+ * 历史数据里 `risks.owner` / `work_report_risks.owner` 存的就是姓名（而非 open_id），
+ * 边界写入时据此归一为 `users.id` 落 `xxx_user_id` 列。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string|null} [name]
+ * @returns {number|null}
+ */
+function resolveUserIdByName(db, name) {
+  if (name == null || name === '') return null;
+  const s = toStr(name);
+  try {
+    const row = db.prepare('SELECT id FROM users WHERE name = ?').get(s);
+    return row ? row.id : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /* ── User ───────────────────────────────────────────── */
@@ -295,7 +339,11 @@ function toApiMember(row, nameOf) {
   if (!row) return null;
   const openId = toStr(row.user_open_id);
   let userName = toStr(row.user_name);
-  if (!userName) userName = typeof nameOf === 'function' ? nameOf(openId) : REMOVED_USER_NAME;
+  if (!userName) {
+    // 设计修正：优先用 member_user_id（users.id）解析姓名，open_id 仅兜底
+    const key = row.member_user_id != null && row.member_user_id !== '' ? row.member_user_id : openId;
+    userName = typeof nameOf === 'function' ? nameOf(key) : REMOVED_USER_NAME;
+  }
   return {
     id: toStr(row.id),
     projectId: toStr(row.project_id),
@@ -312,10 +360,16 @@ function toApiMember(row, nameOf) {
 /**
  * quality_gates 行 → API `QualityGate`。
  * @param {object} row
+ * @param {(key:string)=>string} [nameOf] 姓名解析器（`makeNameLookup(db)`）
  * @returns {object|null}
  */
-function toApiGate(row) {
+function toApiGate(row, nameOf) {
   if (!row) return null;
+  const nameOfFn = typeof nameOf === 'function' ? nameOf : null;
+  // 设计修正：优先用 decided_by_user_id（users.id，稳定身份键）解析姓名，open_id 仅兜底
+  const decidedByName = nameOfFn
+    ? (row.decided_by_user_id != null ? nameOfFn(String(row.decided_by_user_id)) : (row.decided_by ? nameOfFn(String(row.decided_by)) : ''))
+    : '';
   return {
     id: toStr(row.id),
     projectId: toStr(row.project_id),
@@ -327,6 +381,7 @@ function toApiGate(row) {
     conclusion: toStr(row.conclusion),
     comment: toStr(row.comment),
     decidedBy: toNull(row.decided_by),
+    decidedByName: decidedByName,
     decidedAt: toNull(row.decided_at),
     createdAt: toStr(row.created_at),
   };
@@ -428,7 +483,9 @@ function toApiMilestoneWithGate(milestone, gate, gateItems, taskStats) {
 function toApiWbsNode(row, nameOf) {
   if (!row) return null;
   const owner = toStr(row.owner);
-  const ownerName = owner && typeof nameOf === 'function' ? nameOf(owner) : '';
+  // 设计修正：优先用 owner_user_id（users.id，稳定身份键）解析姓名，open_id 仅兜底
+  const ownerKey = row.owner_user_id != null ? row.owner_user_id : owner;
+  const ownerName = (owner || row.owner_user_id != null) && typeof nameOf === 'function' ? nameOf(ownerKey) : '';
   return {
     id: toStr(row.id),
     projectId: toStr(row.project_id),
@@ -568,6 +625,8 @@ module.exports = {
   parseClassifyInput,
   defaultClassifyInput,
   makeNameLookup,
+  resolveUserId,
+  resolveUserIdByName,
   toApiUser,
   toApiProject,
   toApiProjectListItem,

@@ -24,6 +24,7 @@ const { refreshRoleCatalog } = roleCatalog;
 const projectService = require('../services/project.service');
 const feishuContacts = require('../lib/feishu_contacts');
 const feishuImport = require('../services/feishuImport.service');
+const mappers = require('../lib/mappers');
 
 const router = express.Router();
 
@@ -246,10 +247,12 @@ router.patch(
       const tx = db.transaction(function () {
         db.prepare('DELETE FROM user_roles WHERE user_open_id = ?').run(effectiveOpenId);
         const ins = db.prepare(
-          'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at) VALUES (?, ?, ?, ?, ?)',
+          'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at, role_user_id, assigned_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
         );
         (pendingExtraRoles || []).forEach(function (role) {
-          ins.run(genId('UR'), effectiveOpenId, role, String(req.user.open_id || ''), now);
+          // 设计修正：边界把 open_id 解析为系统稳定身份键 users.id 落库
+          ins.run(genId('UR'), effectiveOpenId, role, String(req.user.open_id || ''), now,
+            mappers.resolveUserId(db, effectiveOpenId), mappers.resolveUserId(db, req.user.open_id || ''));
         });
       });
       tx();
@@ -415,10 +418,12 @@ router.post(
     // E1.5：写入额外全局职位
     if (extra.length) {
       const ins = db.prepare(
-        'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at) VALUES (?, ?, ?, ?, ?)',
+        'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at, role_user_id, assigned_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       );
       extra.forEach(function (r) {
-        ins.run(genId('UR'), openId, r, String(req.user.open_id || ''), now);
+        // 设计修正：边界把 open_id 解析为系统稳定身份键 users.id 落库
+        ins.run(genId('UR'), openId, r, String(req.user.open_id || ''), now,
+          mappers.resolveUserId(db, openId), mappers.resolveUserId(db, req.user.open_id || ''));
       });
     }
 
@@ -1203,9 +1208,9 @@ router.put(
           const granted = !!row[roleKey];
           if (roleKey === 'admin' && !granted) return; // 🔴 防锁死：永不取消 admin 授权
           db.prepare(
-            'INSERT INTO permission_rules (action, role_key, granted, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) '
-            + 'ON CONFLICT(action, role_key) DO UPDATE SET granted = excluded.granted, updated_at = excluded.updated_at, updated_by = excluded.updated_by',
-          ).run(action, roleKey, granted ? 1 : 0, nowIso(), String((req.user && (req.user.open_id || req.user.openId)) || 'admin'));
+            'INSERT INTO permission_rules (action, role_key, granted, updated_at, updated_by, updated_by_user_id) VALUES (?, ?, ?, ?, ?, ?) '
+            + 'ON CONFLICT(action, role_key) DO UPDATE SET granted = excluded.granted, updated_at = excluded.updated_at, updated_by = excluded.updated_by, updated_by_user_id = excluded.updated_by_user_id',
+          ).run(action, roleKey, granted ? 1 : 0, nowIso(), String((req.user && (req.user.open_id || req.user.openId)) || 'admin'), mappers.resolveUserId(db, (req.user && (req.user.open_id || req.user.openId)) || 'admin'));
         });
       });
     });
@@ -1240,7 +1245,7 @@ router.post(
           // 仅对启用角色种入；admin 恒 true（DEFAULT_PERMISSIONS 已含）
           if (!enabledRoles.has(roleKey)) return;
           db.prepare(
-            'INSERT OR IGNORE INTO permission_rules (action, role_key, granted, updated_at, updated_by) VALUES (?, ?, 1, ?, ?)',
+            'INSERT OR IGNORE INTO permission_rules (action, role_key, granted, updated_at, updated_by, updated_by_user_id) VALUES (?, ?, 1, ?, ?, NULL)',
           ).run(action, roleKey, nowIso(), 'reset');
         });
       });

@@ -40,7 +40,11 @@ function toApiChange(db, row) {
     payload = {};
   }
   let createdByName = '';
-  if (row.created_by) {
+  if (row.created_by_user_id) {
+    const u = db.prepare('SELECT name FROM users WHERE id = ?').get(Number(row.created_by_user_id));
+    createdByName = u ? mappers.toStr(u.name) : '';
+  }
+  if (!createdByName && row.created_by) {
     const u = db.prepare('SELECT name FROM users WHERE open_id = ?').get(String(row.created_by));
     createdByName = u ? mappers.toStr(u.name) : '';
   }
@@ -167,18 +171,19 @@ function createChange(db, req, projectId, payload) {
 
     const ts = dates.nowIso();
     const payloadJson = JSON.stringify(p.payload || {});
+    const createdByUserId = mappers.resolveUserId(db, openId);
 
     db.prepare(
       `INSERT INTO changes (
         id, project_id, change_type, title, content, impact_analysis, effort_days,
-        target_type, target_id, status, route, created_by, created_at, updated_at,
+        target_type, target_id, status, route, created_by, created_by_user_id, created_at, updated_at,
         code, payload
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '草稿', ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '草稿', ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id, String(projectId), changeType, title, mappers.toStr(p.content),
       mappers.toStr(p.impactAnalysis), Number(p.effortDays) || 0,
       mappers.toStr(p.targetType), mappers.toStr(p.targetId),
-      routing.route, openId, ts, ts, code, payloadJson,
+      routing.route, openId, createdByUserId, ts, ts, code, payloadJson,
     );
 
     writeAudit(db, me, 'change', id, 'create', String(projectId), '创建变更单 ' + code + '「' + title + '」（路由：' + routing.route + '）');

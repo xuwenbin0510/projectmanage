@@ -232,7 +232,7 @@ function listMembers(db, projectId) {
     .prepare(
       `SELECT m.*, u.name AS user_name
          FROM project_members m
-         LEFT JOIN users u ON u.open_id = m.user_open_id
+         LEFT JOIN users u ON u.id = m.member_user_id
         WHERE m.project_id = ?
         ORDER BY m.assigned_at ASC, m.id ASC`,
     )
@@ -343,11 +343,12 @@ function loadListContext(db, projectIds) {
   const ctx = { pmName: {}, milestones: {}, gates: {} };
   if (!projectIds.length) return ctx;
   const placeholders = projectIds.map(function () { return '?'; }).join(',');
+  const nameOf = mappers.makeNameLookup(db);
 
   db.prepare(
     `SELECT m.project_id, m.user_open_id, u.name AS user_name
        FROM project_members m
-       LEFT JOIN users u ON u.open_id = m.user_open_id
+       LEFT JOIN users u ON u.id = m.member_user_id
       WHERE m.project_id IN (` + placeholders + `) AND m.project_role = 'pm'
       ORDER BY m.assigned_at ASC`,
   )
@@ -368,7 +369,7 @@ function loadListContext(db, projectIds) {
   db.prepare('SELECT * FROM quality_gates WHERE project_id IN (' + placeholders + ')')
     .all(projectIds)
     .forEach(function (r) {
-      const g = mappers.toApiGate(r);
+      const g = mappers.toApiGate(r, nameOf);
       if (!ctx.gates[g.projectId]) ctx.gates[g.projectId] = [];
       ctx.gates[g.projectId].push(g);
     });
@@ -750,17 +751,17 @@ function createProject(db, payload, me) {
       id, code, name, type, classify_input, classify_suggested, classify_override_reason,
       customer, contract_amount, background, goal, status, health,
       plan_start, plan_end, actual_end, approval_step, template_id,
-      pm, approved_by, created_by, created_at, updated_at, deleted_at
+      pm, approved_by, created_by, created_by_user_id, created_at, updated_at, deleted_at
     ) VALUES (
       @id, @code, @name, @type, @classify_input, @classify_suggested, @classify_override_reason,
       @customer, @contract_amount, @background, @goal, @status, @health,
       @plan_start, @plan_end, NULL, @approval_step, @template_id,
-      @pm, NULL, @created_by, @created_at, @updated_at, NULL
+      @pm, NULL, @created_by, @created_by_user_id, @created_at, @updated_at, NULL
     )
   `);
   const insMember = db.prepare(`
-    INSERT INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at, member_user_id, assigned_by_user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insMilestone = db.prepare(`
     INSERT INTO milestones (
@@ -794,6 +795,7 @@ function createProject(db, payload, me) {
 
   const pmMember = (payload.members || []).filter(function (m) { return m.role === 'pm'; })[0];
   const createdBy = me && me.open_id ? String(me.open_id) : '';
+  const createdByUserId = me && me.id != null ? Number(me.id) : mappers.resolveUserId(db, createdBy);
 
   const tx = db.transaction(function () {
     insProject.run({
@@ -816,6 +818,7 @@ function createProject(db, payload, me) {
       template_id: tpl.id,
       pm: pmMember ? String(pmMember.userOpenId) : createdBy,
       created_by: createdBy,
+      created_by_user_id: createdByUserId,
       created_at: ts,
       updated_at: ts,
     });
@@ -828,6 +831,8 @@ function createProject(db, payload, me) {
         String(m.role),
         createdBy,
         ts,
+        mappers.resolveUserId(db, m.userOpenId),
+        createdByUserId,
       );
     });
 
@@ -837,7 +842,7 @@ function createProject(db, payload, me) {
       return m.role === 'pm' && String(m.userOpenId) === createdBy;
     });
     if (createdBy && !creatorIsPm) {
-      insMember.run(projectId + '-MBC', projectId, createdBy, 'pm', createdBy, ts);
+      insMember.run(projectId + '-MBC', projectId, createdBy, 'pm', createdBy, createdByUserId, createdByUserId);
     }
 
     specList.forEach(function (spec, idx) {

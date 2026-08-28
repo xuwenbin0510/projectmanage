@@ -375,6 +375,8 @@ function createReview(db, payload, me) {
   const ts = dates.nowIso();
   const openId = mappers.toStr(me && (me.open_id !== undefined ? me.open_id : me.openId));
   const name = mappers.toStr(me && (me.name !== undefined ? me.name : ''));
+  // 设计修正：以 users.id 作为稳定身份键落库
+  const actorUserId = me && me.id != null ? Number(me.id) : mappers.resolveUserId(db, openId);
 
   const steps = buildSteps(db, id, projectId, chain, p.assignees);
   if (mode === 'parallel_veto') {
@@ -384,28 +386,28 @@ function createReview(db, payload, me) {
   const insertReview = db.prepare(`
     INSERT INTO reviews (
       id, project_id, ref_type, ref_id, review_type, title, template_key, mode,
-      status, current_step, initiator_open_id, initiator_name, created_at, updated_at, closed_at
+      status, current_step, initiator_open_id, initiator_name, initiator_user_id, created_at, updated_at, closed_at
     ) VALUES (
       @id, @project_id, @ref_type, @ref_id, @review_type, @title, @template_key, @mode,
-      '审批中', 0, @initiator_open_id, @initiator_name, @created_at, @updated_at, NULL
+      '审批中', 0, @initiator_open_id, @initiator_name, @initiator_user_id, @created_at, @updated_at, NULL
     )
   `);
   const insertStep = db.prepare(`
     INSERT INTO review_steps (
-      id, review_id, step_index, role, assignee_open_id, assignee_name,
+      id, review_id, step_index, role, assignee_open_id, assignee_name, assignee_user_id,
       required, status, decided_by, decided_by_name, decided_at, comment
     ) VALUES (
-      @id, @review_id, @step_index, @role, @assignee_open_id, @assignee_name,
+      @id, @review_id, @step_index, @role, @assignee_open_id, @assignee_name, @assignee_user_id,
       1, @status, NULL, '', NULL, ''
     )
   `);
   const insertApproval = db.prepare(`
     INSERT INTO review_approvals (
       id, review_id, project_id, step_index, step_role,
-      actor_open_id, actor_name, action, comment, evidence_url, created_at
+      actor_open_id, actor_name, actor_user_id, action, comment, evidence_url, created_at
     ) VALUES (
       @id, @review_id, @project_id, @step_index, @step_role,
-      @actor_open_id, @actor_name, @action, @comment, @evidence_url, @created_at
+      @actor_open_id, @actor_name, @actor_user_id, @action, @comment, @evidence_url, @created_at
     )
   `);
 
@@ -424,6 +426,7 @@ function createReview(db, payload, me) {
       mode: mode,
       initiator_open_id: openId,
       initiator_name: name,
+      initiator_user_id: actorUserId,
       created_at: ts,
       updated_at: ts,
     });
@@ -435,6 +438,7 @@ function createReview(db, payload, me) {
         role: s.role,
         assignee_open_id: s.assigneeOpenId,
         assignee_name: s.assigneeName,
+        assignee_user_id: mappers.resolveUserId(db, s.assigneeOpenId),
         status: s.status,
       });
     });
@@ -447,6 +451,7 @@ function createReview(db, payload, me) {
       step_role: 'initiator',
       actor_open_id: openId,
       actor_name: name,
+      actor_user_id: actorUserId,
       action: 'submit',
       comment: '发起评审',
       evidence_url: '',
@@ -540,6 +545,7 @@ function decide(db, id, action, payload, me) {
   // E1.5：全局职位取并集传入
   const globalRoles = resolveGlobalRoles(me);
   const actorName = mappers.toStr(me && (me.name !== undefined ? me.name : ''));
+  const actorUserId = me && me.id != null ? Number(me.id) : mappers.resolveUserId(db, openId);
 
   const review = toApiReview(db, row);
   const step = canDecide(review, openId, globalRoles);
@@ -561,14 +567,14 @@ function decide(db, id, action, payload, me) {
 
   const tx = db.transaction(function () {
     db.prepare(
-      "UPDATE review_steps SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ?, comment = ? WHERE id = ?"
-    ).run(stepStatus, openId, actorName, ts, comment, step.id);
+      "UPDATE review_steps SET status = ?, decided_by = ?, decided_by_name = ?, decided_by_user_id = ?, decided_at = ?, comment = ? WHERE id = ?"
+    ).run(stepStatus, openId, actorName, actorUserId, ts, comment, step.id);
 
     db.prepare(`
       INSERT INTO review_approvals (
         id, review_id, project_id, step_index, step_role,
-        actor_open_id, actor_name, action, comment, evidence_url, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        actor_open_id, actor_name, actor_user_id, action, comment, evidence_url, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       genId('AP'),
       id,
@@ -577,6 +583,7 @@ function decide(db, id, action, payload, me) {
       step.role,
       openId,
       actorName,
+      actorUserId,
       action,
       comment,
       evidenceUrl,
@@ -716,6 +723,7 @@ function withdrawReview(db, id, payload, me) {
   const comment = mappers.toStr(body.comment || '');
   const evidenceUrl = mappers.toStr(body.evidenceUrl || '');
   const actorName = mappers.toStr(me && (me.name !== undefined ? me.name : ''));
+  const actorUserId = me && me.id != null ? Number(me.id) : mappers.resolveUserId(db, openId);
   const ts = dates.nowIso();
 
   const tx = db.transaction(function () {
@@ -725,8 +733,8 @@ function withdrawReview(db, id, payload, me) {
     db.prepare(`
       INSERT INTO review_approvals (
         id, review_id, project_id, step_index, step_role,
-        actor_open_id, actor_name, action, comment, evidence_url, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        actor_open_id, actor_name, actor_user_id, action, comment, evidence_url, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       genId('AP'),
       id,
@@ -735,6 +743,7 @@ function withdrawReview(db, id, payload, me) {
       'initiator',
       openId,
       actorName,
+      actorUserId,
       'withdraw',
       comment,
       evidenceUrl,

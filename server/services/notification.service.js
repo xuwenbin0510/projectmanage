@@ -12,6 +12,7 @@
 
 const ids = require('../lib/ids');
 const dates = require('../lib/dates');
+const mappers = require('../lib/mappers');
 
 /** 合法通知类型（写入时校验，避免脏 type 进库） */
 const NOTIFICATION_TYPES = {
@@ -84,8 +85,8 @@ function notify(db, opts) {
 
   const ts = dates.nowIso();
   const ins = db.prepare(`
-    INSERT INTO notifications (id, user_open_id, project_id, type, title, body, ref_type, ref_id, is_read, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    INSERT INTO notifications (id, user_open_id, user_id, project_id, type, title, body, ref_type, ref_id, is_read, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
   `);
 
   const tx = db.transaction(function () {
@@ -95,6 +96,7 @@ function notify(db, opts) {
       ins.run(
         id,
         openId,
+        mappers.resolveUserId(db, openId),
         String(opts.projectId || ''),
         type,
         String(opts.title || ''),

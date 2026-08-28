@@ -132,8 +132,8 @@ router.get(
           status: r.status === '已交付' ? '已交付' : '待交付',
           baselineFlag: !!mappers.toNum(r.baseline_flag, 0),
           baselinedAt: r.baselined_at ? String(r.baselined_at) : '',
-          baselinedByName: r.baselined_by ? nameOf(String(r.baselined_by)) : '',
-          uploadedByName: r.uploaded_by ? nameOf(String(r.uploaded_by)) : '',
+          baselinedByName: r.baselined_by_user_id != null ? nameOf(String(r.baselined_by_user_id)) : (r.baselined_by ? nameOf(String(r.baselined_by)) : ''),
+          uploadedByName: r.uploaded_by_user_id != null ? nameOf(String(r.uploaded_by_user_id)) : (r.uploaded_by ? nameOf(String(r.uploaded_by)) : ''),
           uploadedAt: r.uploaded_at ? String(r.uploaded_at) : '',
         });
       });

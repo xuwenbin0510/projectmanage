@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const cfg = require('../../config');
 const { AppError, ErrorCode } = require('../lib/errors');
+const mappers = require('../lib/mappers');
 const { writeAudit } = require('../lib/audit');
 
 /**
@@ -35,7 +36,15 @@ function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function mapRow(r) {
+function mapRow(r, nameOf) {
+  // 设计修正：优先用 *_user_id（users.id，稳定身份键）解析姓名，open_id 仅兜底
+  const nameOfFn = typeof nameOf === 'function' ? nameOf : null;
+  const nameFor = function (userId, fallbackKey) {
+    if (!nameOfFn) return '';
+    const key = userId != null ? userId : (fallbackKey || null);
+    if (key == null) return '';
+    return nameOfFn(key);
+  };
   return {
     id: r.id,
     projectId: r.project_id,
@@ -54,7 +63,9 @@ function mapRow(r) {
     baselineFlag: r.baseline_flag ? 1 : 0,
     baselinedAt: r.baselined_at || '',
     baselinedBy: r.baselined_by || '',
+    baselinedByName: nameFor(r.baselined_by_user_id, r.baselined_by),
     uploadedBy: r.uploaded_by || '',
+    uploadedByName: nameFor(r.uploaded_by_user_id, r.uploaded_by),
     uploadedAt: r.uploaded_at,
     createdAt: r.created_at,
   };
@@ -77,7 +88,8 @@ function listDocuments(db, projectId, opts) {
   if (opts.nodeId) { sql += ' AND node_id = ?'; params.push(opts.nodeId); }
   if (opts.milestoneId) { sql += ' AND milestone_id = ?'; params.push(opts.milestoneId); }
   sql += ' ORDER BY created_at DESC';
-  return db.prepare(sql).all(...params).map(mapRow);
+  const nameOf = mappers.makeNameLookup(db);
+  return db.prepare(sql).all(...params).map(function (r) { return mapRow(r, nameOf); });
 }
 
 /**
@@ -165,7 +177,7 @@ function ensureTemplateDerived(db, projectId) {
 function getDocument(db, id) {
   const r = db.prepare('SELECT * FROM project_documents WHERE id = ?').get(id);
   if (!r) throw new AppError(ErrorCode.E_NOT_FOUND, '附件不存在');
-  return mapRow(r);
+  return mapRow(r, mappers.makeNameLookup(db));
 }
 
 /**
@@ -240,7 +252,7 @@ function uploadDocument(db, projectId, payload) {
         `UPDATE project_documents SET
           node_id = @nodeId, milestone_id = @milestoneId, name = @name, file_name = @fileName,
           file_size = @fileSize, mime_type = @mimeType, storage_path = @storagePath,
-          doc_type = 'file', url = '', uploaded_by = @uploadedBy, uploaded_at = @uploadedAt,
+          doc_type = 'file', url = '', uploaded_by = @uploadedBy, uploaded_by_user_id = @uploadedByUserId, uploaded_at = @uploadedAt,
           status = '已交付', version = @version${existing.baseline_flag ? ', baselined_at = @baselinedAt' : ''}
          WHERE id = @id`,
       ).run({
@@ -253,6 +265,7 @@ function uploadDocument(db, projectId, payload) {
         mimeType: mime,
         storagePath: path.join(projectId, storedName),
         uploadedBy: (payload.me && payload.me.open_id) || '',
+        uploadedByUserId: mappers.resolveUserId(db, (payload.me && payload.me.open_id) || ''),
         uploadedAt: now,
         version: nextVersion,
         baselinedAt: now,
@@ -272,10 +285,10 @@ function uploadDocument(db, projectId, payload) {
   db.prepare(
     `INSERT INTO project_documents
       (id, project_id, node_id, milestone_id, name, file_name, file_size, mime_type,
-       storage_path, doc_type, url, uploaded_by, uploaded_at, created_at,
+       storage_path, doc_type, url, uploaded_by, uploaded_by_user_id, uploaded_at, created_at,
        template_key, status, version, baseline_flag)
      VALUES (@id, @projectId, @nodeId, @milestoneId, @name, @fileName, @fileSize, @mimeType,
-       @storagePath, 'file', '', @uploadedBy, @uploadedAt, @createdAt,
+       @storagePath, 'file', '', @uploadedBy, @uploadedByUserId, @uploadedAt, @createdAt,
        '', '已交付', 1, 0)`
   ).run({
     id: id,
@@ -288,6 +301,7 @@ function uploadDocument(db, projectId, payload) {
     mimeType: mime,
     storagePath: path.join(projectId, storedName),
     uploadedBy: (payload.me && payload.me.open_id) || '',
+    uploadedByUserId: mappers.resolveUserId(db, (payload.me && payload.me.open_id) || ''),
     uploadedAt: now,
     createdAt: now,
   });
@@ -346,8 +360,10 @@ function baselineDocument(db, req, projectId, docId) {
   const me = req.user || {};
   const now = new Date().toISOString();
   const openId = me.open_id !== undefined ? me.open_id : me.openId;
-  db.prepare('UPDATE project_documents SET baseline_flag = 1, baselined_at = ?, baselined_by = ? WHERE id = ?')
-    .run(now, String(openId || ''), String(docId));
+  // 设计修正：边界把 open_id 解析为系统稳定身份键 users.id 落库
+  const baselinedByUserId = mappers.resolveUserId(db, openId);
+  db.prepare('UPDATE project_documents SET baseline_flag = 1, baselined_at = ?, baselined_by = ?, baselined_by_user_id = ? WHERE id = ?')
+    .run(now, String(openId || ''), baselinedByUserId, String(docId));
   writeAudit(
     db, me, 'document', String(docId), 'baseline', String(projectId),
     '对交付物「' + doc.name + '」建立基线（v' + (doc.version || 1) + '）',
@@ -451,7 +467,7 @@ function createLinkDocument(db, projectId, payload) {
         `UPDATE project_documents SET
           node_id = @nodeId, milestone_id = @milestoneId, name = @name, file_name = '',
           file_size = 0, mime_type = '', storage_path = '',
-          doc_type = 'link', url = @url, uploaded_by = @uploadedBy, uploaded_at = @uploadedAt,
+          doc_type = 'link', url = @url, uploaded_by = @uploadedBy, uploaded_by_user_id = @uploadedByUserId, uploaded_at = @uploadedAt,
           status = '已交付', version = @version${existing.baseline_flag ? ', baselined_at = @baselinedAt' : ''}
          WHERE id = @id`,
       ).run({
@@ -461,6 +477,7 @@ function createLinkDocument(db, projectId, payload) {
         name: name,
         url: url,
         uploadedBy: (payload.me && payload.me.open_id) || '',
+        uploadedByUserId: mappers.resolveUserId(db, (payload.me && payload.me.open_id) || ''),
         uploadedAt: now,
         version: nextVersion,
         baselinedAt: now,
@@ -480,10 +497,10 @@ function createLinkDocument(db, projectId, payload) {
   db.prepare(
     `INSERT INTO project_documents
       (id, project_id, node_id, milestone_id, name, file_name, file_size, mime_type,
-       storage_path, doc_type, url, uploaded_by, uploaded_at, created_at,
+       storage_path, doc_type, url, uploaded_by, uploaded_by_user_id, uploaded_at, created_at,
        template_key, status, version, baseline_flag)
      VALUES (@id, @projectId, @nodeId, @milestoneId, @name, '', 0, '',
-       '', 'link', @url, @uploadedBy, @uploadedAt, @createdAt,
+       '', 'link', @url, @uploadedBy, @uploadedByUserId, @uploadedAt, @createdAt,
        '', '已交付', 1, 0)`,
   ).run({
     id: id,
@@ -493,6 +510,7 @@ function createLinkDocument(db, projectId, payload) {
     name: name,
     url: url,
     uploadedBy: (payload.me && payload.me.open_id) || '',
+    uploadedByUserId: mappers.resolveUserId(db, (payload.me && payload.me.open_id) || ''),
     uploadedAt: now,
     createdAt: now,
   });

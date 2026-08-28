@@ -68,6 +68,20 @@ function normalizePriority(raw) {
  * @param {string} projectId
  * @returns {Array<object>} WbsNode[]
  */
+/**
+ * 边界解析：飞书 open_id → 系统稳定身份 users.id。
+ * 飞书 open_id 是按应用隔离、可能变化的外部标识，绝不作为系统身份键；
+ * 仅在写库边界把传入的 open_id 解析成 users.id 落库（owner_user_id）。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string|undefined} openId
+ * @returns {number|null}
+ */
+function resolveOwnerUserId(db, openId) {
+  if (!openId) return null;
+  const u = db.prepare('SELECT id FROM users WHERE open_id = ?').get(String(openId));
+  return u ? u.id : null;
+}
+
 function loadNodes(db, projectId) {
   return wbs.decorateEffort(milestoneService.loadWbsNodes(db, projectId));
 }
@@ -398,9 +412,10 @@ function createWbsNode(db, req, projectId, payload) {
     db.prepare(
       'INSERT INTO wbs_nodes (' +
         'id, project_id, parent_id, wbs_code, level, node_type, name, description, owner, ' +
+        'owner_user_id, ' +
         'estimate_days, actual_days, start_date, due_date, status, progress, priority, board_order, ' +
         'is_critical, milestone_id, created_by, created_at, updated_at' +
-        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id,
       String(projectId),
@@ -411,6 +426,7 @@ function createWbsNode(db, req, projectId, payload) {
       String(p.name === undefined || p.name === null ? '' : p.name),
       String(p.description === undefined || p.description === null ? '' : p.description),
       String(p.owner),
+      resolveOwnerUserId(db, p.owner),
       Number(p.estimateDays) || 0,
       startDate,
       effectiveDue,
@@ -527,6 +543,8 @@ function updateWbsNode(db, req, id, payload) {
       effOwner = String(p.owner);
       sets.push('owner = ?');
       args.push(effOwner);
+      sets.push('owner_user_id = ?');
+      args.push(resolveOwnerUserId(db, effOwner));
       diff.push({ field: 'owner', label: '负责人', before: node.ownerName, after: effOwner ? nameOf(effOwner) : '' });
     }
     if (p.estimateDays !== undefined && Number(p.estimateDays) !== node.estimateDays) {

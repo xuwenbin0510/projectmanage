@@ -35,12 +35,14 @@ function writeAudit(db, actor, entityType, entityId, action, projectId, summary,
     const id = genId('AL');
     const openId = a.open_id !== undefined ? a.open_id : a.openId;
     const name = a.name !== undefined ? a.name : '';
+    // 设计修正：以 users.id 作为稳定身份键落库（actor 即 users 行，含 id）
+    const actorUserId = a.id != null ? Number(a.id) : null;
 
     db.prepare(
       'INSERT INTO audit_logs (' +
         'id, project_id, entity_type, entity_id, action, ' +
-        'actor_open_id, actor_name, summary, diff, before_json, after_json, created_at' +
-        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'actor_open_id, actor_name, actor_user_id, summary, diff, before_json, after_json, created_at' +
+        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id,
       projectId || null,
@@ -49,6 +51,7 @@ function writeAudit(db, actor, entityType, entityId, action, projectId, summary,
       String(action || 'update'),
       openId || null,
       name || null,
+      actorUserId,
       summary === undefined || summary === null ? '' : String(summary),
       JSON.stringify(Array.isArray(diff) ? diff : []),
       snap.before === undefined || snap.before === null ? null : JSON.stringify(snap.before),

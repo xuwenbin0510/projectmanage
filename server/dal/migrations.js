@@ -1531,6 +1531,89 @@ function migrationV23(db, now) {
   console.log('[migrations] v23 扩展 users.status 枚举（active/disabled/pending），加 email 索引');
 }
 
+/**
+ * v24 — 身份模型收口：全库责任人/操作人统一改用系统稳定身份键 `users.id`。
+ *
+ * 历史缺陷：14 张表、19 个用户引用列全部把飞书 `open_id`（会变、按应用隔离）当外键，
+ * 导致导入数据带的 open_id 与 users 表免登建号的 open_id 不同源 → 大面积「已移除」。
+ * 修复策略：新增 `xxx_user_id` 列（INTEGER，存 users.id），并把既有数据回填；
+ * 此后系统内部只认、只存 `users.id`，open_id 退为飞书免登/导入边界的同步属性。
+ *
+ * 幂等：列已存在则跳过 ALTER；回填仅 UPDATE 仍为空（NULL）的行，已回填行不受影响。
+ * 来源列形态分两类：
+ *   - open_id 型：直接 `users.open_id = 来源列` 解析；
+ *   - 姓名型（risks.owner / work_report_risks.owner 历史存的是姓名）：`users.name = 来源列` 解析。
+ * 本地库已在更早的离线脚本回填完毕，本迁移在生产库首次启动时补齐列并补填残余空值。
+ */
+function migrationV24(db, now) {
+  const ADD = [
+    ['risks', 'owner_user_id'],
+    ['risks', 'created_by_user_id'],
+    ['changes', 'created_by_user_id'],
+    ['review_steps', 'assignee_user_id'],
+    ['review_steps', 'decided_by_user_id'],
+    ['review_approvals', 'actor_user_id'],
+    ['reviews', 'initiator_user_id'],
+    ['project_members', 'member_user_id'],
+    ['project_members', 'assigned_by_user_id'],
+    ['user_roles', 'role_user_id'],
+    ['user_roles', 'assigned_by_user_id'],
+    ['notifications', 'user_id'],
+    ['audit_logs', 'actor_user_id'],
+    ['work_reports', 'author_user_id'],
+    ['work_report_risks', 'owner_user_id'],
+    ['permission_rules', 'updated_by_user_id'],
+    ['projects', 'created_by_user_id'],
+    ['wbs_nodes', 'owner_user_id'],
+    ['wbs_nodes', 'created_by_user_id'],
+    ['quality_gates', 'decided_by_user_id'],
+    ['project_documents', 'baselined_by_user_id'],
+    ['project_documents', 'uploaded_by_user_id'],
+  ];
+  ADD.forEach(function (pair) {
+    const t = pair[0], col = pair[1];
+    if (!hasColumn(db, t, col)) {
+      db.exec('ALTER TABLE ' + t + ' ADD COLUMN ' + col + ' INTEGER');
+    }
+  });
+
+  // (table, uidCol, sourceCol, 'open'|'name')
+  const BACKFILL = [
+    ['risks', 'owner_user_id', 'owner', 'name'],
+    ['risks', 'created_by_user_id', 'created_by', 'open'],
+    ['changes', 'created_by_user_id', 'created_by', 'open'],
+    ['review_steps', 'assignee_user_id', 'assignee_open_id', 'open'],
+    ['review_steps', 'decided_by_user_id', 'decided_by', 'open'],
+    ['review_approvals', 'actor_user_id', 'actor_open_id', 'open'],
+    ['reviews', 'initiator_user_id', 'initiator_open_id', 'open'],
+    ['project_members', 'member_user_id', 'user_open_id', 'open'],
+    ['project_members', 'assigned_by_user_id', 'assigned_by', 'open'],
+    ['user_roles', 'role_user_id', 'user_open_id', 'open'],
+    ['user_roles', 'assigned_by_user_id', 'assigned_by', 'open'],
+    ['notifications', 'user_id', 'user_open_id', 'open'],
+    ['audit_logs', 'actor_user_id', 'actor_open_id', 'open'],
+    ['work_reports', 'author_user_id', 'author_open_id', 'open'],
+    ['work_report_risks', 'owner_user_id', 'owner', 'name'],
+    ['permission_rules', 'updated_by_user_id', 'updated_by', 'open'],
+    ['projects', 'created_by_user_id', 'created_by', 'open'],
+    ['wbs_nodes', 'owner_user_id', 'owner', 'open'],
+    ['wbs_nodes', 'created_by_user_id', 'created_by', 'open'],
+    ['quality_gates', 'decided_by_user_id', 'decided_by', 'open'],
+    ['project_documents', 'baselined_by_user_id', 'baselined_by', 'open'],
+    ['project_documents', 'uploaded_by_user_id', 'uploaded_by', 'open'],
+  ];
+  BACKFILL.forEach(function (b) {
+    const t = b[0], uid = b[1], src = b[2], kind = b[3];
+    const userKey = kind === 'name' ? 'users.name' : 'users.open_id';
+    db.exec(
+      'UPDATE ' + t + ' SET ' + uid + ' = (SELECT id FROM users WHERE ' + userKey + ' = ' + t + '.' + src + ') ' +
+      'WHERE ' + uid + ' IS NULL AND ' + src + ' IS NOT NULL AND ' + src + ' <> \'\''
+    );
+  });
+
+  console.log('[migrations] v24 身份收口：补 user_id 列并回填既有人/操作人引用');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1561,6 +1644,7 @@ const MIGRATIONS = [
   { version: 21, name: 'connect-v21-notifications', up: migrationV21 },
   { version: 22, name: 'connect-v22-removed-template-docs', up: migrationV22 },
   { version: 23, name: 'connect-v23-auth-gate', up: migrationV23 },
+  { version: 24, name: 'connect-v24-user-id-columns', up: migrationV24 },
 ];
 
 /**

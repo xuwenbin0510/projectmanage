@@ -18,6 +18,7 @@ const { AppError, ErrorCode } = require('../lib/errors');
 const dates = require('../lib/dates');
 const ids = require('../lib/ids');
 const rbac = require('../middleware/rbac');
+const mappers = require('../lib/mappers');
 const { writeAudit, diffEntry } = require('../lib/audit');
 
 /** 高风险阈值：risk_value >= 12（与前端 Mock 逐字一致） */
@@ -44,9 +45,17 @@ function loadProjectRow(db, projectId) {
 /**
  * DB 行 → API 形态。
  * @param {object} row risks 行
+ * @param {import('better-sqlite3').Database} [db] 用于解析 owner_user_id → 姓名
  * @returns {object} Risk
  */
-function toApiRisk(row) {
+function toApiRisk(row, db) {
+  let ownerName = '';
+  // 设计修正：优先用 owner_user_id（users.id，稳定身份键）解析姓名，回落 owner 列历史姓名
+  if (row.owner_user_id) {
+    const u = db && db.prepare('SELECT name FROM users WHERE id = ?').get(Number(row.owner_user_id));
+    ownerName = u ? String(u.name) : '';
+  }
+  if (!ownerName && row.owner) ownerName = String(row.owner);
   return {
     id: String(row.id),
     projectId: String(row.project_id),
@@ -58,6 +67,7 @@ function toApiRisk(row) {
     riskValue: Number(row.risk_value),
     strategy: String(row.strategy),
     owner: String(row.owner),
+    ownerName: ownerName,
     status: String(row.status),
     reviewDate: row.review_date || null,
   };
@@ -78,7 +88,7 @@ function listRisks(db, projectId) {
   return db
     .prepare('SELECT * FROM risks WHERE project_id = ? ORDER BY code ASC, id ASC')
     .all(String(projectId))
-    .map(toApiRisk);
+    .map(function (r) { return toApiRisk(r, db); });
 }
 
 /**
@@ -205,20 +215,23 @@ function createRisk(db, req, projectId, payload) {
     const id = ids.genId('RK');
     const ts = dates.nowIso();
     const createdBy = me.open_id !== undefined ? me.open_id : me.openId;
+    // 设计修正：边界把 open_id / 姓名解析为系统稳定身份键 users.id 落库
+    const createdByUserId = mappers.resolveUserId(db, createdBy);
+    const ownerUserId = mappers.resolveUserIdByName(db, owner);
 
     db.prepare(
       'INSERT INTO risks (' +
         'id, project_id, code, description, category, probability, impact, risk_value, ' +
-        'strategy, owner, status, review_date, created_by, created_at, updated_at' +
-        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'strategy, owner, status, review_date, created_by, created_by_user_id, owner_user_id, created_at, updated_at' +
+        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id, String(projectId), code, description, category, probability, impact, riskValue,
-      strategy, owner, status, reviewDate, createdBy, ts, ts
+      strategy, owner, status, reviewDate, createdBy, createdByUserId, ownerUserId, ts, ts
     );
 
     writeAudit(db, me, 'risk', id, 'create', projectId, '新增风险「' + code + ' ' + description + '」（风险值 ' + riskValue + '）');
 
-    return toApiRisk(db.prepare('SELECT * FROM risks WHERE id = ?').get(id));
+    return toApiRisk(db.prepare('SELECT * FROM risks WHERE id = ?').get(id), db);
   });
   return tx();
 }
@@ -284,7 +297,7 @@ function updateRisk(db, req, id, payload) {
     if (p.owner !== undefined) {
       const v = String(p.owner).trim();
       if (v !== before.owner) {
-        sets.push('owner = ?'); args.push(v);
+        sets.push('owner = ?', 'owner_user_id = ?'); args.push(v, mappers.resolveUserIdByName(db, v));
         const d = diffEntry('owner', '责任人', before.owner, v);
         if (d) diff.push(d);
       }
@@ -313,7 +326,7 @@ function updateRisk(db, req, id, payload) {
       writeAudit(db, me, 'risk', id, 'update', projectId, '更新风险「' + before.code + '」', diff);
     }
 
-    return toApiRisk(db.prepare('SELECT * FROM risks WHERE id = ?').get(id));
+    return toApiRisk(db.prepare('SELECT * FROM risks WHERE id = ?').get(id), db);
   });
   return tx();
 }

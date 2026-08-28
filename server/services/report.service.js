@@ -12,6 +12,7 @@
 const { AppError, ErrorCode } = require('../lib/errors');
 const dates = require('../lib/dates');
 const ids = require('../lib/ids');
+const mappers = require('../lib/mappers');
 const { writeAudit } = require('../lib/audit');
 const enums = require('../config/enums');
 const wbsService = require('./wbs.service');
@@ -635,8 +636,8 @@ function insertChildren(db, reportId, taskRefs, riskRefs) {
   `);
   const insRisk = db.prepare(`
     INSERT INTO work_report_risks (
-      id, report_id, seq, description, owner, due_date, promoted_risk_id
-    ) VALUES (@id, @report_id, @seq, @description, @owner, @due_date, NULL)
+      id, report_id, seq, description, owner, owner_user_id, due_date, promoted_risk_id
+    ) VALUES (@id, @report_id, @seq, @description, @owner, @owner_user_id, @due_date, NULL)
   `);
 
   taskRefs.forEach(function (t, i) {
@@ -661,6 +662,8 @@ function insertChildren(db, reportId, taskRefs, riskRefs) {
       seq: i + 1,
       description: r.description,
       owner: r.owner,
+      // 设计修正：owner 存姓名 → 边界解析为 users.id 落 owner_user_id
+      owner_user_id: mappers.resolveUserIdByName(db, r.owner),
       due_date: r.dueDate,
     });
   });
@@ -767,11 +770,11 @@ function createReport(db, payload, me, submit) {
 
   const insReport = db.prepare(`
     INSERT INTO work_reports (
-      id, project_id, week, week_start, week_end, author_open_id, author_name,
+      id, project_id, week, week_start, week_end, author_open_id, author_name, author_user_id,
       status, done_note, plan_items, resource_note, snapshot, submitted_at,
       created_at, updated_at
     ) VALUES (
-      @id, @project_id, @week, @week_start, @week_end, @author_open_id, @author_name,
+      @id, @project_id, @week, @week_start, @week_end, @author_open_id, @author_name, @author_user_id,
       @status, @done_note, @plan_items, @resource_note, @snapshot, @submitted_at,
       @created_at, @updated_at
     )
@@ -789,6 +792,7 @@ function createReport(db, payload, me, submit) {
       week_end: range.end,
       author_open_id: toStr(actor.open_id),
       author_name: toStr(actor.name),
+      author_user_id: actor.id != null ? Number(actor.id) : mappers.resolveUserId(db, actor.open_id),
       status: status,
       done_note: toStr(p.doneNote),
       plan_items: JSON.stringify(planItems),

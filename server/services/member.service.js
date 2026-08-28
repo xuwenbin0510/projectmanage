@@ -35,7 +35,7 @@ function findMemberRow(db, memberId) {
     .prepare(
       `SELECT m.*, u.name AS user_name
          FROM project_members m
-         LEFT JOIN users u ON u.open_id = m.user_open_id
+         LEFT JOIN users u ON u.id = m.member_user_id
         WHERE m.id = ?`,
     )
     .get(String(memberId || ''));
@@ -70,7 +70,7 @@ function assertRoleUnique(db, projectId, role) {
     .prepare(
       `SELECT m.user_open_id, u.name AS user_name
          FROM project_members m
-         LEFT JOIN users u ON u.open_id = m.user_open_id
+         LEFT JOIN users u ON u.id = m.member_user_id
         WHERE m.project_id = ? AND m.project_role = ?
         ORDER BY m.assigned_at ASC, m.id ASC
         LIMIT 1`,
@@ -144,10 +144,20 @@ function addMember(db, req, projectId, payload) {
 
     const memberId = ids.genId('MB');
     const ts = dates.nowIso();
+    const assignedBy = mappers.toStr(actor.open_id || actor.openId);
     db.prepare(
-      `INSERT INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(memberId, pid, userOpenId, role, mappers.toStr(actor.open_id || actor.openId), ts);
+      `INSERT INTO project_members (id, project_id, user_open_id, project_role, assigned_by, assigned_at, member_user_id, assigned_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      memberId,
+      pid,
+      userOpenId,
+      role,
+      assignedBy,
+      ts,
+      mappers.resolveUserId(db, userOpenId),
+      mappers.resolveUserId(db, assignedBy),
+    );
 
     const userName = mappers.toStr(user.name);
     writeAudit(
