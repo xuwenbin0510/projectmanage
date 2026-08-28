@@ -92,24 +92,48 @@ function classifyContacts(contacts) {
 
 /* ── 各档执行 ─────────────────────────────────────── */
 
-/** 铁证档：回填无害字段（不含 open_id / status / 角色 / 密码） */
+/**
+ * 铁证档：回填无害字段（不含 open_id / status / 角色 / 密码）。
+ * ⚠ 关键修正：飞书给空值时【绝不】覆盖本地已有值，只同步飞书非空字段。
+ * 否则无部门归属的飞书联系人会把本地原有部门清空（已修复的线上 bug）。
+ */
 function backfillHarmless(localOpenId, contact, now) {
+  const local = db.prepare('SELECT union_id, name, dept, employee_id FROM users WHERE open_id = ?').get(localOpenId);
+  if (!local) return;
+  const incomingUnion = String(contact.unionId || '').trim();
+  const incomingName = String(contact.name || '').trim();
+  const incomingDept = String((contact.departmentNames && contact.departmentNames[0]) || '').trim();
+  const incomingEmp = String(contact.employeeId || '').trim();
+  const finalUnion = incomingUnion || local.union_id || null;
+  const finalName = incomingName ? incomingName.slice(0, 40) : local.name;
+  const finalDept = incomingDept ? incomingDept.slice(0, 60) : local.dept;
+  const finalEmp = incomingEmp ? incomingEmp.slice(0, 40) : local.employee_id;
   db.prepare(
     'UPDATE users SET union_id = ?, name = ?, dept = ?, employee_id = ?, updated_at = ? WHERE open_id = ?',
   ).run(
-    contact.unionId || null,
-    String(contact.name || '').trim().slice(0, 40),
-    (contact.departmentNames && contact.departmentNames[0] ? contact.departmentNames[0] : '').slice(0, 60),
-    String(contact.employeeId || '').slice(0, 40),
+    finalUnion,
+    finalName,
+    finalDept,
+    finalEmp,
     now,
     localOpenId,
   );
 }
 
-/** 疑似档 merge：把飞书标识回填到本地账号 + 同步无害字段；open_id 变更时级联更新引用表 */
+/** 疑似档 merge：把飞书标识回填到本地账号 + 同步无害字段；open_id 变更时级联更新引用表。
+ *  同样遵守：飞书给空值时不覆盖本地已有 name/dept/employee_id。 */
 function mergeLocal(localOpenId, contact, now) {
   const newOpenId = String(contact.openId);
   const openIdChanged = newOpenId !== localOpenId;
+  const local = db.prepare('SELECT union_id, name, dept, employee_id FROM users WHERE open_id = ?').get(localOpenId);
+  const incomingUnion = String(contact.unionId || '').trim();
+  const incomingName = String(contact.name || '').trim();
+  const incomingDept = String((contact.departmentNames && contact.departmentNames[0]) || '').trim();
+  const incomingEmp = String(contact.employeeId || '').trim();
+  const finalUnion = incomingUnion || (local && local.union_id) || null;
+  const finalName = incomingName ? incomingName.slice(0, 40) : (local && local.name);
+  const finalDept = incomingDept ? incomingDept.slice(0, 60) : (local && local.dept);
+  const finalEmp = incomingEmp ? incomingEmp.slice(0, 40) : (local && local.employee_id);
   const tx = db.transaction(function () {
     if (openIdChanged) {
       OPEN_ID_REFERENCE_CHECKS.forEach(function (ref) {
@@ -121,10 +145,10 @@ function mergeLocal(localOpenId, contact, now) {
       'UPDATE users SET open_id = ?, union_id = ?, name = ?, dept = ?, employee_id = ?, updated_at = ? WHERE open_id = ?',
     ).run(
       newOpenId,
-      contact.unionId || null,
-      String(contact.name || '').trim().slice(0, 40),
-      (contact.departmentNames && contact.departmentNames[0] ? contact.departmentNames[0] : '').slice(0, 60),
-      String(contact.employeeId || '').slice(0, 40),
+      finalUnion,
+      finalName,
+      finalDept,
+      finalEmp,
       now,
       localOpenId,
     );
