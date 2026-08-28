@@ -22,6 +22,8 @@ const { DEFAULT_PASSWORD } = require('../dal/seed');
 const roleCatalog = require('../services/roleCatalog');
 const { refreshRoleCatalog } = roleCatalog;
 const projectService = require('../services/project.service');
+const feishuContacts = require('../lib/feishu_contacts');
+const feishuImport = require('../services/feishuImport.service');
 
 const router = express.Router();
 
@@ -151,13 +153,29 @@ router.patch(
 
     if (body.status !== undefined) {
       const status = String(body.status);
-      if (status !== 'active' && status !== 'disabled') {
+      // 白名单扩展为三态：active / disabled / pending（待授权）
+      if (status !== 'active' && status !== 'disabled' && status !== 'pending') {
         throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-          fields: [{ field: 'status', message: '状态不合法' }],
+          fields: [{ field: 'status', message: '状态不合法（应为 active / disabled / pending）' }],
         });
       }
-      if (openId === String(req.user.open_id) && status === 'disabled') {
+      // 防锁死①：不能把自己设为非 active（pending / disabled），否则管理员会把自己踢出系统
+      if (openId === String(req.user.open_id) && status !== 'active') {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
+      }
+      // 防锁死②：不能把唯一的 admin 设为非 active（pending / disabled），否则系统无人可管理
+      const isTargetAdmin =
+        target.global_role === 'admin' ||
+        db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id);
+      if (isTargetAdmin && status !== 'active') {
+        const cnt = db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = 'admin')) AND open_id <> ?",
+          )
+          .get(openId);
+        if (!cnt || Number(cnt.n) < 1) {
+          throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
+        }
       }
       sets.push('status = ?');
       args.push(status);
@@ -368,6 +386,13 @@ router.post(
         });
       }
     }
+    // 初始状态：默认 active；可显式指定 pending（预建待授权账号）。仅开放 active / pending 两态。
+    const statusIn = String(body.status || 'active');
+    if (statusIn !== 'active' && statusIn !== 'pending') {
+      throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+        fields: [{ field: 'status', message: '初始状态不合法（应为 active / pending）' }],
+      });
+    }
 
     const now = nowIso();
     const info = db
@@ -382,7 +407,7 @@ router.post(
         email.slice(0, 80),
         String(body.dept || '').slice(0, 60),
         primary,
-        'active',
+        statusIn,
         now,
         now,
       );
@@ -1271,6 +1296,115 @@ router.put(
     permissionCatalog.loadCatalog(db);
 
     res.json(ok(permissionCatalog.allActions().filter(function (a) { return a.enabled; }), '权限动作元数据已更新'));
+  }),
+);
+
+/* ──────────────────────────────────────────────────────
+ * 飞书通讯录批量导入 / 按姓名搜索导入（feat/connect-b10）
+ *
+ * 仅 admin。匹配模型 = 两档三桶（铁证/疑似/新建），详见
+ * docs/feishu-import-proposal.md。导入服务**不调用 createUser**，
+ * 且绝不改 status/角色/密码，不触达 devlogin/RBAC/业务流/审计写入。
+ * 飞书调用失败统一包成 E_FEISHU_API（多为权限点缺失或网络问题）。
+ * ────────────────────────────────────────────────────── */
+
+/**
+ * 拉取飞书通讯录并三桶分类预览。
+ * GET /api/admin/feishu/contacts?preview=1
+ */
+router.get(
+  '/admin/feishu/contacts',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function previewFeishuContacts(req, res) {
+    let contacts;
+    try {
+      contacts = await feishuContacts.getFullContacts();
+    } catch (e) {
+      throw new AppError(ErrorCode.E_FEISHU_API, (e && e.message) || '飞书通讯录拉取失败');
+    }
+    const classified = feishuImport.classifyContacts(contacts);
+    const buckets = { definite: [], suspected: [], fresh: [] };
+    classified.forEach(function (c) {
+      buckets[c.bucket].push({
+        openId: c.openId,
+        bucket: c.bucket,
+        unionId: c.unionId || null,
+        name: c.name,
+        email: c.email || '',
+        employeeId: c.employeeId || '',
+        departmentNames: c.departmentNames || [],
+        matchedLocalOpenId: c.matchedLocalOpenId || null,
+        matchedBy: c.matchedBy || null,
+      });
+    });
+    const visibilityHint =
+      '已拉取 ' + contacts.length + ' 名通讯录成员。若人数明显少于预期，请检查飞书应用「通讯录可见范围」权限配置。';
+    res.json(ok({ total: contacts.length, buckets: buckets, visibilityHint: visibilityHint }));
+  }),
+);
+
+/**
+ * 执行飞书通讯录导入。
+ * POST /api/admin/feishu/import
+ * body: { initialStatus?:'pending'|'active', suspectedDecisions?: { [feishuOpenId]: 'merge'|'skip' }, contacts?: FeishuContactDTO[] }
+ *  - contacts 省略 → 拉全量通讯录导入；提供 → 仅导入该子集（按姓名搜索导入场景）。
+ */
+router.post(
+  '/admin/feishu/import',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function importFeishuUsers(req, res) {
+    const body = req.body || {};
+    const initialStatus = body.initialStatus === 'active' ? 'active' : 'pending';
+    const decisions = body.suspectedDecisions && typeof body.suspectedDecisions === 'object' ? body.suspectedDecisions : {};
+
+    let contacts;
+    try {
+      if (Array.isArray(body.contacts) && body.contacts.length) {
+        contacts = body.contacts;
+      } else {
+        contacts = await feishuContacts.getFullContacts(undefined, { force: true });
+      }
+    } catch (e) {
+      throw new AppError(ErrorCode.E_FEISHU_API, (e && e.message) || '飞书通讯录拉取失败');
+    }
+
+    const summary = feishuImport.importContacts(contacts, decisions, initialStatus);
+    // 导入后清空缓存，保证下次预览拿到最新数据
+    feishuContacts.clearFullContactsCache();
+    res.json(
+      ok(
+        summary,
+        '导入完成：新增 ' + summary.added + ' / 合并 ' + summary.merged + ' / 跳过 ' + summary.skipped + ' / 失败 ' + summary.failed,
+      ),
+    );
+  }),
+);
+
+/**
+ * 按姓名/关键字搜索飞书通讯录（带三桶分类）。
+ * POST /api/admin/feishu/search
+ * body: { query: string, pageSize?: number }
+ */
+router.post(
+  '/admin/feishu/search',
+  requireAuth,
+  requireGlobalRole('admin'),
+  asyncHandler(async function searchFeishuUsers(req, res) {
+    const body = req.body || {};
+    const query = String(body.query || '').trim();
+    if (!query) throw new AppError(ErrorCode.E_VALIDATION, '搜索关键字不能为空');
+    // 复用已拉取的全量通讯录做本地过滤（避免依赖飞书 users/search 的独立权限点）。
+    let hits;
+    try {
+      const all = await feishuContacts.getFullContacts();
+      hits = feishuContacts.filterContacts(all, query, body.pageSize);
+    } catch (e) {
+      throw new AppError(ErrorCode.E_FEISHU_API, (e && e.message) || '飞书通讯录搜索失败');
+    }
+    const classified = feishuImport.classifyContacts(hits);
+    res.json(ok({ hits: classified }, '搜索到 ' + classified.length + ' 条结果'));
   }),
 );
 

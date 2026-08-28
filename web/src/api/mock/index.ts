@@ -68,6 +68,10 @@ import type {
   PermissionMatrixResponse,
   PermissionActionMeta,
   MetaPermissionsResponse,
+  FeishuImportPreview,
+  FeishuImportPayload,
+  FeishuImportResult,
+  FeishuImportSearchResult,
 } from '../contract';
 import type { ReviewTemplateConfig, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, CreateTemplatePayload, UpdateTemplatePayload } from '@/types/project';
 import { getDb, saveDb, resetDb } from './db';
@@ -3965,6 +3969,24 @@ export class MockApiClient implements ApiClient {
     db.users.splice(idx, 1);
     saveDb();
     return null;
+  }
+
+  /* ── 飞书通讯录导入（mock 占位，真实逻辑在后端） ── */
+
+  async previewFeishuContacts(): Promise<FeishuImportPreview> {
+    await delay(120);
+    const buckets: FeishuImportPreview['buckets'] = { definite: [], suspected: [], fresh: [] };
+    return { total: 0, buckets, visibilityHint: '（演示环境未接入飞书通讯录）' };
+  }
+
+  async importFeishuUsers(_payload: FeishuImportPayload): Promise<FeishuImportResult> {
+    await delay(120);
+    return { added: 0, merged: 0, skipped: 0, failed: 0, details: [] };
+  }
+
+  async searchFeishuUsers(_query: string, _pageSize?: number): Promise<FeishuImportSearchResult> {
+    await delay(120);
+    return { hits: [] };
   }
 
   /* ── E1.5 职位目录管理（仅 admin） ───────────── */

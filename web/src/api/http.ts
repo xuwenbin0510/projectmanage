@@ -61,6 +61,10 @@ import type {
   PermissionMatrixResponse,
   PermissionActionMeta,
   MetaPermissionsResponse,
+  FeishuImportPreview,
+  FeishuImportPayload,
+  FeishuImportResult,
+  FeishuImportSearchResult,
 } from './contract';
 import { genRequestId } from '@/utils/format';
 
@@ -466,6 +470,22 @@ export class HttpApiClient implements ApiClient {
   /** 物理删除用户（仅 admin） */
   deleteUser(openId: string): Promise<null> {
     return del<null>(`/admin/users/${openId}`);
+  }
+
+  /* 飞书通讯录导入（仅 admin） */
+  /** 预览：拉取通讯录并按两档三桶分类 */
+  previewFeishuContacts(): Promise<FeishuImportPreview> {
+    return get<FeishuImportPreview>('/admin/feishu/contacts?preview=1');
+  }
+
+  /** 执行导入：initialStatus + 疑似档决策 + 可选联系人子集（搜索导入场景） */
+  importFeishuUsers(payload: FeishuImportPayload): Promise<FeishuImportResult> {
+    return post<FeishuImportResult>('/admin/feishu/import', payload);
+  }
+
+  /** 按姓名/关键字搜索通讯录（带三桶分类） */
+  searchFeishuUsers(query: string, pageSize?: number): Promise<FeishuImportSearchResult> {
+    return post<FeishuImportSearchResult>('/admin/feishu/search', { query, pageSize });
   }
 
   /* E1.5 职位目录管理（仅 admin） */

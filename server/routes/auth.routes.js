@@ -115,38 +115,38 @@ async function upsertFeishuUser(openId, accessToken, avatarUrl, session) {
   const resolvedUnionId = unionId || profile.union_id || '';
 
   if (!row) {
-    // 仅在 email / union_id / open_id 全未命中时才新建。
-    // 飞书建号不越权赋予任何业务角色：global_role 留空，由管理员在权限矩阵分配。
-    const newRole = cfg.DEFAULT_NEW_USER_ROLE || null;
-    db.prepare(
-      `INSERT INTO users (open_id, union_id, employee_id, name, email, dept, avatar_url, global_role, status, must_change_pwd, created_at, updated_at)
-       VALUES (?, ?, '', ?, ?, '', ?, ?, 'active', 0, ?, ?)`,
-    ).run(
-      openId,
-      resolvedUnionId,
-      name,
-      email,
-      String(avatarUrl || ''),
-      newRole,
-      ts,
-      ts,
+    // 授权闸门：飞书 OAuth 仅认回「已存在」的账号（email / union_id / open_id / 唯一姓名），
+    // 未授权（全新人员）严格拒绝，**不自动建号**，避免非授权人员静默拿到账号。
+    // 管理员预授权 = 预建账号并置 pending，随后在 AdminUsersPage「授权」翻为 active。
+    throw new AppError(
+      ErrorCode.E_FORBIDDEN,
+      '您尚未被授权使用本系统，请联系管理员开通（邮箱：' + feishuEmail + '）',
+      { email: feishuEmail },
     );
-    row = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
-  } else {
-    if (row.status === 'disabled') {
-      throw new AppError(ErrorCode.E_FORBIDDEN, '该账号已停用', { openId: openId });
-    }
-    // 认回已有账号：把新 open_id / union_id 写回，并补全姓名邮箱
-    const nextOpenId = openId;
-    const nextUnionId = resolvedUnionId || row.union_id;
-    const nextName = name && name !== row.name ? name : row.name;
-    const nextEmail = email && !row.email ? email : row.email;
-    if (nextOpenId !== row.open_id || nextUnionId !== row.union_id || nextName !== row.name || nextEmail !== row.email) {
-      db.prepare(
-        'UPDATE users SET open_id = ?, union_id = ?, name = ?, email = ?, updated_at = ? WHERE id = ?',
-      ).run(nextOpenId, nextUnionId, nextName, nextEmail, ts, row.id);
-      row = db.prepare('SELECT * FROM users WHERE id = ?').get(row.id);
-    }
+  }
+
+  // 已认回账号：按 status 闸门放行 / 拒绝（与密码登录口径一致）
+  if (row.status === 'pending') {
+    throw new AppError(
+      ErrorCode.E_FORBIDDEN,
+      '该账号已预授权，正等待管理员启用，请稍后或联系管理员',
+      { openId: openId },
+    );
+  }
+  if (row.status === 'disabled') {
+    throw new AppError(ErrorCode.E_FORBIDDEN, '该账号已停用', { openId: openId });
+  }
+
+  // active：写回新 open_id / union_id 并补全姓名邮箱
+  const nextOpenId = openId;
+  const nextUnionId = resolvedUnionId || row.union_id;
+  const nextName = name && name !== row.name ? name : row.name;
+  const nextEmail = email && !row.email ? email : row.email;
+  if (nextOpenId !== row.open_id || nextUnionId !== row.union_id || nextName !== row.name || nextEmail !== row.email) {
+    db.prepare(
+      'UPDATE users SET open_id = ?, union_id = ?, name = ?, email = ?, updated_at = ? WHERE id = ?',
+    ).run(nextOpenId, nextUnionId, nextName, nextEmail, ts, row.id);
+    row = db.prepare('SELECT * FROM users WHERE id = ?').get(row.id);
   }
 
   return row;
@@ -175,8 +175,12 @@ router.post(
     if (!row) {
       throw new AppError(ErrorCode.E_UNAUTHORIZED, '邮箱或密码错误');
     }
-    if (row.status === 'disabled') {
-      throw new AppError(ErrorCode.E_FORBIDDEN, '该账号已停用');
+    if (row.status !== 'active') {
+      // 与飞书登录口径一致：pending（待管理员授权）/ disabled（已停用）均拒绝密码登录
+      throw new AppError(
+        ErrorCode.E_FORBIDDEN,
+        row.status === 'pending' ? '该账号待管理员授权，暂不可登录' : '该账号已停用',
+      );
     }
 
     const okPwd = await verifyPassword(password, row.password_hash);

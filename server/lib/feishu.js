@@ -23,6 +23,26 @@ async function getAppAccessToken() {
 }
 
 /**
+ * 取租户级 access_token（tenant_access_token）。
+ *
+ * 通讯录读取（department / users / users/search）、消息推送等**需要租户级令牌**，
+ * `app_access_token` 不被这类接口接受。本函数复用同一套 app_id/app_secret 换取。
+ *
+ * @returns {Promise<string>}
+ * @throws {Error} 飞书返回非 0 code 时抛出
+ */
+async function getTenantAccessToken() {
+  const r = await fetch(FS_API + '/auth/v3/tenant_access_token/internal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: cfg.FEISHU_APP_ID, app_secret: cfg.FEISHU_APP_SECRET }),
+  });
+  const d = await r.json();
+  if (d.code !== 0) throw new Error('tenant_access_token failed: ' + d.msg);
+  return d.tenant_access_token;
+}
+
+/**
  * 免登 code 换用户会话。
  * @param {string} code 前端 tt.requestAuthCode 拿到的临时票据
  * @param {string} appToken 应用级 access_token
@@ -210,6 +230,7 @@ async function fetchDocTitle(url) {
 module.exports = {
   FS_API,
   getAppAccessToken,
+  getTenantAccessToken,
   code2session,
   code2sessionV2,
   getUserProfile,

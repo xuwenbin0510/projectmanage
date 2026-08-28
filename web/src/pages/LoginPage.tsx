@@ -22,6 +22,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
 import { useToast } from '@/hooks/useToast';
+import { ApiError, ErrorCode } from '@/types/api';
 import { api, USE_MOCK } from '@/api/client';
 import { isInFeishu, hasFeishuSdk, requestAuthCode, waitSdkReady } from '@/utils/feishu';
 import { tokens } from '@/theme/tokens';
@@ -107,11 +108,16 @@ export function LoginPage(): JSX.Element {
         toast.success(`欢迎回来，${user.name}`);
         window.history.replaceState({}, '', ROUTES.login);
         navigate(from, { replace: true });
-      } catch (e) {
-        if (!alive) return;
+    } catch (e) {
+      if (!alive) return;
+      // 未授权（pending / 无账号）属 E_FORBIDDEN，仅展示后端 message（未授权者对密码登录同样不可达，不再追加"改用邮箱密码"）
+      if (e instanceof ApiError && e.code === ErrorCode.E_FORBIDDEN) {
+        toast.error(e);
+      } else {
         toast.error(e, '飞书网页登录失败，请改用邮箱密码登录');
-        window.history.replaceState({}, '', ROUTES.login);
       }
+      window.history.replaceState({}, '', ROUTES.login);
+    }
     })();
     return () => {
       alive = false;
@@ -152,7 +158,12 @@ export function LoginPage(): JSX.Element {
       navigate(from, { replace: true });
     } catch (e) {
       setFeishuFailed(true);
-      toast.error(e, '飞书免登失败，请改用邮箱密码登录');
+      // 未授权（pending / 无账号）属 E_FORBIDDEN，仅展示后端 message（未授权者对密码登录同样不可达，不再追加"改用邮箱密码"）
+      if (e instanceof ApiError && e.code === ErrorCode.E_FORBIDDEN) {
+        toast.error(e);
+      } else {
+        toast.error(e, '飞书免登失败，请改用邮箱密码登录');
+      }
     } finally {
       setFeishuBusy(false);
     }

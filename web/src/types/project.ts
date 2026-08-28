@@ -69,7 +69,8 @@ export interface User {
   globalRole: string;
   /** E1.5：用户全部全局职位（主职位 + 额外职位合并去重），权限判定取并集；值为 role_key（含动态职位） */
   globalRoles: string[];
-  status: 'active' | 'disabled';
+  /** 账号状态：active=启用可登录 / disabled=已停用 / pending=已预建待管理员授权（auth-gate 需求②新增第三态） */
+  status: 'active' | 'disabled' | 'pending';
   createdAt: string;
   updatedAt: string;
 }
@@ -116,6 +117,8 @@ export interface CreateUserPayload {
   globalRole?: GlobalRole;
   /** E1.5：用户全部全局职位（首项为主职位，其余额外职位）；不传时回落单值 globalRole；值为 role_key（含动态职位） */
   globalRoles?: string[];
+  /** 初始状态（auth-gate 需求②）：active=启用可登录 / pending=预建待授权；默认 active，仅限两态 */
+  status?: 'active' | 'pending';
 }
 
 /** 阶段一 · 用户通用更新入参（只传需要更新的字段） */
@@ -124,7 +127,8 @@ export interface UpdateUserPayload {
   globalRole?: GlobalRole;
   /** E1.5：用户全部全局职位（首项为主职位，其余额外职位）；传此字段时服务端整体重写；值为 role_key（含动态职位） */
   globalRoles?: string[];
-  status?: 'active' | 'disabled';
+  /** 账号状态：active / disabled / pending（待授权，auth-gate 需求②新增第三态） */
+  status?: 'active' | 'disabled' | 'pending';
   dept?: string;
   name?: string;
   employeeId?: string;

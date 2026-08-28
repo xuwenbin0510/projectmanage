@@ -1506,6 +1506,31 @@ function migrationV22(db, now) {
   console.log('[migrations] v22 removed_template_docs 表（模板交付物删除记忆）');
 }
 
+/* ── 迁移 v23：认证授权闸门（users.status 三态 + email 索引） ── */
+
+/**
+ * 迁移 v23 —— 扩展 users.status 枚举为三态（active / disabled / pending）。
+ *
+ * 背景：飞书登录授权闸门（需求②）要求"未授权人员一律拒绝，不自动建号"，
+ * 并以单一真相源 `status === 'active'` 作为登录闸门（密码 / 飞书 / requireAuth 口径统一）。
+ *
+ * 因 users.status 为 TEXT 列，无需 ALTER 表结构，仅需：
+ *  1) 防御性 backfill：任何非三态合法值的脏数据一律归正为 active（生产存量全为 active/disabled，本步为空操作）；
+ *  2) 飞书按 email 认回账号的高频路径加索引（小库可省，推荐加）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ */
+function migrationV23(db, now) {
+  // 1) 防御：任何非三态合法值的脏数据一律归正为 active
+  db.exec(
+    "UPDATE users SET status = 'active' WHERE status NOT IN ('active', 'disabled', 'pending')",
+  );
+  // 2) 飞书登录按 email 认回的高频路径加索引
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+  console.log('[migrations] v23 扩展 users.status 枚举（active/disabled/pending），加 email 索引');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1535,6 +1560,7 @@ const MIGRATIONS = [
   { version: 20, name: 'connect-v20-drop-legacy-tables', up: migrationV20 },
   { version: 21, name: 'connect-v21-notifications', up: migrationV21 },
   { version: 22, name: 'connect-v22-removed-template-docs', up: migrationV22 },
+  { version: 23, name: 'connect-v23-auth-gate', up: migrationV23 },
 ];
 
 /**

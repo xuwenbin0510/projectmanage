@@ -501,4 +501,75 @@ export interface ApiClient {
   markNotificationRead(id: string): Promise<{ id: string; isRead: number }>;
   /** 全部标已读 */
   markAllNotificationsRead(): Promise<{ count: number }>;
+
+  /* 飞书通讯录导入（仅 admin） */
+  /** 预览：拉取通讯录并按两档三桶分类（铁证/疑似/新建） */
+  previewFeishuContacts(): Promise<FeishuImportPreview>;
+  /** 执行导入：initialStatus + 疑似档决策（键=飞书 openId）+ 可选联系人子集（搜索导入场景） */
+  importFeishuUsers(payload: FeishuImportPayload): Promise<FeishuImportResult>;
+  /** 按姓名/关键字搜索通讯录（带三桶分类） */
+  searchFeishuUsers(query: string, pageSize?: number): Promise<FeishuImportSearchResult>;
+}
+
+/* 飞书通讯录导入相关类型（feat/connect-b10） */
+
+/** 单条飞书联系人（已归一化） */
+export interface FeishuContactDTO {
+  openId: string;
+  unionId: string | null;
+  name: string;
+  email: string;
+  employeeId: string;
+  departmentNames: string[];
+  /** 三桶分类结果 */
+  bucket: 'definite' | 'suspected' | 'fresh';
+  /** 疑似档：命中的本地账号 open_id */
+  matchedLocalOpenId: string | null;
+  /** 疑似档：按姓名还是邮箱命中 */
+  matchedBy: 'open_id' | 'union_id' | 'name' | 'email' | null;
+}
+
+/** 预览响应 */
+export interface FeishuImportPreview {
+  total: number;
+  buckets: {
+    definite: FeishuContactDTO[];
+    suspected: FeishuContactDTO[];
+    fresh: FeishuContactDTO[];
+  };
+  visibilityHint: string;
+}
+
+/** 导入请求（contacts 省略=全量；提供=仅导入该子集） */
+export interface FeishuImportPayload {
+  initialStatus?: 'pending' | 'active';
+  suspectedDecisions?: Record<string, 'merge' | 'skip'>;
+  contacts?: FeishuContactDTO[];
+}
+
+/** 单条导入明细 */
+export interface FeishuImportDetail {
+  openId: string;
+  name: string;
+  result: 'added' | 'merged' | 'skipped' | 'failed';
+  bucket?: 'definite' | 'suspected' | 'fresh';
+  matchedLocalOpenId?: string | null;
+  matchedBy?: string | null;
+  status?: string;
+  synced?: boolean;
+  reason?: string;
+}
+
+/** 导入结果汇总 */
+export interface FeishuImportResult {
+  added: number;
+  merged: number;
+  skipped: number;
+  failed: number;
+  details: FeishuImportDetail[];
+}
+
+/** 搜索响应 */
+export interface FeishuImportSearchResult {
+  hits: FeishuContactDTO[];
 }
