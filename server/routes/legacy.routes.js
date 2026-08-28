@@ -30,7 +30,8 @@ const express = require('express');
 
 const cfg = require('../../config');
 const db = require('../../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, resolveGlobalRoles } = require('../middleware/auth');
+const { canDo } = require('../config/permissions');
 const { signToken } = require('../lib/token');
 const { nowIso } = require('../lib/dates');
 const { genId } = require('../lib/ids');
@@ -111,8 +112,8 @@ function mergedGlobalRoles(u) {
   if (!u) return [];
   const set = {};
   if (u.global_role) set[String(u.global_role)] = true;
-  db.prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?')
-    .all(u.open_id)
+  db.prepare('SELECT role_key FROM user_roles WHERE role_user_id = ?')
+    .all(u.id)
     .forEach(function (r) { if (r.role_key) set[String(r.role_key)] = true; });
   return Object.keys(set);
 }
@@ -123,7 +124,7 @@ function isAdminUser(u) {
 function usersByRole(role) {
   const r = String(role || '');
   return db.prepare(
-    'SELECT * FROM users WHERE global_role = ? OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = ?) ORDER BY name'
+    'SELECT * FROM users WHERE global_role = ? OR id IN (SELECT role_user_id FROM user_roles WHERE role_key = ?) ORDER BY name'
   ).all(r, r);
 }
 
@@ -135,7 +136,8 @@ function usersByRole(role) {
  */
 function canEditProject(u, p) {
   if (!u || !p) return false;
-  if (isAdminUser(u)) return true;
+  // 矩阵对齐：admin 恒放行；矩阵授予 project:edit 的角色（如 pmo）也能编辑
+  if (isAdminUser(u) || canDo(resolveGlobalRoles(u), 'project:edit')) return true;
   return p.pm === u.open_id || p.created_by === u.open_id;
 }
 
@@ -150,7 +152,8 @@ function canApproveStep(u, p) {
   const tpl = approvalTemplate(p);
   const step = p.approval_step;
   if (step === null || step === undefined || step < 0 || step >= tpl.length) return false;
-  if (isAdminUser(u)) return true;
+  // 矩阵对齐：admin 恒放行；矩阵授予 review:decide 的角色也能审批
+  if (isAdminUser(u) || canDo(resolveGlobalRoles(u), 'review:decide')) return true;
   return mergedGlobalRoles(u).indexOf(tpl[step]) >= 0;
 }
 
@@ -276,7 +279,7 @@ router.get('/users', requireAuth, function legacyUsers(req, res) {
 
 /** @deprecated 用 `PATCH /api/admin/users/:openId` */
 router.put('/users/:id/role', requireAuth, function legacySetRole(req, res) {
-  if (!isAdminUser(req.user)) return res.status(403).json({ error: '仅管理员可分配角色' });
+  if (!canDo(resolveGlobalRoles(req.user), 'admin:user:role')) return res.status(403).json({ error: '无用户角色管理权限' });
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return res.status(404).json({ error: '用户不存在' });
   if (u.id === req.user.id) return res.status(403).json({ error: '不能修改自己的角色' });
@@ -284,7 +287,7 @@ router.put('/users/:id/role', requireAuth, function legacySetRole(req, res) {
   const role = (req.body && validRoles.indexOf(req.body.role) >= 0) ? req.body.role : 'member';
   if (isAdminUser(u) && role !== 'admin') {
     const remain = db.prepare(
-      'SELECT COUNT(*) c FROM users WHERE (global_role = ? OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = ?)) AND id != ?'
+      'SELECT COUNT(*) c FROM users WHERE (global_role = ? OR id IN (SELECT role_user_id FROM user_roles WHERE role_key = ?)) AND id != ?'
     ).get('admin', 'admin', u.id).c;
     if (remain === 0) return res.status(403).json({ error: '至少需要保留一名管理员' });
   }
@@ -382,7 +385,7 @@ router.put('/projects/:id', requireAuth, function legacyUpdateProject(req, res) 
 
 /** 保留：新契约无「删除项目」方法，不冲突 */
 router.delete('/projects/:id', requireAuth, function legacyDeleteProject(req, res) {
-  if (!isAdminUser(req.user)) return res.status(403).json({ error: '仅管理员可删除项目' });
+  if (!canDo(resolveGlobalRoles(req.user), 'project:delete')) return res.status(403).json({ error: '无删除项目权限' });
   const p = projectById(req.params.id);
   if (!p) return res.status(404).json({ error: '项目不存在' });
   db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);

@@ -40,12 +40,16 @@ function resolveRecipients(db, opts) {
   const projectRoles = (o.projectRoles || []).filter(Boolean);
   const globalRoles = (o.globalRoles || []).filter(Boolean);
 
+  /* 设计修正：跨飞书空间身份统一。导入成员存于 project_members.user_open_id 的是
+     「另一套飞书应用」的 open_id，与登录用户（主应用空间）的 open_id 对不上。
+     故一律经 member_user_id / role_user_id（= users.id，系统唯一身份键）桥接回
+     users.open_id（主空间），保证 emit 的 open_id 与 req.user.open_id 同空间、可正确匹配。 */
   if (o.projectId && projectRoles.length) {
     const qm = projectRoles.map(function () { return '?'; }).join(',');
     const rows = db
-      .prepare('SELECT DISTINCT user_open_id FROM project_members WHERE project_id = ? AND project_role IN (' + qm + ')')
+      .prepare('SELECT DISTINCT u.open_id FROM project_members pm JOIN users u ON u.id = pm.member_user_id WHERE pm.project_id = ? AND pm.project_role IN (' + qm + ')')
       .all(o.projectId, ...projectRoles);
-    rows.forEach(function (r) { set[String(r.user_open_id)] = true; });
+    rows.forEach(function (r) { if (r.open_id) set[String(r.open_id)] = true; });
   }
 
   if (globalRoles.length) {
@@ -53,11 +57,11 @@ function resolveRecipients(db, opts) {
     const fromUsers = db
       .prepare('SELECT DISTINCT open_id FROM users WHERE global_role IN (' + qm + ')')
       .all(...globalRoles);
-    fromUsers.forEach(function (r) { set[String(r.open_id)] = true; });
+    fromUsers.forEach(function (r) { if (r.open_id) set[String(r.open_id)] = true; });
     const fromExtra = db
-      .prepare('SELECT DISTINCT user_open_id FROM user_roles WHERE role_key IN (' + qm + ')')
+      .prepare('SELECT DISTINCT u.open_id FROM user_roles ur JOIN users u ON u.id = ur.role_user_id WHERE ur.role_key IN (' + qm + ')')
       .all(...globalRoles);
-    fromExtra.forEach(function (r) { set[String(r.user_open_id)] = true; });
+    fromExtra.forEach(function (r) { if (r.open_id) set[String(r.open_id)] = true; });
   }
 
   if (o.excludeOpenId) delete set[String(o.excludeOpenId)];
@@ -134,19 +138,20 @@ function toApiNotification(row) {
 /**
  * 列表（按 created_at 倒序）。
  * @param {import('better-sqlite3').Database} db
- * @param {string} userOpenId
+ * @param {number|string} userId 系统身份键 users.id
  * @param {object} [opts] { unread?: boolean, page?: number, pageSize?: number }
  * @returns {{ items: object[], total: number, unreadCount: number }}
  */
-function listNotifications(db, userOpenId, opts) {
+function listNotifications(db, userId, opts) {
   const o = opts || {};
   const unreadOnly = o.unread === true || o.unread === 'true' || o.unread === 1;
   const limit = Math.min(Number(o.pageSize) || 20, 100);
   const page = Math.max(Number(o.page) || 1, 1);
   const offset = (page - 1) * limit;
 
-  const where = ['user_open_id = ?'];
-  const params = [userOpenId];
+  // 身份设计铁律：通知读写一律锚定 users.id（user_id 列），飞书 open_id 仅作展示同步属性
+  const where = ['user_id = ?'];
+  const params = [userId];
   if (unreadOnly) {
     where.push('is_read = 0');
   }
@@ -161,8 +166,8 @@ function listNotifications(db, userOpenId, opts) {
     .map(toApiNotification);
 
   const unreadRow = db
-    .prepare('SELECT COUNT(*) AS c FROM notifications WHERE user_open_id = ? AND is_read = 0')
-    .get(userOpenId);
+    .prepare('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0')
+    .get(userId);
 
   return {
     items: items,
@@ -174,13 +179,13 @@ function listNotifications(db, userOpenId, opts) {
 /**
  * 未读计数。
  * @param {import('better-sqlite3').Database} db
- * @param {string} userOpenId
+ * @param {number|string} userId 系统身份键 users.id
  * @returns {number}
  */
-function unreadCount(db, userOpenId) {
+function unreadCount(db, userId) {
   const row = db
-    .prepare('SELECT COUNT(*) AS c FROM notifications WHERE user_open_id = ? AND is_read = 0')
-    .get(userOpenId);
+    .prepare('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0')
+    .get(userId);
   return (row && row.c) || 0;
 }
 
@@ -188,10 +193,10 @@ function unreadCount(db, userOpenId) {
  * 标记单条已读（仅本人可操作）。
  * @returns {boolean} 是否实际更新
  */
-function markRead(db, id, userOpenId) {
+function markRead(db, id, userId) {
   const info = db
-    .prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_open_id = ?')
-    .run(id, userOpenId);
+    .prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?')
+    .run(id, userId);
   return info.changes > 0;
 }
 
@@ -199,10 +204,10 @@ function markRead(db, id, userOpenId) {
  * 标记全部已读（仅本人）。
  * @returns {number} 更新条数
  */
-function markAllRead(db, userOpenId) {
+function markAllRead(db, userId) {
   const info = db
-    .prepare('UPDATE notifications SET is_read = 1 WHERE user_open_id = ? AND is_read = 0')
-    .run(userOpenId);
+    .prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0')
+    .run(userId);
   return info.changes;
 }
 

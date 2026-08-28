@@ -8,14 +8,15 @@ import { useNavigate } from 'react-router-dom';
 import { Box, Tab, Tabs } from '@mui/material';
 import { ROUTES } from '@/config/routes';
 import { useLocation } from 'react-router-dom';
+import { usePermission } from '@/hooks';
 
 const ADMIN_TABS = [
-  { key: 'users', label: '用户与职位', path: ROUTES.adminUsers },
-  { key: 'permissions', label: '权限矩阵', path: ROUTES.adminPermissions },
-  { key: 'reviewTemplates', label: '审批配置', path: ROUTES.adminReviewTemplates },
-  { key: 'templates', label: '内置模板', path: ROUTES.adminTemplates },
-  { key: 'roles', label: '职位管理', path: ROUTES.adminRoles },
-  { key: 'audit', label: '审计日志', path: ROUTES.adminAuditLog },
+  { key: 'users', label: '用户与职位', path: ROUTES.adminUsers, action: 'admin:user:role' },
+  { key: 'permissions', label: '权限矩阵', path: ROUTES.adminPermissions, action: 'admin:permission:config' },
+  { key: 'reviewTemplates', label: '审批配置', path: ROUTES.adminReviewTemplates, action: 'admin:template' },
+  { key: 'templates', label: '内置模板', path: ROUTES.adminTemplates, action: 'admin:template' },
+  { key: 'roles', label: '职位管理', path: ROUTES.adminRoles, action: 'admin:user:role' },
+  { key: 'audit', label: '审计日志', path: ROUTES.adminAuditLog, action: 'admin:audit:view' },
 ];
 
 /** 根据当前路径定位激活 Tab（前缀匹配） */
@@ -29,6 +30,8 @@ function activeOf(pathname: string): string | false {
 export function AdminTabs(): JSX.Element {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const { can } = usePermission();
+  const visible = ADMIN_TABS.filter((t) => !t.action || can(t.action));
   const value = activeOf(pathname);
 
   return (
@@ -36,13 +39,13 @@ export function AdminTabs(): JSX.Element {
       <Tabs
         value={value}
         onChange={(_, key: string) => {
-          const t = ADMIN_TABS.find((x) => x.key === key);
+          const t = visible.find((x) => x.key === key);
           if (t) navigate(t.path);
         }}
         variant="scrollable"
         scrollButtons="auto"
       >
-        {ADMIN_TABS.map((t) => (
+        {visible.map((t) => (
           <Tab key={t.key} value={t.key} label={t.label} sx={{ minWidth: 110 }} />
         ))}
       </Tabs>

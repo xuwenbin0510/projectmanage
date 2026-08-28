@@ -37,6 +37,8 @@ export interface MenuItem {
   phase?: 'P1' | 'P2';
   /** 仅这些全局角色可见（不填 = 全部可见） */
   roles?: string[];
+  /** 任一权限动作命中即可见（与权限矩阵对齐；不填 = 不限） */
+  permissions?: string[];
   /** 是否出现在移动端底部 Tab */
   mobile?: boolean;
 }
@@ -50,14 +52,17 @@ export const MAIN_MENU: MenuItem[] = [
     label: '全局总览',
     path: ROUTES.metrics,
     icon: 'metrics',
-    roles: ['admin', 'pmo', 'management'],
+    // 与权限矩阵对齐：具备 dashboard:global 权限（默认 admin/cho/cpo/cto/management/pmo）即可见
+    permissions: ['dashboard:global'],
   },
   {
     key: 'admin',
     label: '管理后台',
     path: ROUTES.adminUsers,
     icon: 'admin',
-    roles: ['admin', 'pmo'],
+    // B19：管理后台入口改为按权限矩阵判定，不再硬编码 admin/pmo。
+    // HR负责人（cho）在矩阵中被授予 admin:user:role / admin:audit:view，应能看到入口。
+    permissions: ['admin:user:role', 'admin:audit:view', 'admin:template'],
     mobile: true,
   },
 ];

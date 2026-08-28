@@ -52,6 +52,8 @@ function toApiStep(row) {
     stepIndex: mappers.toNum(row.step_index, 0),
     role: mappers.toStr(row.role),
     assigneeOpenId: mappers.toNull(row.assignee_open_id),
+    // 身份设计铁律：审批人判定锚定 users.id（assignee_user_id），飞书 open_id 仅作展示同步属性
+    assigneeUserId: row.assignee_user_id != null ? Number(row.assignee_user_id) : null,
     assigneeName: mappers.toStr(row.assignee_name, '待指派'),
     required: mappers.toBool(row.required),
     status: mappers.toStr(row.status, 'pending'),
@@ -168,7 +170,7 @@ function listMyApprovals(db, me) {
     .all();
   return rows
     .map(function (r) { return toApiReview(db, r); })
-    .filter(function (r) { return canDecide(r, openId, globalRoles) !== null; });
+    .filter(function (r) { return canDecide(r, me.id, globalRoles) !== null; });
 }
 
 /**
@@ -496,9 +498,11 @@ function createReview(db, payload, me) {
  * @param {string} [globalRole] 当前用户全局角色（传 'admin' 触发兜底）
  * @returns {object|null} ReviewStep 或 null
  */
-function canDecide(review, openId, globalRoles) {
+function canDecide(review, meId, globalRoles) {
   if (!review || review.status !== '审批中') return null;
-  const me = String(openId || '');
+  // 身份设计铁律：审批人判定一律按系统身份键 users.id（assignee_user_id），
+  // 飞书 open_id 按应用隔离、会与登录用户（主空间）对不上，绝不作为跨栈身份键。
+  const myId = String(meId != null ? meId : '');
   // E1.5：全局职位取并集，任一为 admin 即享 admin 兜底决议权
   const roles = Array.isArray(globalRoles) ? globalRoles : [globalRoles];
   const isAdmin = roles.indexOf('admin') >= 0;
@@ -506,7 +510,7 @@ function canDecide(review, openId, globalRoles) {
   const isCurrent = function (s) { return !!s && s.status === 'current'; };
 
   if (review.mode === 'parallel_veto') {
-    const mine = steps.find(function (s) { return isCurrent(s) && s.assigneeOpenId === me; });
+    const mine = steps.find(function (s) { return isCurrent(s) && s.assigneeUserId != null && String(s.assigneeUserId) === myId; });
     if (mine) return mine;
     if (isAdmin) return steps.find(isCurrent) || null;
     return null;
@@ -514,7 +518,7 @@ function canDecide(review, openId, globalRoles) {
 
   const step = steps[review.currentStep || 0];
   if (!step || step.status !== 'current') return null;
-  if (step.assigneeOpenId === me) return step;
+  if (step.assigneeUserId != null && String(step.assigneeUserId) === myId) return step;
   if (isAdmin) return step;
   return null;
 }
@@ -548,7 +552,7 @@ function decide(db, id, action, payload, me) {
   const actorUserId = me && me.id != null ? Number(me.id) : mappers.resolveUserId(db, openId);
 
   const review = toApiReview(db, row);
-  const step = canDecide(review, openId, globalRoles);
+  const step = canDecide(review, me.id, globalRoles);
   if (!step) throw new AppError(ErrorCode.E_NOT_APPROVER);
 
   const body = payload && typeof payload === 'object' ? payload : {};

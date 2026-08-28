@@ -38,7 +38,7 @@ import type { Report } from '@/types/report';
 import { useProjectStore } from '@/stores/projectStore';
 import { useWbsStore } from '@/stores/wbsStore';
 import { useFlowStore } from '@/stores/flowStore';
-import { useToast } from '@/hooks';
+import { usePermission, useToast } from '@/hooks';
 import { api, USE_MOCK } from '@/api/client';
 import { useAuthStore } from '@/stores/authStore';
 import { REPORT_SECTION_TITLE, REJECT_REASON_MAX } from '@/config/enums';
@@ -131,20 +131,17 @@ export function ReportsPage(): JSX.Element {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   /* ── B15：删除草稿（仅「草稿」可删，作者本人或 admin）──────────────────── */
+  const { can } = usePermission();
   const currentUser = useAuthStore((s) => s.user);
-  const userGlobalRoles = useMemo(() => {
-    if (!currentUser) return [] as string[];
-    return Array.isArray(currentUser.globalRoles) && currentUser.globalRoles.length
-      ? currentUser.globalRoles
-      : [currentUser.globalRole];
-  }, [currentUser]);
-  const isAdmin = userGlobalRoles.includes('admin');
   /**
-   * 是否可管理（编辑 / 删除）：作者本人 或 全局 admin；mock 演示放开（演示自由编辑）。
-   * 注意：按钮可见性仅为前端体验，最终以服务端 `report.service#updateReport / deleteReport` 判定为准。
+   * 是否可管理（编辑 / 删除）：作者本人 或 具备「工作日志管理」权限（矩阵驱动，默认仅 admin）；
+   * mock 演示放开（演示自由编辑）。
+   * 注意：按钮可见性仅为前端体验，最终以服务端 `report.service#updateReport / deleteReport` 判定为准
+   * （服务端同样按 `report:manage` 矩阵判定，与前端同源）。
    */
+  const canReportManage = can('report:manage');
   const canManage = (r: Report): boolean =>
-    USE_MOCK || !currentUser || isAdmin || currentUser.openId === r.author;
+    USE_MOCK || !currentUser || canReportManage || currentUser.openId === r.author;
 
   /** 删除目标（null = 关闭二次确认弹窗） */
   const [deleteTarget, setDeleteTarget] = useState<Report | null>(null);

@@ -29,6 +29,7 @@ export function AppLayout(): JSX.Element {
   const setDrawer = useUiStore((s) => s.setMobileDrawer);
   const { isMobile } = useResponsive();
   const user = useAuthStore((s) => s.user);
+  const can = useAuthStore((s) => s.can);
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
@@ -40,7 +41,10 @@ export function AppLayout(): JSX.Element {
         ? [user.globalRole]
         : [];
   const mobileMenu = MAIN_MENU.filter(
-    (m) => m.mobile && (!m.roles || m.roles.some((r) => userGlobalRoles.includes(r))),
+    (m) =>
+      m.mobile &&
+      (!m.roles || m.roles.some((r) => userGlobalRoles.includes(r))) &&
+      (!m.permissions || m.permissions.some((a) => can(a))),
   );
   const activeMobile = mobileMenu.find((m) => pathname.startsWith(m.path.split('/').slice(0, 2).join('/')));
 

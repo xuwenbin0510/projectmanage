@@ -89,10 +89,13 @@ function updateProjectBasic(db, req, id, payload) {
   /* 权限：admin 恒放行；否则项目负责人或创建人；
      q-0 放开：矩阵里被分配 project:edit 的角色（如 pmo，全局 scope）也能编辑任意项目。
      其余 4 处归属判定（周报作者/确认人、评审发起人）保持 owner/author-only 不动。 */
-  const isAdmin = resolveGlobalRoles(me).indexOf('admin') >= 0;
-  const isOwner = p.pm === me.open_id || p.created_by === me.open_id;
+  const meId = me && me.id != null ? me.id : null;
+  const isOwner =
+    (meId != null && p.created_by_user_id === meId) ||
+    (meId != null && db.prepare("SELECT 1 FROM project_members WHERE project_id = ? AND member_user_id = ? AND project_role = 'pm'").get(id, meId) != null);
+  // 矩阵对齐：canDo 对 admin 短路放行，故无需额外 isAdmin 判定
   const canEditByMatrix = rbac.canDo(resolveGlobalRoles(me), 'project:edit');
-  if (!isAdmin && !isOwner && !canEditByMatrix) {
+  if (!isOwner && !canEditByMatrix) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '仅项目负责人、管理员或被授权角色可编辑', { projectId: id });
   }
 
@@ -456,9 +459,9 @@ function listProjects(db, query, me) {
   if (q.type) { where.push('p.type = ?'); args.push(String(q.type)); }
   if (q.status) { where.push('p.status = ?'); args.push(String(q.status)); }
   if (q.health) { where.push('p.health = ?'); args.push(String(q.health)); }
-  if (q.onlyMine && me && me.open_id) {
-    where.push('EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)');
-    args.push(String(me.open_id));
+  if (q.onlyMine && me && me.id != null) {
+    where.push('EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.member_user_id = ?)');
+    args.push(me.id);
   }
 
   const rows = db
@@ -489,16 +492,16 @@ function listProjects(db, query, me) {
  * @returns {Array<object>} ProjectListItem[]
  */
 function listMyProjectItems(db, me) {
-  const openId = me && me.open_id ? String(me.open_id) : '';
-  if (!openId) return [];
+  const myId = me && me.id != null ? me.id : '';
+  if (!myId) return [];
   const rows = db
     .prepare(
       `SELECT p.* FROM projects p
         WHERE p.deleted_at IS NULL
-          AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)
+          AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.member_user_id = ?)
         ORDER BY p.updated_at DESC, p.id DESC`,
     )
-    .all(openId);
+    .all(myId);
   const ctx = loadListContext(db, rows.map(function (r) { return String(r.id); }));
   const todayStr = dates.today();
   return rows.map(function (r) { return toListItem(r, ctx, todayStr, db); });

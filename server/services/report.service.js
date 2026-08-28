@@ -19,6 +19,7 @@ const wbsService = require('./wbs.service');
 const milestoneService = require('./milestone.service');
 const snapshotService = require('./snapshot.service');
 const { resolveGlobalRoles } = require('../middleware/auth');
+const { canDo } = require('../config/permissions');
 
 /* ── 小工具 ─────────────────────────────────────────── */
 
@@ -880,9 +881,13 @@ function updateReport(db, id, payload, me) {
   }
 
   /* D-2 安全加固：仅作者本人或全局 admin 可编辑，防止越权改他人工作日志 */
-  const isAuthor = toStr(row.author_open_id) === toStr(actor.open_id);
-  const isAdmin = resolveGlobalRoles(actor).indexOf('admin') >= 0;
-  if (!isAuthor && !isAdmin) {
+  // 设计修正：优先用 users.id（author_user_id）判定作者归属，open_id 仅兜底；
+  // 避免导入成员（author_open_id 属另一飞书空间）被误判为「非本人」。
+  const isAuthor = (row.author_user_id != null && actor.id != null && row.author_user_id === actor.id)
+    || toStr(row.author_open_id) === toStr(actor.open_id);
+  /* 作者本人 或 具备「工作日志管理」权限（矩阵驱动，默认仅 admin；可由权限矩阵放开给非 admin） */
+  const canManage = canDo(resolveGlobalRoles(actor), 'report:manage');
+  if (!isAuthor && !canManage) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '只能编辑本人提交的工作日志', { id: reportId });
   }
 
@@ -998,23 +1003,25 @@ function resolveConfirmers(db, projectId, authorOpenId) {
   const result = new Set();
   if (!pid) return result;
 
-  /* 1. 权威 pm 集合（结构化角色源） */
+  /* 1. 权威 pm 集合（结构化角色源）。经 member_user_id 桥接回主空间 open_id，
+   *    解决导入成员 user_open_id 属「另一套飞书空间」、与登录用户 open_id 对不上的根因。 */
   const pmRows = db
     .prepare(
-      "SELECT user_open_id FROM project_members WHERE project_id = ? AND project_role = 'pm'"
+      "SELECT u.open_id FROM project_members pm JOIN users u ON u.id = pm.member_user_id WHERE pm.project_id = ? AND pm.project_role = 'pm'"
     )
     .all(pid);
-  const pmSet = new Set(pmRows.map(function (r) { return toStr(r.user_open_id); }).filter(Boolean));
+  const pmSet = new Set(pmRows.map(function (r) { return toStr(r.open_id); }).filter(Boolean));
 
   /* 2. 确认人来源
    *    - 项目有 PM：确认人 = 本项目的 PM 集合（团队成员写周报由本项目 PM 确认）。
    *    - 项目无 PM：升级到 PMO ∪ admin 兜底（全局项目治理角色，先于管理层介入），
-   *      而非直接跳管理层。PMO 由「全局职位 pmo（users.global_role 或 user_roles.role_key='pmo'）」构成。 */
+   *      而非直接跳管理层。PMO 由「全局职位 pmo（users.global_role 或 user_roles.role_key='pmo'）」构成。
+   *    同样经 role_user_id 桥接回主空间 open_id。 */
   if (pmSet.size === 0) {
     const pmoRows = db
       .prepare(
         "SELECT open_id FROM users WHERE global_role = 'pmo' "
-        + "UNION SELECT user_open_id FROM user_roles WHERE role_key = 'pmo'",
+        + "UNION SELECT u.open_id FROM user_roles ur JOIN users u ON u.id = ur.role_user_id WHERE ur.role_key = 'pmo'",
       )
       .all();
     pmoRows.forEach(function (r) {
@@ -1024,7 +1031,7 @@ function resolveConfirmers(db, projectId, authorOpenId) {
     const adminRows = db
       .prepare(
         "SELECT open_id FROM users WHERE global_role = 'admin' "
-        + "UNION SELECT user_open_id FROM user_roles WHERE role_key = 'admin'",
+        + "UNION SELECT u.open_id FROM user_roles ur JOIN users u ON u.id = ur.role_user_id WHERE ur.role_key = 'admin'",
       )
       .all();
     adminRows.forEach(function (r) {
@@ -1235,9 +1242,13 @@ function deleteReport(db, id, me) {
   }
 
   /* 仅作者本人或全局 admin 可删（与 updateReport D-2 一致） */
-  const isAuthor = toStr(row.author_open_id) === toStr(actor.open_id);
-  const isAdmin = resolveGlobalRoles(actor).indexOf('admin') >= 0;
-  if (!isAuthor && !isAdmin) {
+  // 设计修正：优先用 users.id（author_user_id）判定作者归属，open_id 仅兜底；
+  // 避免导入成员（author_open_id 属另一飞书空间）被误判为「非本人」。
+  const isAuthor = (row.author_user_id != null && actor.id != null && row.author_user_id === actor.id)
+    || toStr(row.author_open_id) === toStr(actor.open_id);
+  /* 作者本人 或 具备「工作日志管理」权限（矩阵驱动，默认仅 admin；可由权限矩阵放开给非 admin） */
+  const canManage = canDo(resolveGlobalRoles(actor), 'report:manage');
+  if (!isAuthor && !canManage) {
     throw new AppError(ErrorCode.E_FORBIDDEN, '只能删除本人提交的工作日志草稿', { id: reportId });
   }
 

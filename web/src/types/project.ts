@@ -5,6 +5,7 @@ import type { ReviewMode } from '@/types/review';
 
 export type RoleKey =
   | 'admin'
+  | 'cho'
   | 'cpo'
   | 'cto'
   | 'management'
@@ -18,6 +19,7 @@ export type RoleKey =
   | 'qa'
   | 'sale'
   | 'tl'
+  | 'ued'
   | 'ued';
 
 /** 用户主职位（职位管理里的职位 key；视野维度由职位自身设定决定）。等同于 RoleKey，保留别名以兼容存量代码。 */

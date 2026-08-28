@@ -1330,6 +1330,9 @@ function migrationV18(db, now) {
     ['admin:user:role', '用户角色管理', 'global_admin', '全局 / 管理'],
     ['admin:audit:view', '审计查看', 'global_admin', '全局 / 管理'],
     ['admin:template', '生命周期模板管理', 'global_admin', '全局 / 管理'],
+    ['admin:permission:config', '权限矩阵配置', 'global_admin', '全局 / 管理'],
+    ['admin:feishu:import', '飞书通讯录导入', 'global_admin', '全局 / 管理'],
+    ['report:manage', '工作日志管理（删除他人）', 'report_review', '周报 / 评审 / 变更'],
     ['document:upload', '文档上传', 'global_admin', '全局 / 管理'],
     ['document:delete', '文档删除', 'global_admin', '全局 / 管理'],
   ];
@@ -1614,6 +1617,38 @@ function migrationV24(db, now) {
   console.log('[migrations] v24 身份收口：补 user_id 列并回填既有人/操作人引用');
 }
 
+/**
+ * v25 · 权限矩阵补 3 个「后台配置类」action（单一真相源收口）
+ *  - admin:permission:config：权限矩阵编辑器（GET/PUT /api/admin/permissions、reset、permission-actions）
+ *  - admin:feishu:import：飞书通讯录导入（contacts / import / search）
+ *  - report:manage：删除 / 管理他人工作日志草稿（仅作者本人或具备本权限者）
+ * 三者默认仅授 admin（防权限提升）；后续可在「权限矩阵」页放开给其它角色。
+ * INSERT OR IGNORE 幂等：全新库由 v18 已种入 DEFAULT_PERMISSIONS（本批次同步扩充），此处兜底补种。
+ */
+function migrationV25(db, now) {
+  const NEW_ACTIONS = [
+    ['admin:permission:config', '权限矩阵配置', 'global_admin', '全局 / 管理'],
+    ['admin:feishu:import', '飞书通讯录导入', 'global_admin', '全局 / 管理'],
+    ['report:manage', '工作日志管理（删除他人）', 'report_review', '周报 / 评审 / 变更'],
+  ];
+  const insAction = db.prepare(
+    'INSERT OR IGNORE INTO permission_actions '
+    + '(action, label, group_key, group_label, description, order_no, enabled, builtin) '
+    + 'VALUES (?, ?, ?, ?, ?, ?, 1, 1)'
+  );
+  const insRule = db.prepare(
+    "INSERT OR IGNORE INTO permission_rules (action, role_key, granted, updated_at, updated_by) VALUES (?, 'admin', 1, ?, 'seed:v25')"
+  );
+  const tx = db.transaction(function () {
+    NEW_ACTIONS.forEach(function (m, i) {
+      insAction.run(m[0], m[1], m[2], m[3], m[1], 1000 + i);
+      insRule.run(m[0], now);
+    });
+  });
+  tx();
+  console.log('[migrations] v25 权限矩阵补 3 个后台配置 action（admin:permission:config / admin:feishu:import / report:manage）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1645,6 +1680,7 @@ const MIGRATIONS = [
   { version: 22, name: 'connect-v22-removed-template-docs', up: migrationV22 },
   { version: 23, name: 'connect-v23-auth-gate', up: migrationV23 },
   { version: 24, name: 'connect-v24-user-id-columns', up: migrationV24 },
+  { version: 25, name: 'connect-v25-admin-config-actions', up: migrationV25 },
 ];
 
 /**

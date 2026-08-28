@@ -39,6 +39,7 @@ interface SidebarProps {
 /** 左侧主导航 */
 export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
   const user = useAuthStore((s) => s.user);
+  const can = useAuthStore((s) => s.can);
   const { pathname } = useLocation();
   const { isDark } = useThemeMode();
 
@@ -51,7 +52,9 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
         ? [user.globalRole]
         : [];
   const visible = MAIN_MENU.filter(
-    (m) => !m.roles || m.roles.some((r) => userGlobalRoles.includes(r)),
+    (m) =>
+      (!m.roles || m.roles.some((r) => userGlobalRoles.includes(r))) &&
+      (!m.permissions || m.permissions.some((a) => can(a))),
   );
 
   return (

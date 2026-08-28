@@ -11,7 +11,7 @@
  *
  * 权限口径：
  *  - 项目 / 任务 / 周报导出：沿用「登录即可查看」（查看 = 任意登录用户），不额外加成员限定；
- *  - 审计导出：敏感（含全员操作记录），仅 admin / pmo / management 可调（路由层 requireGlobalRole 守门）。
+ *  - 审计导出：敏感（含全员操作记录），需 admin:audit:view 权限（路由层 requirePermission 守门，与权限矩阵同源）。
  */
 
 const db = require('../../db');
@@ -22,14 +22,12 @@ const wbsService = require('./wbs.service');
 const reportService = require('./report.service');
 const auditService = require('./audit.service');
 const { resolveGlobalRoles } = require('../middleware/auth');
+const rbac = require('../config/permissions');
 
-const ADMIN_ROLES = ['admin', 'pmo', 'management'];
-
-/** 是否拥有全局管理角色（看全量 / 导出审计）。E1.5：全局职位取并集。 */
+/** 是否拥有全局项目可见性（看全量 / 导出审计）。与权限矩阵 dashboard:global 同源。 */
 function isAdminRole(me) {
   if (!me) return false;
-  const roles = resolveGlobalRoles(me);
-  return roles.some(function (r) { return ADMIN_ROLES.indexOf(r) >= 0; });
+  return rbac.canDo(resolveGlobalRoles(me), 'dashboard:global');
 }
 
 /** 导出用日期戳（YYYYMMDD），用于文件名。 */

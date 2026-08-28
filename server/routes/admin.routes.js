@@ -13,7 +13,8 @@ const express = require('express');
 
 const db = require('../../db');
 const { ok, asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
-const { requireAuth, requireGlobalRole } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/rbac');
 const { toApiUser } = require('../lib/mappers');
 const { nowIso } = require('../lib/dates');
 const { genId } = require('../lib/ids');
@@ -89,7 +90,7 @@ router.get(
 router.patch(
   '/admin/users/:openId',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function updateUser(req, res) {
     const openId = String(req.params.openId || '');
     const body = req.body || {};
@@ -121,8 +122,8 @@ router.patch(
       if (openId === String(req.user.open_id)) {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
-      if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id)) && primary !== 'admin') {
-        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = 'admin')) AND open_id <> ?").get(openId);
+      if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE role_user_id = ? AND role_key = 'admin'").get(target.id)) && primary !== 'admin') {
+        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR id IN (SELECT role_user_id FROM user_roles WHERE role_key = 'admin')) AND id <> ?").get(target.id);
         if (!cnt || Number(cnt.n) < 1) {
           throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
         }
@@ -142,8 +143,8 @@ router.patch(
       if (openId === String(req.user.open_id)) {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
-      if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id)) && role !== 'admin') {
-        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = 'admin')) AND open_id <> ?").get(openId);
+      if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE role_user_id = ? AND role_key = 'admin'").get(target.id)) && role !== 'admin') {
+        const cnt = db.prepare("SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR id IN (SELECT role_user_id FROM user_roles WHERE role_key = 'admin')) AND id <> ?").get(target.id);
         if (!cnt || Number(cnt.n) < 1) {
           throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
         }
@@ -167,13 +168,13 @@ router.patch(
       // 防锁死②：不能把唯一的 admin 设为非 active（pending / disabled），否则系统无人可管理
       const isTargetAdmin =
         target.global_role === 'admin' ||
-        db.prepare("SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = 'admin'").get(target.open_id);
+        db.prepare("SELECT 1 FROM user_roles WHERE role_user_id = ? AND role_key = 'admin'").get(target.id);
       if (isTargetAdmin && status !== 'active') {
         const cnt = db
           .prepare(
-            "SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = 'admin')) AND open_id <> ?",
+            "SELECT COUNT(*) AS n FROM users WHERE (global_role = 'admin' OR id IN (SELECT role_user_id FROM user_roles WHERE role_key = 'admin')) AND id <> ?",
           )
-          .get(openId);
+          .get(target.id);
         if (!cnt || Number(cnt.n) < 1) {
           throw new AppError(ErrorCode.E_LAST_ADMIN, undefined, { openId: openId });
         }
@@ -235,7 +236,7 @@ router.patch(
         USER_REFERENCE_CHECKS.forEach(function (ref) {
           db.prepare('UPDATE ' + ref.table + ' SET ' + ref.col + ' = ? WHERE ' + ref.col + ' = ?').run(newOpenId, openId);
         });
-        db.prepare('UPDATE user_roles SET user_open_id = ? WHERE user_open_id = ?').run(newOpenId, openId);
+        db.prepare('UPDATE user_roles SET user_open_id = ? WHERE role_user_id = ?').run(newOpenId, target.id);
         // 已用新 open_id 做 WHERE 的后续逻辑，统一切换到 newOpenId
       });
       tx();
@@ -245,7 +246,7 @@ router.patch(
     if (hasExtraRoles) {
       const effectiveOpenId = newOpenId || openId;
       const tx = db.transaction(function () {
-        db.prepare('DELETE FROM user_roles WHERE user_open_id = ?').run(effectiveOpenId);
+        db.prepare('DELETE FROM user_roles WHERE role_user_id = ?').run(target.id);
         const ins = db.prepare(
           'INSERT OR IGNORE INTO user_roles (id, user_open_id, role_key, assigned_by, assigned_at, role_user_id, assigned_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
         );
@@ -298,7 +299,7 @@ function checkUserReferences(openId) {
 router.delete(
   '/admin/users/:openId',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function deleteUser(req, res) {
     const openId = String(req.params.openId || '');
     if (openId === String(req.user.open_id)) {
@@ -315,7 +316,7 @@ router.delete(
     }
 
     const tx = db.transaction(function () {
-      db.prepare('DELETE FROM user_roles WHERE user_open_id = ?').run(openId);
+      db.prepare('DELETE FROM user_roles WHERE role_user_id = ?').run(target.id);
       db.prepare('DELETE FROM users WHERE open_id = ?').run(openId);
     });
     tx();
@@ -332,7 +333,7 @@ router.delete(
 router.post(
   '/admin/users',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function createUser(req, res) {
     const body = req.body || {};
     const openIdRaw = String(body.openId || '').trim();
@@ -456,7 +457,7 @@ router.post(
 router.post(
   '/admin/users/:openId/reset-password',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function resetUserPassword(req, res) {
     const openId = String(req.params.openId || '');
     if (openId === String(req.user.open_id)) {
@@ -509,7 +510,7 @@ function toApiReviewTemplate(row) {
 router.get(
   '/admin/review-templates',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function listReviewTemplates(req, res) {
     const rows = db
       .prepare('SELECT * FROM review_templates ORDER BY scope DESC, key ASC')
@@ -525,7 +526,7 @@ router.get(
 router.post(
   '/admin/review-templates',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function createReviewTemplate(req, res) {
     const body = req.body || {};
     const key = String(body.key || '').trim();
@@ -587,7 +588,7 @@ router.post(
 router.put(
   '/admin/review-templates/:key',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function updateReviewTemplate(req, res) {
     const key = String(req.params.key || '');
     const body = req.body || {};
@@ -664,7 +665,7 @@ router.put(
 router.patch(
   '/admin/review-templates/:key/active',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function toggleReviewTemplateActive(req, res) {
     const key = String(req.params.key || '');
     const body = req.body || {};
@@ -685,7 +686,7 @@ router.patch(
 router.delete(
   '/admin/review-templates/:key',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function deleteReviewTemplate(req, res) {
     const key = String(req.params.key || '');
     const target = db.prepare('SELECT * FROM review_templates WHERE key = ?').get(key);
@@ -837,7 +838,7 @@ function validateTemplateDefinition(def) {
 router.post(
   '/admin/templates',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function createTemplate(req, res) {
     const body = req.body || {};
     const projectType = String(body.projectType || '');
@@ -874,7 +875,7 @@ router.post(
 router.put(
   '/admin/templates/:id',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function updateTemplate(req, res) {
     const id = String(req.params.id || '');
     const body = req.body || {};
@@ -915,7 +916,7 @@ router.put(
 router.patch(
   '/admin/templates/:id/active',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function toggleTemplateActive(req, res) {
     const id = String(req.params.id || '');
     const body = req.body || {};
@@ -936,7 +937,7 @@ router.patch(
 router.delete(
   '/admin/templates/:id',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function deleteTemplate(req, res) {
     const id = String(req.params.id || '');
     const target = db.prepare('SELECT * FROM lifecycle_templates WHERE id = ?').get(id);
@@ -964,7 +965,7 @@ router.delete(
 router.post(
   '/admin/templates/:id/duplicate',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:template'),
   asyncHandler(async function duplicateTemplate(req, res) {
     const id = String(req.params.id || '');
     const target = db.prepare('SELECT * FROM lifecycle_templates WHERE id = ?').get(id);
@@ -1010,7 +1011,7 @@ function toApiRole(row) {
 router.get(
   '/admin/roles',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function listRoles(req, res) {
     const rows = db.prepare('SELECT * FROM roles ORDER BY order_no ASC, role_key ASC').all();
     res.json(ok(rows.map(toApiRole)));
@@ -1021,7 +1022,7 @@ router.get(
 router.post(
   '/admin/roles',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function createRole(req, res) {
     const body = req.body || {};
     const roleKey = String(body.roleKey || '').trim();
@@ -1060,7 +1061,7 @@ router.post(
 router.put(
   '/admin/roles/:roleKey',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function updateRole(req, res) {
     const roleKey = String(req.params.roleKey || '');
     const body = req.body || {};
@@ -1107,7 +1108,7 @@ router.put(
 router.delete(
   '/admin/roles/:roleKey',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:user:role'),
   asyncHandler(async function deleteRole(req, res) {
     const roleKey = String(req.params.roleKey || '');
     const target = db.prepare('SELECT * FROM roles WHERE role_key = ?').get(roleKey);
@@ -1169,7 +1170,7 @@ function readMatrix() {
 router.get(
   '/admin/permissions',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:permission:config'),
   asyncHandler(async function getPermissionsMatrix(req, res) {
     res.json(ok({
       matrix: readMatrix(),
@@ -1185,7 +1186,7 @@ router.get(
 router.put(
   '/admin/permissions',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:permission:config'),
   asyncHandler(async function putPermissionsMatrix(req, res) {
     assertWritableSource();
     const body = req.body || {};
@@ -1231,7 +1232,7 @@ router.put(
 router.post(
   '/admin/permissions/reset',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:permission:config'),
   asyncHandler(async function resetPermissionsMatrix(req, res) {
     assertWritableSource();
 
@@ -1265,7 +1266,7 @@ router.post(
 router.get(
   '/admin/permission-actions',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:permission:config'),
   asyncHandler(async function getPermissionActions(req, res) {
     res.json(ok(permissionCatalog.allActions().filter(function (a) { return a.enabled; })));
   }),
@@ -1275,7 +1276,7 @@ router.get(
 router.put(
   '/admin/permission-actions',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:permission:config'),
   asyncHandler(async function putPermissionActions(req, res) {
     assertWritableSource();
     const body = req.body || {};
@@ -1320,7 +1321,7 @@ router.put(
 router.get(
   '/admin/feishu/contacts',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:feishu:import'),
   asyncHandler(async function previewFeishuContacts(req, res) {
     let contacts;
     try {
@@ -1358,7 +1359,7 @@ router.get(
 router.post(
   '/admin/feishu/import',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:feishu:import'),
   asyncHandler(async function importFeishuUsers(req, res) {
     const body = req.body || {};
     const initialStatus = body.initialStatus === 'active' ? 'active' : 'pending';
@@ -1395,7 +1396,7 @@ router.post(
 router.post(
   '/admin/feishu/search',
   requireAuth,
-  requireGlobalRole('admin'),
+  requirePermission('admin:feishu:import'),
   asyncHandler(async function searchFeishuUsers(req, res) {
     const body = req.body || {};
     const query = String(body.query || '').trim();

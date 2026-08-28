@@ -496,6 +496,7 @@ function toApiWbsNode(row, nameOf) {
     name: toStr(row.name),
     description: toStr(row.description),
     owner: owner,
+    ownerUserId: row.owner_user_id != null ? Number(row.owner_user_id) : null,
     ownerName: ownerName,
     estimateDays: toNum(row.estimate_days, 0),
     actualDays: toNum(row.actual_days, 0),

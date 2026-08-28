@@ -78,8 +78,8 @@ function normalizePriority(raw) {
  */
 function resolveOwnerUserId(db, openId) {
   if (!openId) return null;
-  const u = db.prepare('SELECT id FROM users WHERE open_id = ?').get(String(openId));
-  return u ? u.id : null;
+  // 身份设计铁律：写边界把传入的 open_id（可能来自不同飞书空间）经统一桥接解析成 users.id
+  return mappers.resolveUserId(db, openId);
 }
 
 function loadNodes(db, projectId) {

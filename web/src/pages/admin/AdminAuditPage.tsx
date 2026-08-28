@@ -7,8 +7,7 @@ import { EmptyState, LoadingState, PageHeader, SectionCard } from '@/components/
 import { AdminTabs } from './AdminTabs';
 import type { AuditLog } from '@/types/audit';
 import { api, USE_MOCK } from '@/api/client';
-import { useToast } from '@/hooks';
-import { useAuthStore } from '@/stores/authStore';
+import { usePermission, useToast } from '@/hooks';
 import { AUDIT_ACTION_LABEL, AUDIT_ENTITY_LABEL } from '@/config/enums';
 import { fmtDateTime } from '@/utils/date';
 import { alphaOf as alpha, tokens, toneColor } from '@/theme/tokens';
@@ -18,9 +17,6 @@ import { csvDateStamp, downloadCsv, fetchCsv, toCsv } from '@/utils/csv';
 const AUDIT_CSV_HEADERS = [
   '日志ID', '项目ID', '项目名称', '实体类型', '实体ID', '操作', '操作人ID', '操作人名', '摘要', '时间',
 ];
-
-/** 审计导出权限：仅 admin / pmo / management（与后端 requireGlobalRole 守门一致）。 */
-const AUDIT_EXPORT_ROLES = ['admin', 'pmo', 'management'];
 
 const ACTION_TONE: Record<string, keyof typeof toneColor> = {
   create: 'success',
@@ -44,10 +40,9 @@ export function AdminAuditPage(): JSX.Element {
   const [entityType, setEntityType] = useState('');
   const [action, setAction] = useState('');
 
-  const me = useAuthStore((s) => s.user);
-  const meRoles =
-    me?.globalRoles?.length ? me.globalRoles : me?.globalRole ? [me.globalRole] : [];
-  const canExportAudit = meRoles.some((r) => AUDIT_EXPORT_ROLES.includes(r));
+  const { can } = usePermission();
+  // 与后端 /export/audits 的 requirePermission('admin:audit:view') 同源
+  const canExportAudit = can('admin:audit:view');
 
   /** 导出审计 CSV（真实模式走服务端，mock 模式本地生成）。 */
   const handleExportAudit = async (): Promise<void> => {
@@ -77,19 +72,34 @@ export function AdminAuditPage(): JSX.Element {
     }
   };
 
-  const load = (): void => {
+  // 以 entityType / action 为依赖驱动查询，始终使用最新筛选值（避免闭包捕获旧值导致筛选慢一拍）。
+  useEffect(() => {
+    if (!canExportAudit) {
+      setLoading(false);
+      return;
+    }
+    let alive = true;
     setLoading(true);
     api
       .listAudit({ entityType, action, pageSize: 100 })
-      .then((res) => setLogs(res.items))
+      .then((res) => { if (alive) setLogs(res.items); })
       .catch((e: unknown) => toast.error(e))
-      .finally(() => setLoading(false));
-  };
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [entityType, action, canExportAudit, toast]);
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toast]);
+  if (!canExportAudit) {
+    return (
+      <Stack spacing={2.5}>
+        <AdminTabs />
+        <EmptyState
+          title="无访问权限"
+          description="当前账号无「审计日志查看」权限（admin:audit:view）。如需开通，请联系系统管理员在权限矩阵中授予。"
+          icon={<HistoryOutlinedIcon />}
+        />
+      </Stack>
+    );
+  }
 
   return (
     <Stack spacing={2.5}>
@@ -121,10 +131,9 @@ export function AdminAuditPage(): JSX.Element {
             select
             label="对象类型"
             value={entityType}
-            onChange={(e) => {
-              setEntityType(e.target.value);
-              setTimeout(load, 0);
-            }}
+            displayEmpty
+            renderValue={(v) => (v ? AUDIT_ENTITY_LABEL[v] ?? v : '全部')}
+            onChange={(e) => setEntityType(e.target.value)}
             sx={{ minWidth: 150 }}
           >
             <MenuItem value="">全部</MenuItem>
@@ -139,10 +148,9 @@ export function AdminAuditPage(): JSX.Element {
             select
             label="动作"
             value={action}
-            onChange={(e) => {
-              setAction(e.target.value);
-              setTimeout(load, 0);
-            }}
+            displayEmpty
+            renderValue={(v) => (v ? AUDIT_ACTION_LABEL[v] ?? v : '全部')}
+            onChange={(e) => setAction(e.target.value)}
             sx={{ minWidth: 150 }}
           >
             <MenuItem value="">全部</MenuItem>

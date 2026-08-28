@@ -25,6 +25,7 @@ import { PageHeader, SectionCard } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/authStore';
+import { usePermission } from '@/hooks';
 import type { PermissionActionMeta, PermissionRoleMeta } from '@/api/contract';
 
 const GROUP_ORDER = ['项目', '质量门 / 里程碑', 'WBS / 看板 / 任务', '周报 / 评审 / 变更', '全局 / 管理'];
@@ -35,10 +36,10 @@ interface GroupedMatrix {
 }
 
 export function AdminPermissionsPage(): JSX.Element {
+  const { can } = usePermission();
   const user = useAuthStore((s) => s.user);
-  const isAdmin = !!user && Array.isArray(user.globalRoles)
-    ? user.globalRoles.includes('admin')
-    : user?.globalRole === 'admin';
+  // 矩阵驱动：是否可配置权限矩阵（默认仅 admin，可在权限矩阵页放开给非 admin）
+  const canConfig = can('admin:permission:config');
 
   const [roles, setRoles] = useState<PermissionRoleMeta[]>([]);
   const [actions, setActions] = useState<PermissionActionMeta[]>([]);
@@ -72,7 +73,7 @@ export function AdminPermissionsPage(): JSX.Element {
   };
 
   const loadMatrix = async () => {
-    if (!isAdmin) return;
+    if (!canConfig) return;
     const resp = await api.getPermissionMatrix();
     setMatrix(resp.matrix);
     setDirty(false);
@@ -94,7 +95,7 @@ export function AdminPermissionsPage(): JSX.Element {
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [canConfig]);
 
   const toggle = (action: string, roleKey: string) => {
     if (roleKey === 'admin') return; // 防锁死：admin 恒授权
@@ -161,7 +162,7 @@ export function AdminPermissionsPage(): JSX.Element {
         title="权限矩阵"
         subtitle="角色 × 权限点（真·可配置：后台勾选即真实生效，与后端鉴权同源；角色列头来自服务端 roles 表，与「职位管理」实时同步）"
         actions={
-          isAdmin ? (
+          canConfig ? (
             <Stack direction="row" spacing={1}>
               <Button
                 variant="outlined"
@@ -187,18 +188,21 @@ export function AdminPermissionsPage(): JSX.Element {
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {notice && <Alert severity="success" sx={{ mb: 2 }}>{notice}</Alert>}
-      {!isAdmin && (
+      {!canConfig && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          当前账号非管理员，仅可查看权限矩阵；如需修改请联系系统管理员。
+          当前账号无「权限矩阵配置」权限，仅可查看；如需修改请联系系统管理员或申请该权限。
         </Alert>
       )}
 
       <SectionCard flush>
         <TableContainer sx={{ maxHeight: '66vh', overflow: 'auto' }}>
-          <Table size="small" stickyHeader sx={{ minWidth: 860 }}>
+          <Table size="small" stickyHeader sx={{ minWidth: 860, borderCollapse: 'separate', borderSpacing: 0 }}>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ minWidth: 150, fontWeight: 700, position: 'sticky', left: 0, bgcolor: 'background.paper', zIndex: 2 }}>
+                <TableCell
+                  sx={{ minWidth: 150, fontWeight: 700, bgcolor: 'background.paper' }}
+                  style={{ position: 'sticky', top: 0, left: 0, zIndex: 4 }}
+                >
                   权限点
                 </TableCell>
                 {roles.map((r) => (
@@ -229,7 +233,7 @@ export function AdminPermissionsPage(): JSX.Element {
                   items={g.items}
                   roles={roles}
                   matrix={matrix}
-                  isAdmin={isAdmin}
+                  canConfig={canConfig}
                   onToggle={toggle}
                   yes={yes}
                 />
@@ -253,22 +257,29 @@ interface GroupRowsProps {
   items: PermissionActionMeta[];
   roles: PermissionRoleMeta[];
   matrix: Record<string, Record<string, boolean>>;
-  isAdmin: boolean;
+  canConfig: boolean;
   yes: (action: string, roleKey: string) => boolean;
   onToggle: (action: string, roleKey: string) => void;
 }
 
-function GroupRows({ group, items, roles, isAdmin, yes, onToggle }: GroupRowsProps): JSX.Element {
+function GroupRows({ group, items, roles, canConfig, yes, onToggle }: GroupRowsProps): JSX.Element {
   return (
     <>
       <TableRow>
-        <TableCell colSpan={1 + roles.length} sx={{ bgcolor: 'action.hover', py: 0.75 }}>
+        <TableCell
+          colSpan={1 + roles.length}
+          sx={{ bgcolor: 'action.hover', py: 0.75 }}
+          style={{ position: 'sticky', left: 0, zIndex: 2 }}
+        >
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'text.secondary' }}>{group}</Typography>
         </TableCell>
       </TableRow>
       {items.map((it) => (
         <TableRow key={it.action} hover>
-          <TableCell sx={{ whiteSpace: 'nowrap', position: 'sticky', left: 0, bgcolor: 'background.paper' }}>
+          <TableCell
+            sx={{ minWidth: 150, whiteSpace: 'nowrap', bgcolor: 'background.paper' }}
+            style={{ position: 'sticky', left: 0, zIndex: 3 }}
+          >
             <Typography sx={{ fontSize: 13 }}>{it.label}</Typography>
             <Typography variant="caption" color="text.disabled">
               {it.action}
@@ -277,7 +288,7 @@ function GroupRows({ group, items, roles, isAdmin, yes, onToggle }: GroupRowsPro
           {roles.map((r) => {
             const checked = yes(it.action, r.roleKey);
             const locked = r.roleKey === 'admin';
-            const editable = isAdmin && !locked;
+            const editable = canConfig && !locked;
             return (
               <TableCell key={r.roleKey} align="center">
                 {checked ? (

@@ -4,7 +4,8 @@
  * 设计约束：
  *  - 不自研加密算法，使用 Node crypto.scrypt（内存困难型 KDF，优于简单哈希）。
  *  - 输出格式：`$scrypt$N=32768,r=8,p=1$<salt_base64>$<hash_base64>`，便于后续升级算法。
- *  - 密码为空时直接比较，避免在 must_change_pwd 场景下强制要求旧密码。
+ *  - verifyPassword 仅做纯校验：哈希为空（未设置密码）直接返回 false；
+ *    首次登录强制改密（must_change_pwd）下「跳过旧密码校验」由路由层处理，本模块不感知业务语义。
  */
 
 const { scrypt, scryptSync, timingSafeEqual, randomBytes } = require('crypto');

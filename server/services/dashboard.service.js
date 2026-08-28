@@ -236,30 +236,30 @@ function listScopedRows(db, q, me, scope) {
      相关子查询判叶子，与 D01 任务进展块 / 看板卡片口径一致（node_type 无法排除父节点） */
   if (q.ownerOpenId) {
     where.push(
-      'EXISTS (SELECT 1 FROM wbs_nodes w WHERE w.project_id = p.id AND w.owner = ? '
+      'EXISTS (SELECT 1 FROM wbs_nodes w WHERE w.project_id = p.id AND w.owner_user_id = ? '
       + 'AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id))',
     );
-    args.push(q.ownerOpenId);
+    args.push(mappers.resolveUserId(db, q.ownerOpenId));
   }
 
   if (scope === 'mine') {
-    const openId = String((me && me.open_id) || '');
-    if (!openId) return [];
+    const myId = me && me.id != null ? me.id : '';
+    if (!myId) return [];
     if (q.onlyMine) {
       // 「我负责的项目」= 我以「项目负责人」角色参与的项目；角色集从权限矩阵动态取，避免硬编码漏判
       const ownerRoles = permissionCatalog.rolesFor('project:edit').roles.filter(function (r) { return !isGlobalRole(r); }); // 项目视角负责人角色（例：['pm']）
       const ph = ownerRoles.map(function () { return '?'; }).join(',');
       where.push(
-        'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ? '
+        'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.member_user_id = ? '
         + 'AND pm.project_role IN (' + ph + '))',
       );
-      args.push(openId);
+      args.push(myId);
       ownerRoles.forEach(function (r) { args.push(String(r)); });
     } else {
       where.push(
-        'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)',
+        'EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.member_user_id = ?)',
       );
-      args.push(openId);
+      args.push(myId);
     }
   }
 

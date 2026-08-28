@@ -132,10 +132,12 @@ function addMember(db, req, projectId, payload) {
       ).run(pid, role, userOpenId);
     }
 
-    /* 先查后插：UNIQUE(project_id,user_open_id,project_role) 冲突不能冒成 500 */
+    /* 先查后插：UNIQUE(project_id,user_open_id,project_role) 冲突不能冒成 500。
+       设计修正：用 member_user_id（users.id，稳定身份键）判定重复，避免导入成员 user_open_id
+       属另一飞书空间、与主空间 open_id 比对失败导致漏判重复。 */
     const dup = db
-      .prepare('SELECT id FROM project_members WHERE project_id = ? AND user_open_id = ? AND project_role = ?')
-      .get(pid, userOpenId, role);
+      .prepare('SELECT id FROM project_members WHERE project_id = ? AND member_user_id = ? AND project_role = ?')
+      .get(pid, mappers.resolveUserId(db, userOpenId), role);
     if (dup) {
       throw new AppError(ErrorCode.E_VALIDATION, '该成员已有此角色', {
         fields: [{ field: 'role', message: '该成员已有此角色' }],

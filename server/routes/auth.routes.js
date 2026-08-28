@@ -36,9 +36,9 @@ function toApiUserWithRoles(row) {
   if (!row) return toApiUser(row);
   let extra = [];
   try {
-    extra = db
-      .prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?')
-      .all(row.open_id || '')
+  extra = db
+    .prepare('SELECT role_key FROM user_roles WHERE role_user_id = ?')
+    .all(row.id)
       .map(function (r) { return String(r.role_key); });
   } catch (e) {
     // user_roles 表尚未创建（迁移前）时安全降级为仅主职位
@@ -225,8 +225,9 @@ router.post(
       throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在');
     }
 
-    // 已有密码时必须验证旧密码；密码为空（理论上不应发生）则允许直接设置
-    if (row.password_hash) {
+    // 首次登录强制改密（must_change_pwd=1）或尚未设置密码时跳过旧密码校验；
+    // 其余主动改密场景仍校验旧密码，防止他人冒用令牌改密。
+    if (row.password_hash && row.must_change_pwd !== 1) {
       const okOld = await verifyPassword(oldPassword, row.password_hash);
       if (!okOld) {
         throw new AppError(ErrorCode.E_VALIDATION, undefined, {

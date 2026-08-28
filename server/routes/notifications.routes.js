@@ -1,7 +1,7 @@
 /**
  * 站内通知路由（顶栏铃铛）
  *
- * 全部接口需登录（`requireAuth`），数据按 `req.user.open_id` 隔离——只读写本人通知。
+ * 全部接口需登录（`requireAuth`），数据按 `req.user.id`（users.id 系统身份键）隔离——只读写本人通知。
  * 通知由后端业务流（评审 / 变更）在 service 层写入，本文件不提供「主动发通知」端点，
  * 避免前端绕过业务规则伪造通知。
  *
@@ -26,7 +26,7 @@ router.get(
   requireAuth,
   asyncHandler(async function list(req, res) {
     const q = req.query || {};
-    res.json(ok(notificationService.listNotifications(db, req.user.open_id, {
+    res.json(ok(notificationService.listNotifications(db, req.user.id, {
       unread: q.unread,
       page: q.page,
       pageSize: q.pageSize,
@@ -39,7 +39,7 @@ router.post(
   '/notifications/:id/read',
   requireAuth,
   asyncHandler(async function read(req, res) {
-    const changed = notificationService.markRead(db, req.params.id, req.user.open_id);
+    const changed = notificationService.markRead(db, req.params.id, req.user.id);
     res.json(ok({ id: req.params.id, isRead: changed ? 1 : 0 }, changed ? '已标记已读' : '通知不存在或已读'));
   }),
 );
@@ -49,7 +49,7 @@ router.post(
   '/notifications/read-all',
   requireAuth,
   asyncHandler(async function readAll(req, res) {
-    const count = notificationService.markAllRead(db, req.user.open_id);
+    const count = notificationService.markAllRead(db, req.user.id);
     res.json(ok({ count: count }, '已全部标记已读'));
   }),
 );

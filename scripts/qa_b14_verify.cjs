@@ -375,12 +375,21 @@ async function main() {
       const curWeek = dates.weekCode();
       // APPROVAL：admin 可决定全部 审批中 评审
       const indepApproval = db.prepare("SELECT COUNT(*) c FROM reviews WHERE status = '审批中'").get().c;
-      // REPORT_FILL：我参与且进行中、本周无已提交周报的项目数
+      // REPORT_FILL（2026-08-26 收窄口径）：我参与且进行中，且我名下有「本周计划窗口内未完成叶子任务」的项目数
+      const wrRange = dates.weekRange(curWeek);
+      const wrStart = String((wrRange && wrRange.start) || '').slice(0, 10);
+      const wrEnd = String((wrRange && wrRange.end) || '').slice(0, 10);
       const indepReportFill = db.prepare(
         "SELECT COUNT(*) c FROM projects p WHERE p.deleted_at IS NULL AND p.status = '进行中' " +
         "AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?) " +
+        "AND EXISTS (SELECT 1 FROM wbs_nodes w WHERE w.project_id = p.id AND w.owner = ? " +
+        "  AND w.status != '完成' AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id) " +
+        "  AND ((w.start_date IS NULL AND w.due_date IS NULL) " +
+        "    OR (w.start_date IS NULL AND date(w.due_date) >= date(?)) " +
+        "    OR (w.due_date IS NULL AND date(w.start_date) <= date(?)) " +
+        "    OR (date(w.start_date) <= date(?) AND date(w.due_date) >= date(?)))) " +
         "AND NOT EXISTS (SELECT 1 FROM work_reports wr WHERE wr.project_id = p.id AND wr.week = ? AND wr.status = '已提交')"
-      ).get('ou_xuwenbin01', curWeek).c;
+      ).get('ou_xuwenbin01', 'ou_xuwenbin01', wrStart, wrEnd, wrStart, wrEnd, curWeek).c;
       // ASSIGNED / OVERDUE / BLOCKED：叶子 + owner=admin + status!=完成
       const nodes = db.prepare(
         'SELECT n.* FROM wbs_nodes n JOIN projects p ON p.id = n.project_id ' +

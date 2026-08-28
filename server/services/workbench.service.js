@@ -46,8 +46,8 @@ const CYCLE_LOOKAHEAD_DAYS = 14;
  * @returns {Array<object>} WbsNode[]（含 B11 追加的 `projectName`）
  */
 function baseMyTasks(db, me, includeCompleted) {
-  const openId = String((me && (me.open_id || me.openId)) || '');
-  if (!openId) return [];
+  const myId = me && me.id != null ? me.id : '';
+  if (!myId) return [];
 
   const rows = db
     .prepare(
@@ -56,9 +56,9 @@ function baseMyTasks(db, me, includeCompleted) {
          JOIN projects p ON p.id = n.project_id
         WHERE p.deleted_at IS NULL
           AND p.status NOT IN ('已结项', '已终止')
-          AND n.project_id IN (SELECT project_id FROM project_members WHERE user_open_id = ?)`,
+          AND n.project_id IN (SELECT project_id FROM project_members WHERE member_user_id = ?)`,
     )
-    .all(openId);
+    .all(myId);
 
   /* B11：projectId → 项目名（来自同一次 JOIN，零额外查询） */
   const projectNameById = {};
@@ -76,7 +76,7 @@ function baseMyTasks(db, me, includeCompleted) {
   const mine = [];
   Object.keys(byProject).forEach(function (pid) {
     wbs.leafNodesOf(byProject[pid]).forEach(function (n) {
-      if (n.owner === openId && (includeCompleted || n.status !== '完成')) {
+      if (n.ownerUserId === myId && (includeCompleted || n.status !== '完成')) {
         /* B11 纯追加：不改任何既有字段，仅补 projectName */
         n.projectName = projectNameById[n.projectId] || '';
         mine.push(n);
@@ -195,8 +195,9 @@ function countPendingApprovals(db, me) {
  * @returns {Array<{projectId: string, projectName: string, week: string, weekStart: string, weekEnd: string, filled: boolean, state: string, tasks: Array<{id:string, wbsCode:string, name:string, startDate:string, dueDate:string, status:string, progress:number}>}>} ReportReminder[]
  */
 function listReportReminders(db, me) {
-  const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
-  if (!openId) return [];
+  const myId = me && me.id != null ? me.id : '';
+  const meOpenId = me && me.open_id ? String(me.open_id) : '';
+  if (!myId) return [];
 
   const curWeek = dates.weekCode();
   const range = dates.weekRange(curWeek);
@@ -209,11 +210,11 @@ function listReportReminders(db, me) {
          FROM projects p
         WHERE p.deleted_at IS NULL
           AND p.status = '进行中'
-          AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_open_id = ?)
+          AND EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.member_user_id = ?)
           AND EXISTS (
             SELECT 1 FROM wbs_nodes w
              WHERE w.project_id = p.id
-               AND w.owner = ?
+               AND w.owner_user_id = ?
                AND w.status != '完成'
                AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)
                AND (
@@ -225,7 +226,7 @@ function listReportReminders(db, me) {
           )
         ORDER BY p.updated_at DESC, p.id DESC`,
     )
-    .all(openId, openId, weekStart, weekEnd, weekStart, weekEnd);
+    .all(myId, myId, weekStart, weekEnd, weekStart, weekEnd);
 
   const filledStmt = db.prepare(
     "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已提交'",
@@ -242,7 +243,7 @@ function listReportReminders(db, me) {
     `SELECT id, wbs_code, name, start_date, due_date, status, progress
        FROM wbs_nodes w
       WHERE w.project_id = ?
-        AND w.owner = ?
+        AND w.owner_user_id = ?
         AND w.status != '完成'
         AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)
         AND (
@@ -269,12 +270,12 @@ function listReportReminders(db, me) {
       const authorRow = authorStmt.get(pid, curWeek);
       const authorOpenId = authorRow ? mappers.toStr(authorRow.author_open_id) : '';
       const isConfirmer = authorOpenId
-        ? reportService.resolveConfirmers(db, pid, authorOpenId).has(openId)
+        ? reportService.resolveConfirmers(db, pid, authorOpenId).has(meOpenId)
         : false;
       state = isConfirmer ? '待确认' : '待他人确认';
     }
     const tasks = taskStmt
-      .all(pid, openId, weekStart, weekEnd, weekStart, weekEnd)
+      .all(pid, myId, weekStart, weekEnd, weekStart, weekEnd)
       .map(function (t) {
         return {
           id: mappers.toStr(t.id),
@@ -325,8 +326,8 @@ function countMissingReports(db, me) {
  *   ownerRole: string}>} GateTodo[]
  */
 function listGateTodos(db, me) {
-  const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
-  if (!openId) return [];
+  const myId = me && me.id != null ? me.id : '';
+  if (!myId) return [];
   // E1.5：全局职位取并集，任一命中门控特权角色即可看全公司待决门
   // 门控特权角色从权限矩阵动态取（单一权威源，避免硬编码漏判管理员调整的职位体系）
   const globalRoles = resolveGlobalRoles(me);
@@ -345,9 +346,9 @@ function listGateTodos(db, me) {
     const ph = gateAllowed.map(function () { return '?'; }).join(',');
     projectIds = db
       .prepare(
-        "SELECT DISTINCT pm.project_id AS pid FROM project_members pm WHERE pm.user_open_id = ? AND pm.project_role IN (" + ph + ")",
+        "SELECT DISTINCT pm.project_id AS pid FROM project_members pm WHERE pm.member_user_id = ? AND pm.project_role IN (" + ph + ")",
       )
-      .all(openId, ...gateAllowed.map(function (r) { return String(r); }))
+      .all(myId, ...gateAllowed.map(function (r) { return String(r); }))
       .map(function (r) { return mappers.toStr(r.pid); });
   }
   if (projectIds.length === 0) return [];

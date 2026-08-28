@@ -103,8 +103,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   async bootstrap() {
     set({ loading: true });
     try {
-      const user = await api.me();
-      set({ user });
+      const fresh = await api.me();
+      // 防御性合并：登录态已注入的 globalRoles 可能比 /me 更完整（多职位用户经 user_roles 拥有额外职位），
+      // 取并集保留权限，避免被较窄结果覆盖导致后台管理等菜单消失（Bug2）。
+      const prev = get().user;
+      if (prev) {
+        const merged = Array.from(
+          new Set([...(fresh.globalRoles || []), ...(prev.globalRoles || [])]),
+        );
+        if (merged.length) fresh.globalRoles = merged;
+        if (!fresh.globalRole && prev.globalRole) fresh.globalRole = prev.globalRole;
+      }
+      set({ user: fresh });
       void hydrateMatrix();
     } catch {
       set({ user: null });

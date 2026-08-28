@@ -13,22 +13,24 @@
  *
  * 例外（D11）：`updateBoardConfig` 跳过 `assertWritable`（与 Mock 引擎一致）。
  */
+const db = require('../../db');
 const { AppError, ErrorCode } = require('../lib/errors');
 const { PROJECT_ARCHIVED_STATUSES } = require('../config/enums');
 const { canDo } = require('../config/permissions');
 
 /**
  * 取用户在指定项目中的项目角色集合。
+ * 设计铁律：一律按系统身份键 `users.id`（列 `member_user_id`）解析，飞书 `open_id` 仅作同步属性。
  * @param {import('better-sqlite3').Database} db
  * @param {string} projectId
- * @param {string} openId
+ * @param {number|string} userId 登录用户的 `users.id`
  * @returns {string[]}
  */
-function projectRolesOf(db, projectId, openId) {
-  if (!projectId || !openId) return [];
+function projectRolesOf(db, projectId, userId) {
+  if (!projectId || !userId) return [];
   return db
-    .prepare('SELECT project_role FROM project_members WHERE project_id = ? AND user_open_id = ?')
-    .all(projectId, openId)
+    .prepare('SELECT project_role FROM project_members WHERE project_id = ? AND member_user_id = ?')
+    .all(projectId, userId)
     .map(function (r) {
       return String(r.project_role || '');
     })
@@ -38,16 +40,17 @@ function projectRolesOf(db, projectId, openId) {
 /**
  * 取用户的**全部全局职位**（主职位 `users.global_role` + 额外职位 `user_roles` 合并去重）。
  * E1.5：权限判定按职位并集，任一命中即通过。
+ * 设计铁律：一律按系统身份键 `users.id`（列 `role_user_id`）解析。
  * @param {import('better-sqlite3').Database} db
- * @param {string} openId
+ * @param {number|string} userId 登录用户的 `users.id`
  * @param {string} [primaryRole] 可选，直接传入以避免二次查 users（auth 阶段已加载 req.user 时）
  * @returns {string[]}
  */
-function globalRolesOf(db, openId, primaryRole) {
+function globalRolesOf(db, userId, primaryRole) {
   const primary = primaryRole || '';
   const extra = db
-    .prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?')
-    .all(String(openId))
+    .prepare('SELECT role_key FROM user_roles WHERE role_user_id = ?')
+    .all(userId)
     .map(function (r) { return String(r.role_key || ''); })
     .filter(Boolean);
   const set = {};
@@ -95,8 +98,8 @@ function assertWritable(db, projectId) {
 function assertCan(db, req, action, projectId) {
   const me = req && req.user;
   if (!me) throw new AppError(ErrorCode.E_UNAUTHORIZED);
-  const globalRoles = globalRolesOf(db, me.open_id, me.global_role);
-  const roles = projectId ? projectRolesOf(db, projectId, me.open_id) : [];
+  const globalRoles = globalRolesOf(db, me.id, me.global_role);
+  const roles = projectId ? projectRolesOf(db, projectId, me.id) : [];
   if (!canDo(globalRoles, action, roles)) {
     throw new AppError(ErrorCode.E_FORBIDDEN);
   }
@@ -118,6 +121,23 @@ function assertSameProjectMilestone(db, projectId, refId) {
   }
 }
 
+/**
+ * 权限动作中间件（Express 形态）：校验当前登录用户是否拥有指定 action（与权限矩阵同源）。
+ * 用于把路由层的 `requireGlobalRole('admin')` 之类硬编码角色白名单平滑迁移到矩阵判定。
+ * @param {string} action 权限动作（action key，如 'admin:template'）
+ * @returns {Function} express 中间件
+ */
+function requirePermission(action) {
+  return function guard(req, res, next) {
+    try {
+      assertCan(db, req, action);
+      next();
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
 module.exports = {
   projectRolesOf,
   globalRolesOf,
@@ -125,4 +145,5 @@ module.exports = {
   assertWritable,
   assertCan,
   assertSameProjectMilestone,
+  requirePermission,
 };

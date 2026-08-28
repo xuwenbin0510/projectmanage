@@ -13,7 +13,8 @@ const { verifyToken, bearerOf } = require('../lib/token');
 const { AppError, ErrorCode } = require('../lib/errors');
 
 const selectByOpenId = db.prepare('SELECT * FROM users WHERE open_id = ?');
-const selectExtraRoles = db.prepare('SELECT role_key FROM user_roles WHERE user_open_id = ?');
+// 设计铁律：额外职位一律按系统身份键 users.id（列 role_user_id）解析，飞书 open_id 仅作同步属性
+const selectExtraRoles = db.prepare('SELECT role_key FROM user_roles WHERE role_user_id = ?');
 
 /**
  * 取用户全部全局职位（主职位 `users.global_role` + 额外职位 `user_roles` 合并去重）。
@@ -26,7 +27,7 @@ function resolveGlobalRoles(userRow) {
   const set = {};
   if (userRow.global_role) set[String(userRow.global_role)] = true;
   try {
-    const extra = selectExtraRoles.all(userRow.open_id || '');
+    const extra = selectExtraRoles.all(userRow.id);
     extra.forEach(function (r) { if (r.role_key) set[String(r.role_key)] = true; });
   } catch (e) {
     // user_roles 表尚未创建（迁移前）时安全降级为仅主职位

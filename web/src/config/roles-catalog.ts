@@ -20,11 +20,12 @@ export interface RoleDef {
 
 export const ROLE_CATALOG: RoleDef[] = [
   { role_key: 'admin', name: '系统管理员', scope: 'global', order_no: 1, enabled: true },
-  { role_key: 'cpo', name: '产品总监', scope: 'global', order_no: 2, enabled: true },
-  { role_key: 'cto', name: '技术总监', scope: 'global', order_no: 3, enabled: true },
-  { role_key: 'management', name: '公司管理层', scope: 'global', order_no: 4, enabled: true },
-  { role_key: 'pmo', name: 'PMO', scope: 'global', order_no: 5, enabled: true },
-  { role_key: 'cm', name: '配置管理员', scope: 'project', order_no: 6, enabled: true },
+  { role_key: 'cho', name: 'HR负责人', scope: 'global', order_no: 2, enabled: true },
+  { role_key: 'cpo', name: '产品总监', scope: 'global', order_no: 3, enabled: true },
+  { role_key: 'cto', name: '技术总监', scope: 'global', order_no: 4, enabled: true },
+  { role_key: 'management', name: '公司管理层', scope: 'global', order_no: 5, enabled: true },
+  { role_key: 'pmo', name: 'PMO', scope: 'global', order_no: 6, enabled: true },
+  { role_key: 'cm', name: '配置管理员', scope: 'project', order_no: 7, enabled: true },
   { role_key: 'dev', name: '研发工程师', scope: 'project', order_no: 7, enabled: true },
   { role_key: 'member', name: '普通成员', scope: 'project', order_no: 8, enabled: true },
   { role_key: 'ops', name: '运维工程师', scope: 'project', order_no: 9, enabled: true },

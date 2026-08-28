@@ -4,7 +4,7 @@
  *  GET /api/export/projects           → 项目清单 CSV（登录即可；admin/pmo/management 看全量）
  *  GET /api/export/projects/:id/tasks → 项目 WBS 任务 CSV
  *  GET /api/export/projects/:id/reports→ 项目周报 CSV
- *  GET /api/export/audits             → 审计日志 CSV（仅 admin / pmo / management）
+ *  GET /api/export/audits             → 审计日志 CSV（需 admin:audit:view 权限，与审计日志页同源）
  *
  * 响应：text/csv + Content-Disposition: attachment（文件名含日期戳）。
  * 读取口径完全复用既有 service，不引入新依赖。
@@ -13,7 +13,8 @@
 const express = require('express');
 const db = require('../../db');
 const { asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
-const { requireAuth, requireGlobalRole } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/rbac');
 const exportService = require('../services/export.service');
 
 const router = express.Router();
@@ -67,7 +68,7 @@ router.get(
 router.get(
   '/export/audits',
   requireAuth,
-  requireGlobalRole('admin', 'pmo', 'management'),
+  requirePermission('admin:audit:view'),
   asyncHandler(async function exportAudits(req, res) {
     const csv = exportService.exportAuditsCsv();
     sendCsv(res, 'audits_' + exportService.dateStamp() + '.csv', csv);

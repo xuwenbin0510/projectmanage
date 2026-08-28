@@ -39,43 +39,48 @@ const permissionCatalog = require('../services/permissionCatalog');
  */
 const DEFAULT_PERMISSIONS = {
   // 项目
-  'project:create': { roles: ['admin', 'pmo', 'pm'] },
-  'project:edit': { roles: ['admin', 'pmo', 'pm'] },
+  'project:create': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale', 'tl'] },
+  'project:edit': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale', 'tl'] },
   'project:delete': { roles: ['admin'] },
-  'project:transition': { roles: ['admin', 'pmo', 'pm'] },
-  'project:close': { roles: ['admin', 'pmo', 'pm'] },
-  'project:member:assign': { roles: ['admin', 'pmo', 'pm'] },
+  'project:transition': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale', 'tl'] },
+  'project:close': { roles: ['admin', 'cpo', 'cto', 'management', 'pmo', 'sale'] },
+  'project:member:assign': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale'] },
   // 质量门（挂在里程碑上 · 决策 D-A）
-  'gate:decide': { roles: ['admin', 'pmo', 'qa', 'tl'] },
-  'gate:item:check': { roles: ['admin', 'pmo', 'qa', 'tl', 'cm'] },
-  'gate:item:add': { roles: ['admin', 'pmo', 'pm', 'qa'] },
+  'gate:decide': { roles: ['admin', 'cpo', 'cto', 'management', 'pmo', 'qa'] },
+  'gate:item:check': { roles: ['admin', 'cm', 'cpo', 'cto', 'management', 'pmo', 'po', 'qa', 'tl'] },
+  'gate:item:add': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'qa', 'sale', 'tl'] },
   // 里程碑
-  'milestone:create': { roles: ['admin', 'pmo', 'pm'] },
-  'milestone:edit': { roles: ['admin', 'pmo', 'pm'] },
-  'milestone:delete': { roles: ['admin', 'pm'] },
+  'milestone:create': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale'] },
+  'milestone:edit': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale'] },
+  'milestone:delete': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale'] },
   // WBS / 看板
-  'wbs:edit': { roles: ['admin', 'pmo', 'pm', 'tl'] },
-  'wbs:delete': { roles: ['admin', 'pm', 'tl'] },
-  'task:status': { roles: ['admin', 'pmo', 'pm', 'tl', 'member', 'qa', 'po', 'cm'] },
-  'board:config': { roles: ['admin', 'pmo', 'pm', 'tl'] },
+  'wbs:edit': { roles: ['admin', 'cm', 'cpo', 'cto', 'dev', 'management', 'member', 'ops', 'pm', 'pmo', 'po', 'qa', 'sale', 'tl', 'ued'] },
+  'wbs:delete': { roles: ['admin', 'cm', 'cpo', 'cto', 'dev', 'management', 'member', 'ops', 'pm', 'pmo', 'po', 'qa', 'sale', 'tl', 'ued'] },
+  'task:status': { roles: ['admin', 'cm', 'cpo', 'cto', 'dev', 'management', 'member', 'ops', 'pm', 'pmo', 'po', 'qa', 'sale', 'tl', 'ued'] },
+  'board:config': { roles: ['admin', 'management', 'pm', 'pmo', 'tl'] },
   // 周报
-  'report:write': { roles: ['admin', 'pmo', 'pm', 'tl', 'member', 'qa', 'po', 'cm'] },
+  'report:write': { roles: ['admin', 'cm', 'cpo', 'cto', 'dev', 'management', 'member', 'ops', 'pm', 'pmo', 'po', 'qa', 'sale', 'tl', 'ued'] },
   // 评审
-  'review:start': { roles: ['admin', 'pmo', 'pm', 'tl'] },
-  'review:decide': { roles: ['admin', 'pmo', 'management', 'tl', 'pm', 'po'] },
-  'review:proxy': { roles: ['admin', 'pm'] },
+  'review:start': { roles: ['admin', 'cpo', 'cto', 'dev', 'management', 'member', 'ops', 'pm', 'pmo', 'po', 'sale', 'tl', 'ued'] },
+  'review:decide': { roles: ['admin', 'cpo', 'cto', 'management', 'pm', 'pmo', 'po', 'sale', 'tl'] },
+  'review:proxy': { roles: ['admin', 'management', 'pm'] },
   // 变更
-  'change:create': { roles: ['admin', 'pmo', 'pm', 'tl'] },
-  'change:submit': { roles: ['admin', 'pmo', 'pm'] },
+  'change:create': { roles: ['admin', 'cpo', 'cto', 'management', 'member', 'pm', 'pmo', 'po', 'sale', 'tl'] },
+  'change:submit': { roles: ['admin', 'cpo', 'cto', 'management', 'member', 'pm', 'pmo', 'po', 'sale', 'tl'] },
   // 全局仪表盘（B12）：仅管理三角色可看「公司全量」范围
-  'dashboard:global': { roles: ['admin', 'pmo', 'management'] },
+  'dashboard:global': { roles: ['admin', 'cho', 'cpo', 'cto', 'management', 'pmo'] },
   // 管理后台
-  'admin:user:role': { roles: ['admin'] },
-  'admin:audit:view': { roles: ['admin', 'pmo'] },
-  'admin:template': { roles: ['admin', 'pmo'] },
+  'admin:user:role': { roles: ['admin', 'cho'] },
+  'admin:audit:view': { roles: ['admin', 'cho', 'cpo', 'cto', 'management', 'pmo'] },
+  'admin:template': { roles: ['admin', 'management', 'pmo'] },
+  // 后台配置类（v25 新增，默认仅 admin，可在权限矩阵页放开）
+  'admin:permission:config': { roles: ['admin'] },
+  'admin:feishu:import': { roles: ['admin'] },
+  // 工作日志管理（删除他人草稿，v25 新增，默认仅 admin）
+  'report:manage': { roles: ['admin'] },
   // 任务附件（C01）：上传面向所有项目参与者，删除仅管理员 / 项目负责人
-  'document:upload': { roles: ['admin', 'pmo', 'pm', 'tl', 'member', 'qa', 'po', 'cm'] },
-  'document:delete': { roles: ['admin', 'pm'] },
+  'document:upload': { roles: ['admin', 'cm', 'cpo', 'cto', 'dev', 'management', 'member', 'ops', 'pm', 'pmo', 'po', 'qa', 'sale', 'tl', 'ued'] },
+  'document:delete': { roles: ['admin', 'cpo', 'cto', 'management'] },
 };
 
 /** 全部 action 列表（自检 / smoke 断言用） */
