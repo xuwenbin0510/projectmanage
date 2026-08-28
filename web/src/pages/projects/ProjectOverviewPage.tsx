@@ -1350,7 +1350,7 @@ export function ProjectOverviewPage(): JSX.Element {
               void loadEditTemplateOptions(t);
             }}
           >
-            {(['A', 'B', 'C'] as ProjectType[]).map((t) => (
+            {(['A', 'B', 'C', 'D'] as ProjectType[]).map((t) => (
               <MenuItem key={t} value={t}>
                 {PROJECT_TYPE_LABEL[t]}（{t} 类）
               </MenuItem>

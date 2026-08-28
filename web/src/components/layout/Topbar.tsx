@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import LogoutIcon from '@mui/icons-material/Logout';
+import LockResetIcon from '@mui/icons-material/LockReset';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
 import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined';
@@ -26,6 +27,7 @@ import { ROUTES } from '@/config/routes';
 import { api, USE_MOCK } from '@/api/client';
 import { tokens } from '@/theme/tokens';
 import { useThemeMode } from '@/theme/themeContext';
+import { ChangePasswordDialog } from '@/components/ChangePasswordDialog';
 
 interface TopbarProps {
   isMobile: boolean;
@@ -43,6 +45,7 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
     ? user.globalRoles[0]
     : user?.globalRole;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [pwdOpen, setPwdOpen] = useState(false);
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -141,6 +144,12 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
           </Typography>
         </Box>
         <Divider />
+        <MenuItem onClick={() => { setAnchor(null); setPwdOpen(true); }}>
+          <ListItemIcon>
+            <LockResetIcon fontSize="small" />
+          </ListItemIcon>
+          修改密码
+        </MenuItem>
         {USE_MOCK && (
           <MenuItem onClick={handleReset}>
             <ListItemIcon>
@@ -156,6 +165,8 @@ export function Topbar({ isMobile }: TopbarProps): JSX.Element {
           退出登录
         </MenuItem>
       </Menu>
+
+      <ChangePasswordDialog open={pwdOpen} onClose={() => setPwdOpen(false)} />
     </Stack>
   );
 }

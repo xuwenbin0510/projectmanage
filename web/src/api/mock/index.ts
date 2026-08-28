@@ -32,6 +32,7 @@ import type { Review, ReviewStep, Approval } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, AuditDiffEntry, Risk, CreateRiskPayload, UpdateRiskPayload, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
 import type { WorkbenchData, ReportReminder, GateTodo, ReportConfirmation, WorkbenchReportClosure, WorkbenchReportClosureItem, Session } from '@/types/workbench';
+import type { NotificationItem, NotificationListResult } from '@/types/notification';
 import type {
   DashboardDeliverableRow,
   DashboardDeliverablesQuery,
@@ -67,6 +68,10 @@ import type {
   PermissionMatrixResponse,
   PermissionActionMeta,
   MetaPermissionsResponse,
+  FeishuImportPreview,
+  FeishuImportPayload,
+  FeishuImportResult,
+  FeishuImportSearchResult,
 } from '../contract';
 import type { ReviewTemplateConfig, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, CreateTemplatePayload, UpdateTemplatePayload } from '@/types/project';
 import { getDb, saveDb, resetDb } from './db';
@@ -3966,6 +3971,24 @@ export class MockApiClient implements ApiClient {
     return null;
   }
 
+  /* ── 飞书通讯录导入（mock 占位，真实逻辑在后端） ── */
+
+  async previewFeishuContacts(): Promise<FeishuImportPreview> {
+    await delay(120);
+    const buckets: FeishuImportPreview['buckets'] = { definite: [], suspected: [], fresh: [] };
+    return { total: 0, buckets, visibilityHint: '（演示环境未接入飞书通讯录）' };
+  }
+
+  async importFeishuUsers(_payload: FeishuImportPayload): Promise<FeishuImportResult> {
+    await delay(120);
+    return { added: 0, merged: 0, skipped: 0, failed: 0, details: [] };
+  }
+
+  async searchFeishuUsers(_query: string, _pageSize?: number): Promise<FeishuImportSearchResult> {
+    await delay(120);
+    return { hits: [] };
+  }
+
   /* ── E1.5 职位目录管理（仅 admin） ───────────── */
 
   async listRoles(): Promise<Role[]> {
@@ -4153,7 +4176,7 @@ export class MockApiClient implements ApiClient {
     await delay();
     const db = getDb();
     const me = assertCan(db, 'user.manage');
-    if (['A', 'B', 'C'].indexOf(payload.projectType) < 0) throw new ApiError(ErrorCode.E_VALIDATION, '适用分类必须为 A / B / C');
+    if (['A', 'B', 'C', 'D'].indexOf(payload.projectType) < 0) throw new ApiError(ErrorCode.E_VALIDATION, '适用分类必须为 A / B / C / D');
     if (!payload.name || !String(payload.name).trim()) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
     const tpl: LifecycleTemplate = {
       id: genId('TMP'),
@@ -4827,6 +4850,21 @@ export class MockApiClient implements ApiClient {
     if (!doc) throw new ApiError(ErrorCode.E_NOT_FOUND, '附件不存在', undefined, 404);
     const text = `[演示附件] ${doc.name}\n类型：${doc.mimeType}\n大小：${doc.fileSize} 字节\n上传人：${doc.uploadedBy}\n（Mock 模式无真实文件内容）`;
     return new Blob([text], { type: 'text/plain;charset=utf-8' });
+  }
+
+  /* 站内通知（Mock 模式不落库，返回空列表） */
+  async listNotifications(opts?: { unread?: boolean; page?: number; pageSize?: number }): Promise<NotificationListResult> {
+    void opts;
+    await delay(80);
+    return { items: [], total: 0, unreadCount: 0 };
+  }
+
+  async markNotificationRead(id: string): Promise<{ id: string; isRead: number }> {
+    return { id, isRead: 1 };
+  }
+
+  async markAllNotificationsRead(): Promise<{ count: number }> {
+    return { count: 0 };
   }
 }
 

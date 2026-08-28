@@ -178,18 +178,58 @@ function syncWbsProgressStatus(db, projectId) {
   const upd = db.prepare(
     'UPDATE wbs_nodes SET progress = ?, status = ?, actual_days = ?, updated_at = ? WHERE id = ?'
   );
-  /* 2026-08-26：必须**自底向上**（深层先算）遍历。父节点状态改为读子树状态后，
-     若父先算子后算，多层嵌套会滞后一轮才收敛。按 level 降序即可保证子先父后。 */
+  /* 单趟自底向上（替代原「每节点对整棵子树 DFS」的 O(n^2) 实现）：
+     - indexChildren 建一次 children 索引；
+     - 按 level 降序（深层先算，保证子先父后，多层嵌套不滞后）；
+     - 每节点记忆化 {ws,w}（加权进度分子/分母）与「后代是否含已启动态」startedAmongDesc，
+       父节点仅用直接子节点的已算值 O(1) 推导；
+     - 数值与原 rollupProgressFlat / rollupNodeStatus 完全等价（已逐节点 diff 验证）。 */
+  const STARTED_STATES = ['进行中', '阻塞', '待评审', '完成'];
+  const childrenOf = wbs.indexChildren(nodes);
+  const agg = new Map();            // id -> { ws, w }
+  const startedAmongDesc = new Map(); // id -> bool（是否任一proper后代处于已启动态）
+
   const ordered = nodes.slice().sort(function (a, b) {
     const la = Number(a.level) || String(a.wbsCode || '').split('.').length;
     const lb = Number(b.level) || String(b.wbsCode || '').split('.').length;
     return lb - la;
   });
+
   ordered.forEach(function (n) {
-    const next = wbs.rollupProgressFlat(nodes, n.id);
-    /* 父节点状态由「进度 + 子树状态」双输入派生（rollupNodeStatus），
-       否则子任务零进度标「进行中」时父节点会卡在「待办」。叶子行为不变。 */
-    const nextStatus = wbs.rollupNodeStatus(nodes, n.id, n.status, next);
+    const kids = childrenOf.get(n.id) || [];
+    let ws = 0;
+    let w = 0;
+    let started = false;
+    if (!kids.length) {
+      /* 叶子：权重 = estimateDays||1，贡献 = 权重 × 进度/100 */
+      const weight = Number(n.estimateDays) || 1;
+      const p = Number.isFinite(Number(n.progress)) ? Number(n.progress) : 0;
+      ws = weight * (p / 100);
+      w = weight;
+    } else {
+      kids.forEach(function (c) {
+        const ca = agg.get(c.id);
+        if (ca) { ws += ca.ws; w += ca.w; }
+        if (STARTED_STATES.includes(c.status)) started = true;
+        if (startedAmongDesc.get(c.id)) started = true;
+      });
+    }
+    agg.set(n.id, { ws: ws, w: w });
+    startedAmongDesc.set(n.id, started);
+
+    const next = w > 0 ? Math.round((ws / w) * 100) : 0;
+
+    let nextStatus;
+    if (!kids.length) {
+      nextStatus = wbs.syncNodeStatusFromProgress(n.status, next);
+    } else {
+      const p = next;
+      if (p >= 100) nextStatus = '完成';
+      else if (started) nextStatus = '进行中';
+      else if (p === 0) nextStatus = '待办';
+      else nextStatus = wbs.syncNodeStatusFromProgress(n.status, p);
+    }
+
     if (n.progress !== next || n.status !== nextStatus) {
       const actualDays = Number(((Number(n.estimateDays) || 0) * next / 100).toFixed(1));
       upd.run(next, nextStatus, actualDays, ts, n.id);

@@ -37,11 +37,8 @@ function toApiLog(db, row) {
   } catch (e) {
     after = null;
   }
-  let projectName = '';
-  if (row.project_id) {
-    const p = db.prepare('SELECT name FROM projects WHERE id = ?').get(String(row.project_id));
-    projectName = p ? mappers.toStr(p.name) : '';
-  }
+  /* project_name 由 listAudit 主查询 LEFT JOIN projects 一次性取回，避免逐行 N+1 查询 */
+  const projectName = mappers.toStr(row.project_name);
   return {
     id: mappers.toStr(row.id),
     projectId: mappers.toStr(row.project_id),
@@ -101,7 +98,11 @@ function listAudit(db, query) {
 
   const total = db.prepare('SELECT COUNT(*) AS c FROM audit_logs ' + w).get(params).c;
   const rows = db
-    .prepare('SELECT * FROM audit_logs ' + w + ' ORDER BY created_at DESC, id DESC LIMIT @limit OFFSET @offset')
+    .prepare(
+      'SELECT a.*, p.name AS project_name FROM audit_logs a LEFT JOIN projects p ON p.id = a.project_id ' +
+        w +
+        ' ORDER BY a.created_at DESC, a.id DESC LIMIT @limit OFFSET @offset'
+    )
     .all(Object.assign({}, params, { limit: pageSize, offset: (page - 1) * pageSize }));
 
   return {

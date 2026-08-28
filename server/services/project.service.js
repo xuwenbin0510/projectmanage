@@ -387,7 +387,7 @@ function loadListContext(db, projectIds) {
  * @param {import('better-sqlite3').Database} db
  * @returns {object} ProjectListItem
  */
-function toListItem(row, ctx, todayStr, db) {
+function toListItem(row, ctx, todayStr, db, highRiskMap) {
   const projectId = mappers.toStr(row.id);
   const msList = (ctx.milestones[projectId] || []).slice();
   const gates = ctx.gates[projectId] || [];
@@ -418,8 +418,11 @@ function toListItem(row, ctx, todayStr, db) {
     milestoneDone: milestoneDone,
     milestoneTotal: sorted.length,
     nextMilestoneDate: next ? next.currentDate || null : null,
-    /* 高风险数：risk_value >= 12（与前端 Mock `toListItem` 逐字一致），现由风险表实时统计 */
-    highRiskCount: riskService.countHighRisks(db, projectId),
+    /* 高风险数：risk_value >= 12（与前端 Mock `toListItem` 逐字一致），现由风险表实时统计；
+       优先用调用方一次性批量算好的 Map（消除逐项目 N+1），缺失时回退单查以保兼容 */
+    highRiskCount: highRiskMap
+      ? (highRiskMap.get(projectId) || 0)
+      : riskService.countHighRisks(db, projectId),
   });
 }
 
@@ -463,7 +466,9 @@ function listProjects(db, query, me) {
 
   const ctx = loadListContext(db, rows.map(function (r) { return String(r.id); }));
   const todayStr = dates.today();
-  let items = rows.map(function (r) { return toListItem(r, ctx, todayStr, db); });
+  /* 一次性批量统计所有项目高风险数（替代 toListItem 内逐项目 N+1 查询） */
+  const highRiskMap = riskService.countHighRisksBatch(db, rows.map(function (r) { return String(r.id); }));
+  let items = rows.map(function (r) { return toListItem(r, ctx, todayStr, db, highRiskMap); });
 
   /* pm 过滤按「PM 姓名」匹配（与前端 Mock 口径一致），须在聚合后进行 */
   if (q.pm) {
@@ -510,7 +515,7 @@ function assertCreatePayload(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
 
   if (!String(p.name || '').trim()) fields.push({ field: 'name', message: '项目名称不能为空' });
-  if (enums.PROJECT_TYPES.indexOf(p.type) < 0) fields.push({ field: 'type', message: '项目类型必须为 A / B / C 之一' });
+  if (enums.PROJECT_TYPES.indexOf(p.type) < 0) fields.push({ field: 'type', message: '项目类型必须为 A / B / C / D 之一' });
   if (!dates.isDate(p.planStart)) fields.push({ field: 'planStart', message: '计划开始日期格式须为 YYYY-MM-DD' });
   if (!dates.isDate(p.planEnd)) fields.push({ field: 'planEnd', message: '计划结束日期格式须为 YYYY-MM-DD' });
   if (dates.isDate(p.planStart) && dates.isDate(p.planEnd) && dates.diffDays(p.planStart, p.planEnd) < 0) {
@@ -809,7 +814,7 @@ function createProject(db, payload, me) {
       plan_end: String(payload.planEnd),
       approval_step: 0,
       template_id: tpl.id,
-      pm: pmMember ? String(pmMember.userOpenId) : '',
+      pm: pmMember ? String(pmMember.userOpenId) : createdBy,
       created_by: createdBy,
       created_at: ts,
       updated_at: ts,
@@ -825,6 +830,15 @@ function createProject(db, payload, me) {
         ts,
       );
     });
+
+    /* 决策「开放自建 + 自己是 PM」：创建人恒登记为 PM 成员
+       —— 若其已在 payload.members 中以 pm 角色出现则跳过，避免 (project_id, user_open_id, project_role) UNIQUE 冲突 */
+    const creatorIsPm = (payload.members || []).some(function (m) {
+      return m.role === 'pm' && String(m.userOpenId) === createdBy;
+    });
+    if (createdBy && !creatorIsPm) {
+      insMember.run(projectId + '-MBC', projectId, createdBy, 'pm', createdBy, ts);
+    }
 
     specList.forEach(function (spec, idx) {
       const msId = projectId + '-MS' + (idx + 1);
@@ -916,6 +930,24 @@ function createProject(db, payload, me) {
   return getProject(db, projectId);
 }
 
+/**
+ * 删除项目（管理员专属，路由层已 `assertCan(db, req, 'project:delete')`）。
+ *
+ * 采用**软删**（置 `deleted_at`），保留项目成员 / 里程碑 / WBS 等关联数据以便必要时恢复，
+ * 列表与详情均按 `deleted_at IS NULL` 过滤，软删后即对所有普通用户不可见。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} id 项目 id
+ * @returns {{ id: string, deleted: boolean }}
+ * @throws {AppError} E_NOT_FOUND
+ */
+function deleteProject(db, id) {
+  const p = requireProjectRow(db, id); // 已软删 / 不存在 → E_NOT_FOUND
+  const ts = dates.nowIso();
+  db.prepare('UPDATE projects SET deleted_at = ?, updated_at = ? WHERE id = ?').run(ts, ts, p.id);
+  return { id: p.id, deleted: true };
+}
+
 module.exports = {
   NO_PM_PLACEHOLDER,
   findProjectRow,
@@ -936,4 +968,5 @@ module.exports = {
   assertMemberCardinality,
   createProject,
   updateProjectBasic,
+  deleteProject,
 };

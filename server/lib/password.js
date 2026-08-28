@@ -7,7 +7,7 @@
  *  - 密码为空时直接比较，避免在 must_change_pwd 场景下强制要求旧密码。
  */
 
-const { scrypt, timingSafeEqual, randomBytes } = require('crypto');
+const { scrypt, scryptSync, timingSafeEqual, randomBytes } = require('crypto');
 const { promisify } = require('util');
 
 const scryptAsync = promisify(scrypt);
@@ -28,6 +28,18 @@ const MAXMEM = 64 * 1024 * 1024;
 async function hashPassword(password) {
   const salt = randomBytes(32);
   const derived = await scryptAsync(password, salt, KEYLEN, { N, r, p, maxmem: MAXMEM });
+  const encode = (buf) => buf.toString('base64').replace(/=+$/, '');
+  return `$${ALGO}$N=${N},r=${r},p=${p}$${encode(salt)}$${encode(derived)}`;
+}
+
+/**
+ * 同步版哈希（供非 async 上下文使用，如批量导入新建用户，保持与 hashPassword 同算法同格式）。
+ * @param {string} password
+ * @returns {string}
+ */
+function hashPasswordSync(password) {
+  const salt = randomBytes(32);
+  const derived = scryptSync(password, salt, KEYLEN, { N, r, p, maxmem: MAXMEM });
   const encode = (buf) => buf.toString('base64').replace(/=+$/, '');
   return `$${ALGO}$N=${N},r=${r},p=${p}$${encode(salt)}$${encode(derived)}`;
 }
@@ -61,4 +73,4 @@ async function verifyPassword(password, hashed) {
   return timingSafeEqual(derived, expected);
 }
 
-module.exports = { hashPassword, verifyPassword };
+module.exports = { hashPassword, hashPasswordSync, verifyPassword };

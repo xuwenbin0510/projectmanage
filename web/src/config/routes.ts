@@ -2,6 +2,7 @@
 
 export const ROUTES = {
   login: '/login',
+  changePassword: '/change-password',
   workbench: '/workbench',
   projects: '/projects',
   projectCreate: '/projects/new',

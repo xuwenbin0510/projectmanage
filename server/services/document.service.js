@@ -116,6 +116,14 @@ function deriveTemplateDocs(db, projectId, tplRow) {
       .map(function (r) { return r.template_key; }),
   );
 
+  /* 用户有意删除过的模板 key → 派生时跳过，避免删了又复活 */
+  const removed = new Set(
+    db
+      .prepare("SELECT template_key FROM removed_template_docs WHERE project_id = ? AND template_key LIKE ?")
+      .all(projectId, String(tplRow.id || 'TPL') + '-%')
+      .map(function (r) { return r.template_key; }),
+  );
+
   const now = new Date().toISOString();
   const ins = db.prepare(`
     INSERT INTO project_documents
@@ -127,7 +135,7 @@ function deriveTemplateDocs(db, projectId, tplRow) {
   let count = 0;
   docs.forEach(function (doc, i) {
     const key = String(tplRow.id || 'TPL') + '-' + String(i + 1);
-    if (existing.has(key)) return;
+    if (existing.has(key) || removed.has(key)) return;
     const name = String((doc && doc.name) || '').trim() || '交付物 ' + (i + 1);
     const msId = doc && doc.milestoneCode ? msMap[String(doc.milestoneCode)] || '' : '';
     ins.run(newDocId(), projectId, msId, name, now, now, key);
@@ -149,13 +157,8 @@ function ensureTemplateDerived(db, projectId) {
     .prepare('SELECT * FROM lifecycle_templates WHERE project_type = ? AND is_active = 1 ORDER BY version DESC LIMIT 1')
     .get(String(p.type));
   if (!tpl) return 0;
-  /* 修复 D-BUG：按「当前生效模板 id」判重，而非笼统的 'TPL-%' 前缀。
-     旧逻辑只要有任何 TPL- 前缀记录就认为“已派生”，导致切换类型后
-     旧类型残留的自动交付物（如 TPL-B-*）让新类型永远补不上、质量门失控。 */
-  const has = db
-    .prepare("SELECT COUNT(*) c FROM project_documents WHERE project_id = ? AND template_key LIKE ?")
-    .get(projectId, String(tpl.id) + '-%').c;
-  if (has > 0) return 0;
+  /* 不再用「has>0 早退」判重：删除全部模板项后 has=0 会整组复活（D-BUG）。
+     改由 deriveTemplateDocs 逐 key 判重（existing ∪ removed），删除意图被尊重。 */
   return deriveTemplateDocs(db, projectId, tpl);
 }
 
@@ -292,7 +295,7 @@ function uploadDocument(db, projectId, payload) {
   return getDocument(db, id);
 }
 
-function deleteDocument(db, id) {
+function deleteDocument(db, req, id) {
   const doc = getDocument(db, id);
   const full = path.join(root(), doc.storagePath);
   try {
@@ -301,6 +304,15 @@ function deleteDocument(db, id) {
     // 文件已丢失不影响记录清理（沙箱 safe-delete 拦截等异常忽略）
   }
   db.prepare('DELETE FROM project_documents WHERE id = ?').run(id);
+  /* 记录用户有意删除的模板托管项（非 CUS- 自定义项），避免列表派生复活 */
+  if (doc.templateKey && !doc.templateKey.startsWith('CUS-')) {
+    const operator = (req && req.user && (req.user.openId || req.user.open_id)) || '';
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT OR IGNORE INTO removed_template_docs (project_id, template_key, removed_by, removed_at)
+      VALUES (?, ?, ?, ?)
+    `).run(doc.projectId, doc.templateKey, operator, now);
+  }
   return doc;
 }
 

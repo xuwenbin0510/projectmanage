@@ -65,8 +65,9 @@ function resolveUser(req) {
 function requireAuth(req, res, next) {
   const user = resolveUser(req);
   if (!user) return next(new AppError(ErrorCode.E_UNAUTHORIZED));
-  if (user.status === 'disabled') {
-    return next(new AppError(ErrorCode.E_FORBIDDEN, '账号已停用，请联系管理员'));
+  if (user.status !== 'active') {
+    // 纵深防御：pending（待授权）/ disabled（已停用）一律拒绝，与登录闸门口径一致（pending 本不会拿到 token）
+    return next(new AppError(ErrorCode.E_FORBIDDEN, user.status === 'pending' ? '账号待管理员授权，请联系管理员' : '账号已停用，请联系管理员'));
   }
   req.user = user;
   next();

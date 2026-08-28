@@ -129,7 +129,13 @@ export function isApiError(e: unknown): e is ApiError {
 
 /** 从任意异常中提取可展示的中文文案 */
 export function messageOf(e: unknown): string {
-  if (isApiError(e)) return e.message || ERROR_MESSAGE_ZH[e.code] || '请求失败';
+  if (isApiError(e)) {
+    const fields = (e.data as { fields?: Array<{ message?: string }> } | undefined)?.fields;
+    if (Array.isArray(fields) && fields.length && fields[0]?.message) {
+      return fields[0].message;
+    }
+    return e.message || ERROR_MESSAGE_ZH[e.code] || '请求失败';
+  }
   if (e instanceof Error) return e.message;
   return String(e ?? '未知错误');
 }

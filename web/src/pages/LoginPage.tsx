@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -22,6 +22,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
 import { useToast } from '@/hooks/useToast';
+import { ApiError, ErrorCode } from '@/types/api';
 import { api, USE_MOCK } from '@/api/client';
 import { isInFeishu, hasFeishuSdk, requestAuthCode, waitSdkReady } from '@/utils/feishu';
 import { tokens } from '@/theme/tokens';
@@ -51,16 +52,26 @@ export function LoginPage(): JSX.Element {
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [feishuReady, setFeishuReady] = useState(false);
+  const [feishuChecked, setFeishuChecked] = useState(false);
+  const [feishuFailed, setFeishuFailed] = useState(false);
   const [feishuBusy, setFeishuBusy] = useState(false);
   const [appId, setAppId] = useState('');
 
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const ok = await waitSdkReady(1500);
-      if (alive) setFeishuReady(ok && hasFeishuSdk());
+      const ok = await waitSdkReady(3000);
+      const ready = ok && hasFeishuSdk();
+      if (alive) {
+        setFeishuReady(ready);
+        setFeishuChecked(true);
+      }
       const id = await api.getAppId();
       if (alive) setAppId(id || '');
+      // 飞书 WebView 内：环境就绪后自动触发免登，提供无缝登录；失败则回退浏览器按钮
+      if (alive && ready) {
+        void handleFeishuLogin();
+      }
     })();
     return () => {
       alive = false;
@@ -97,11 +108,16 @@ export function LoginPage(): JSX.Element {
         toast.success(`欢迎回来，${user.name}`);
         window.history.replaceState({}, '', ROUTES.login);
         navigate(from, { replace: true });
-      } catch (e) {
-        if (!alive) return;
+    } catch (e) {
+      if (!alive) return;
+      // 未授权（pending / 无账号）属 E_FORBIDDEN，仅展示后端 message（未授权者对密码登录同样不可达，不再追加"改用邮箱密码"）
+      if (e instanceof ApiError && e.code === ErrorCode.E_FORBIDDEN) {
+        toast.error(e);
+      } else {
         toast.error(e, '飞书网页登录失败，请改用邮箱密码登录');
-        window.history.replaceState({}, '', ROUTES.login);
       }
+      window.history.replaceState({}, '', ROUTES.login);
+    }
     })();
     return () => {
       alive = false;
@@ -141,7 +157,13 @@ export function LoginPage(): JSX.Element {
       toast.success(`欢迎回来，${user.name}`);
       navigate(from, { replace: true });
     } catch (e) {
-      toast.error(e, '飞书免登失败，请改用邮箱密码登录');
+      setFeishuFailed(true);
+      // 未授权（pending / 无账号）属 E_FORBIDDEN，仅展示后端 message（未授权者对密码登录同样不可达，不再追加"改用邮箱密码"）
+      if (e instanceof ApiError && e.code === ErrorCode.E_FORBIDDEN) {
+        toast.error(e);
+      } else {
+        toast.error(e, '飞书免登失败，请改用邮箱密码登录');
+      }
     } finally {
       setFeishuBusy(false);
     }
@@ -380,34 +402,72 @@ export function LoginPage(): JSX.Element {
           </Divider>
 
           <Stack spacing={1.5}>
-            <Button
-              variant="outlined"
-              size="large"
-              fullWidth
-              disabled={!feishuReady || feishuBusy}
-              onClick={() => void handleFeishuLogin()}
-              sx={{
-                borderColor: 'rgba(255,255,255,0.15)',
-                color: 'rgba(255,255,255,0.85)',
-                '&:hover': { borderColor: tokens.brand.primary, color: '#fff' },
-              }}
-            >
-              {feishuBusy ? '飞书免登中…' : '使用飞书账号登录'}
-            </Button>
-            <Button
-              variant="outlined"
-              size="large"
-              fullWidth
-              disabled={!appId}
-              onClick={() => void handleFeishuWebLogin()}
-              sx={{
-                borderColor: 'rgba(255,255,255,0.15)',
-                color: 'rgba(255,255,255,0.85)',
-                '&:hover': { borderColor: tokens.brand.primary, color: '#fff' },
-              }}
-            >
-              {appId ? '使用飞书账号登录（浏览器）' : '飞书 Web 登录未启用'}
-            </Button>
+            {!feishuChecked ? (
+              <Button
+                variant="outlined"
+                size="large"
+                fullWidth
+                disabled
+                sx={{
+                  borderColor: 'rgba(255,255,255,0.12)',
+                  color: 'rgba(255,255,255,0.4)',
+                }}
+              >
+                正在检测登录环境…
+              </Button>
+            ) : feishuReady ? (
+              <>
+                <Button
+                  variant="outlined"
+                  size="large"
+                  fullWidth
+                  disabled={feishuBusy}
+                  onClick={() => void handleFeishuLogin()}
+                  sx={{
+                    borderColor: tokens.brand.primary,
+                    color: '#fff',
+                    '&:hover': {
+                      borderColor: tokens.brand.primary,
+                      color: '#fff',
+                      bgcolor: 'rgba(109,168,174,0.08)',
+                    },
+                  }}
+                >
+                  {feishuBusy ? '飞书免登中…' : '使用飞书账号登录'}
+                </Button>
+                {feishuFailed && (
+                  <Button
+                    variant="outlined"
+                    size="large"
+                    fullWidth
+                    disabled={!appId}
+                    onClick={() => void handleFeishuWebLogin()}
+                    sx={{
+                      borderColor: 'rgba(255,255,255,0.15)',
+                      color: 'rgba(255,255,255,0.85)',
+                      '&:hover': { borderColor: tokens.brand.primary, color: '#fff' },
+                    }}
+                  >
+                    {appId ? '免登失败，改用浏览器登录' : '飞书 Web 登录未启用'}
+                  </Button>
+                )}
+              </>
+            ) : (
+              <Button
+                variant="outlined"
+                size="large"
+                fullWidth
+                disabled={!appId}
+                onClick={() => void handleFeishuWebLogin()}
+                sx={{
+                  borderColor: 'rgba(255,255,255,0.15)',
+                  color: 'rgba(255,255,255,0.85)',
+                  '&:hover': { borderColor: tokens.brand.primary, color: '#fff' },
+                }}
+              >
+                {appId ? '使用飞书账号登录（浏览器）' : '飞书 Web 登录未启用'}
+              </Button>
+            )}
           </Stack>
 
           {!appId && !feishuReady && (

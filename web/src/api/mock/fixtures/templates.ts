@@ -2,7 +2,7 @@ import type { LifecycleTemplate } from '@/types/project';
 import { nowIso } from '@/utils/date';
 
 /**
- * A / B / C 三套生命周期模板（里程碑 + 质量门 + 检查项 + WBS 规则 + 文档清单）
+ * A / B / C / D 四套生命周期模板（里程碑 + 质量门 + 检查项 + WBS 规则 + 文档清单）
  * @prd P0-02 P0-03 P0-05 P0-06
  *
  * ⚠️ 方案一（极简）：阶段实体已被彻底删除。本文件是**运行时生效**的模板定义，
@@ -341,5 +341,23 @@ export function createTemplates(): LifecycleTemplate[] {
     },
   };
 
-  return [typeA, typeB, typeC];
+  const typeD: LifecycleTemplate = {
+    id: 'TPL-D',
+    projectType: 'D',
+    version: 2,
+    name: 'D 类（通用轻量型）生命周期',
+    isActive: true,
+    createdAt: ts,
+    definition: {
+      milestones: [
+        { code: 'M1', name: '启动与规划', offsetDays: 0, required: true },
+        { code: 'M2', name: '执行与跟进', offsetDays: 15, required: false },
+        { code: 'M3', name: '结项与归档', offsetDays: 30, required: false },
+      ],
+      docs: [],
+      wbsRules: { maxDepth: 4, skeleton: 'per-milestone' },
+    },
+  };
+
+  return [typeA, typeB, typeC, typeD];
 }

@@ -3,7 +3,7 @@ import { Box, Button, Card, IconButton, InputAdornment, Stack, TextField, Typogr
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import LockResetIcon from '@mui/icons-material/LockReset';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { ROUTES } from '@/config/routes';
 import { useAuthStore } from '@/stores/authStore';
@@ -16,6 +16,9 @@ export function ChangePasswordPage(): JSX.Element {
   const changePassword = useAuthStore((s) => s.changePassword);
   const loading = useAuthStore((s) => s.loading);
   const user = useAuthStore((s) => s.user);
+  const [searchParams] = useSearchParams();
+  // forced=1：首次强制改密场景，成功后回登录页；否则自助改密，成功后返回上一页
+  const forced = searchParams.get('forced') === '1';
 
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -35,8 +38,13 @@ export function ChangePasswordPage(): JSX.Element {
     }
     try {
       await changePassword(oldPassword, newPassword);
-      toast.success('密码已更新，请重新登录');
-      navigate(ROUTES.login, { replace: true });
+      if (forced) {
+        toast.success('密码已更新，请重新登录');
+        navigate(ROUTES.login, { replace: true });
+      } else {
+        toast.success('密码已更新');
+        navigate(-1);
+      }
     } catch (e) {
       toast.error(e);
     }

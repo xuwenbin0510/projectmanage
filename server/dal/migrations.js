@@ -1440,6 +1440,97 @@ function migrationV20(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v20 已清理历史遗留死表 tasks / reports / report_tasks');
 }
 
+/* ── 迁移 v21：站内通知表 ─────────────────────────── */
+
+/**
+ * 迁移 v21 —— 站内通知（本期新增功能域，配合顶栏铃铛）。
+ *
+ * 口径铁律：
+ *  - 一条通知只指向一个接收人（user_open_id），群发由调用方循环 insert
+ *  - `type` 取值：REVIEW_CREATED / REVIEW_DECIDED / CHANGE_CREATED /
+ *    CHANGE_SUBMITTED / CHANGE_APPLIED / CHANGE_DECIDED（由 notification.service 常量约束）
+ *  - `ref_type` / `ref_id` 指向关联业务对象（review / change），前端点击跳详情
+ *  - `is_read` 0/1；软未读由索引 (user_open_id, is_read, created_at) 支撑未读计数
+ *  - 避免自通知：写入前由 service 层 resolveRecipients 过滤发起人自身
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ */
+function migrationV21(db, now) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id           TEXT PRIMARY KEY,
+      user_open_id TEXT NOT NULL,
+      project_id   TEXT NOT NULL DEFAULT '',
+      type         TEXT NOT NULL,
+      title        TEXT NOT NULL DEFAULT '',
+      body         TEXT NOT NULL DEFAULT '',
+      ref_type     TEXT NOT NULL DEFAULT '',
+      ref_id       TEXT NOT NULL DEFAULT '',
+      is_read      INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_user
+      ON notifications(user_open_id, is_read, created_at);
+  `);
+
+  console.log('[migrations] v21 notifications 表（站内通知）');
+}
+
+/* ── 迁移 v22：模板交付物删除记忆表 ─────────────────── */
+
+/**
+ * 迁移 v22 —— 记录用户「有意删除」的模板派生交付物 key。
+ *
+ * 背景：deriveTemplateDocs 的「保证清单常驻」逻辑原本只以「行是否还在」判重，
+ * 用户删除后行消失 → 列表派生判定为「缺失」→ 整组复活（D-BUG：删了又复现）。
+ * 本表记下被删 key，派生时跳过，使删除生效。
+ * 自定义项（CUS- 前缀）删除即真删，不写本表。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ */
+function migrationV22(db, now) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS removed_template_docs (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id   TEXT NOT NULL,
+      template_key TEXT NOT NULL,
+      removed_by   TEXT NOT NULL DEFAULT '',
+      removed_at   TEXT NOT NULL,
+      UNIQUE(project_id, template_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_removed_tpl_docs
+      ON removed_template_docs(project_id, template_key);
+  `);
+  console.log('[migrations] v22 removed_template_docs 表（模板交付物删除记忆）');
+}
+
+/* ── 迁移 v23：认证授权闸门（users.status 三态 + email 索引） ── */
+
+/**
+ * 迁移 v23 —— 扩展 users.status 枚举为三态（active / disabled / pending）。
+ *
+ * 背景：飞书登录授权闸门（需求②）要求"未授权人员一律拒绝，不自动建号"，
+ * 并以单一真相源 `status === 'active'` 作为登录闸门（密码 / 飞书 / requireAuth 口径统一）。
+ *
+ * 因 users.status 为 TEXT 列，无需 ALTER 表结构，仅需：
+ *  1) 防御性 backfill：任何非三态合法值的脏数据一律归正为 active（生产存量全为 active/disabled，本步为空操作）；
+ *  2) 飞书按 email 认回账号的高频路径加索引（小库可省，推荐加）。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ */
+function migrationV23(db, now) {
+  // 1) 防御：任何非三态合法值的脏数据一律归正为 active
+  db.exec(
+    "UPDATE users SET status = 'active' WHERE status NOT IN ('active', 'disabled', 'pending')",
+  );
+  // 2) 飞书登录按 email 认回的高频路径加索引
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+  console.log('[migrations] v23 扩展 users.status 枚举（active/disabled/pending），加 email 索引');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1467,6 +1558,9 @@ const MIGRATIONS = [
   { version: 18, name: 'connect-v18-rbac-config', up: migrationV18 },
   { version: 19, name: 'connect-v19-risks', up: migrationV19 },
   { version: 20, name: 'connect-v20-drop-legacy-tables', up: migrationV20 },
+  { version: 21, name: 'connect-v21-notifications', up: migrationV21 },
+  { version: 22, name: 'connect-v22-removed-template-docs', up: migrationV22 },
+  { version: 23, name: 'connect-v23-auth-gate', up: migrationV23 },
 ];
 
 /**

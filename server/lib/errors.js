@@ -48,6 +48,9 @@ const ErrorCode = {
   E_DOC_CHANGE_NOTE_REQUIRED: 'E_DOC_CHANGE_NOTE_REQUIRED',
   E_NETWORK: 'E_NETWORK',
 
+  /* 飞书开放平台接口异常（拉通讯录/搜索失败、权限点缺失等） */
+  E_FEISHU_API: 'E_FEISHU_API',
+
   /* ── 后端专有（前端 ERROR_MESSAGE_ZH 无对应项，靠 message 兜底展示） ── */
   E_NOT_IMPLEMENTED: 'E_NOT_IMPLEMENTED',
   E_INTERNAL: 'E_INTERNAL',
@@ -108,6 +111,8 @@ const CODE_HTTP = {
 
   // 占位：后端永不返回
   [ErrorCode.E_NETWORK]: 503,
+
+  [ErrorCode.E_FEISHU_API]: 502,
 };
 
 /**
@@ -150,6 +155,7 @@ const ERROR_MESSAGE_ZH = {
   E_GATE_DELIVERABLE_INCOMPLETE: '该里程碑尚有未交付的模板交付物，不能通过质量门',
   E_DOC_CHANGE_NOTE_REQUIRED: '替换已纳入基线的交付物必须填写变更原因',
   E_NETWORK: '网络异常，请稍后重试',
+  E_FEISHU_API: '飞书接口调用失败，请检查应用权限与网络',
   E_NOT_IMPLEMENTED: '该功能尚未上线',
   E_INTERNAL: '服务器内部错误',
 };

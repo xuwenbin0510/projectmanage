@@ -8,16 +8,17 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   IconButton,
   Menu,
   MenuItem,
   Stack,
-  Switch,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
 import PersonAddOutlinedIcon from '@mui/icons-material/PersonAddOutlined';
+import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import LockResetOutlinedIcon from '@mui/icons-material/LockResetOutlined';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
@@ -25,8 +26,12 @@ import DeleteOutlineOutlinedIcon from '@mui/icons-material/DeleteOutlineOutlined
 import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined';
 import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
+import CheckCircleOutlineOutlinedIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
+import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
+import HourglassEmptyOutlinedIcon from '@mui/icons-material/HourglassEmptyOutlined';
 
 import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard, UserAvatar } from '@/components/common';
+import { FeishuImportDialog } from '@/components/FeishuImportDialog';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
 import type { User } from '@/types/project';
@@ -75,9 +80,11 @@ interface NewUserForm {
   primaryRole: string;
   /** 额外职位（不含主职位），值为 role_key 数组 */
   extraRoles: string[];
+  /** 初始状态：active=启用可登录 / pending=待授权预建（默认 active，保持兼容） */
+  initialStatus: 'active' | 'pending';
 }
 
-const EMPTY_FORM: NewUserForm = { openId: '', name: '', employeeId: '', email: '', dept: '', primaryRole: 'member', extraRoles: [] };
+const EMPTY_FORM: NewUserForm = { openId: '', name: '', employeeId: '', email: '', dept: '', primaryRole: 'member', extraRoles: [], initialStatus: 'active' };
 
 /**
  * 管理后台 · 用户与职位（阶段一：用户 CRUD + 启停 + 部门；E1.5：一人可多公司职位）
@@ -93,6 +100,8 @@ export function AdminUsersPage(): JSX.Element {
 
   /* 新增用户弹窗状态 */
   const [createOpen, setCreateOpen] = useState(false);
+  /* 飞书通讯录导入弹窗 */
+  const [importOpen, setImportOpen] = useState(false);
   /* 创建成功后的「默认密码」提示弹窗 */
   const [createdPwd, setCreatedPwd] = useState<{ name: string; password: string } | null>(null);
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
@@ -155,17 +164,40 @@ export function AdminUsersPage(): JSX.Element {
     }
   };
 
-  /** 启用 / 停用（仅 admin；不能停用自己） */
-  const toggleStatus = async (u: User): Promise<void> => {
-    const next = u.status === 'active' ? 'disabled' : 'active';
+  /** 用户状态展示元数据（active=绿 / pending=橙 / disabled=灰） */
+  const STATUS_META: Record<string, { label: string; color: 'success' | 'warning' | 'default' }> = {
+    active: { label: '启用', color: 'success' },
+    pending: { label: '待授权', color: 'warning' },
+    disabled: { label: '停用', color: 'default' },
+  };
+
+  /** 改某用户状态（仅 admin；统一封装更新 + 失败回刷） */
+  const changeStatus = async (u: User, next: 'active' | 'disabled' | 'pending', successMsg: string): Promise<void> => {
     try {
       const updated = await api.updateUser(u.openId, { status: next });
       setUsers((list) => list.map((x) => (x.openId === u.openId ? updated : x)));
-      toast.success(next === 'active' ? `已启用 ${u.name}` : `已停用 ${u.name}`);
+      toast.success(successMsg);
     } catch (e) {
       toast.error(e);
       load();
     }
+  };
+
+  /** 授权（pending → active，放行登录） */
+  const authorizeUser = (u: User): void => {
+    void changeStatus(u, 'active', `已授权并启用 ${u.name}`);
+  };
+  /** 启用（disabled → active） */
+  const enableUser = (u: User): void => {
+    void changeStatus(u, 'active', `已启用 ${u.name}`);
+  };
+  /** 停用（active → disabled） */
+  const disableUser = (u: User): void => {
+    void changeStatus(u, 'disabled', `已停用 ${u.name}`);
+  };
+  /** 撤回授权（active → pending，待授权） */
+  const setPendingUser = (u: User): void => {
+    void changeStatus(u, 'pending', `已将 ${u.name} 设为待授权`);
   };
 
   /** 重置用户密码（仅 admin；不能重置自己） */
@@ -199,6 +231,7 @@ export function AdminUsersPage(): JSX.Element {
         email: form.email.trim() || undefined,
         dept: form.dept.trim() || undefined,
         globalRoles: mergeRoles(form.primaryRole, form.extraRoles),
+        status: form.initialStatus,
       });
       setUsers((list) => [...list, created]);
       setCreateOpen(false);
@@ -396,26 +429,24 @@ export function AdminUsersPage(): JSX.Element {
       },
     },
     {
-      /* 阶段一：状态可操作（启停开关；不能停用自己） */
+      /* 授权闸门：状态用彩色 Chip 表达（启用=绿 / 待授权=橙 / 停用=灰）；行内动作见「操作→更多」 */
       key: 'status',
       label: '状态',
-      width: 90,
+      width: 100,
       align: 'center',
-      render: (u) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
-          <Stack direction="row" spacing={0.75} alignItems="center">
-            <Switch
+      render: (u) => {
+        const meta = STATUS_META[u.status] || STATUS_META.active;
+        return (
+          <PermissionButton action="admin:user:role" fallback="disable">
+            <Chip
               size="small"
-              checked={u.status === 'active'}
-              disabled={me?.openId === u.openId}
-              onChange={() => void toggleStatus(u)}
+              label={meta.label}
+              color={meta.color}
+              variant={u.status === 'active' ? 'filled' : 'outlined'}
             />
-            <Typography variant="caption" sx={{ color: u.status === 'active' ? 'success.main' : 'text.secondary' }}>
-              {u.status === 'active' ? '启用' : '停用'}
-            </Typography>
-          </Stack>
-        </PermissionButton>
-      ),
+          </PermissionButton>
+        );
+      },
     },
     {
       key: 'actions',
@@ -447,11 +478,18 @@ export function AdminUsersPage(): JSX.Element {
         title="用户与职位"
         subtitle="管理公司职位与启停状态；系统至少保留一名管理员，且不可修改/停用自己"
         actions={
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Button variant="contained" size="small" startIcon={<PersonAddOutlinedIcon />} onClick={() => setCreateOpen(true)}>
-              新增用户
-            </Button>
-          </PermissionButton>
+          <Stack direction="row" spacing={1}>
+            <PermissionButton action="admin:user:role" fallback="disable">
+              <Button variant="outlined" size="small" startIcon={<CloudDownloadOutlinedIcon />} onClick={() => setImportOpen(true)}>
+                从飞书导入
+              </Button>
+            </PermissionButton>
+            <PermissionButton action="admin:user:role" fallback="disable">
+              <Button variant="contained" size="small" startIcon={<PersonAddOutlinedIcon />} onClick={() => setCreateOpen(true)}>
+                新增用户
+              </Button>
+            </PermissionButton>
+          </Stack>
         }
       />
       <SectionCard flush>
@@ -483,7 +521,16 @@ export function AdminUsersPage(): JSX.Element {
               <DetailRow label="工号" value={detailTarget.employeeId || '—'} />
               <DetailRow label="部门" value={detailTarget.dept || '—'} />
               <DetailRow label="公司职位" value={(detailTarget.globalRoles?.length ? detailTarget.globalRoles.map((r) => roleLabelMap[r] ?? r).join('、') : (roleLabelMap[detailTarget.globalRole ?? ''] ?? detailTarget.globalRole ?? '未分配'))} />
-              <DetailRow label="状态" value={detailTarget.status === 'active' ? '启用' : '停用'} />
+              <DetailRow
+                label="状态"
+                value={
+                  detailTarget.status === 'active'
+                    ? '启用'
+                    : detailTarget.status === 'pending'
+                      ? '待授权（已预建，等待管理员启用）'
+                      : '停用'
+                }
+              />
               <DetailRow label="创建时间" value={detailTarget.createdAt || '—'} />
               <DetailRow label="更新时间" value={detailTarget.updatedAt || '—'} />
               {isDataAnomaly(detailTarget) && (
@@ -524,6 +571,54 @@ export function AdminUsersPage(): JSX.Element {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
+        {/* 状态快捷操作：按当前状态给出对应授权动作（仅 admin） */}
+        {menuAnchor?.user.status === 'pending' && (
+          <MenuItem
+            onClick={() => {
+              if (menuAnchor) authorizeUser(menuAnchor.user);
+              closeMenu();
+            }}
+          >
+            <CheckCircleOutlineOutlinedIcon fontSize="small" style={{ marginRight: 8 }} />
+            授权并启用
+          </MenuItem>
+        )}
+        {menuAnchor?.user.status === 'active' && (
+          <>
+            <MenuItem
+              disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+              onClick={() => {
+                if (menuAnchor) disableUser(menuAnchor.user);
+                closeMenu();
+              }}
+            >
+              <BlockOutlinedIcon fontSize="small" style={{ marginRight: 8 }} />
+              停用
+            </MenuItem>
+            <MenuItem
+              disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+              onClick={() => {
+                if (menuAnchor) setPendingUser(menuAnchor.user);
+                closeMenu();
+              }}
+            >
+              <HourglassEmptyOutlinedIcon fontSize="small" style={{ marginRight: 8 }} />
+              设为待授权
+            </MenuItem>
+          </>
+        )}
+        {menuAnchor?.user.status === 'disabled' && (
+          <MenuItem
+            onClick={() => {
+              if (menuAnchor) enableUser(menuAnchor.user);
+              closeMenu();
+            }}
+          >
+            <CheckCircleOutlineOutlinedIcon fontSize="small" style={{ marginRight: 8 }} />
+            启用
+          </MenuItem>
+        )}
+        <Divider />
         <MenuItem
           disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
           onClick={() => {
@@ -591,6 +686,19 @@ export function AdminUsersPage(): JSX.Element {
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
               helperText="密码登录依靠邮箱识别账号，纯密码用户请填写真实邮箱"
             />
+            <Box>
+              <Typography variant="caption" color="text.secondary">初始状态</Typography>
+              <TextField
+                select
+                size="small"
+                fullWidth
+                value={form.initialStatus}
+                onChange={(e) => setForm((f) => ({ ...f, initialStatus: e.target.value as 'active' | 'pending' }))}
+              >
+                <MenuItem value="active">启用（可立即登录）</MenuItem>
+                <MenuItem value="pending">待授权（预建，管理员后续启用）</MenuItem>
+              </TextField>
+            </Box>
             <Box>
               <Typography variant="caption" color="text.secondary">主职位（必选 1 个，权限兜底）</Typography>
               <TextField
@@ -801,6 +909,9 @@ export function AdminUsersPage(): JSX.Element {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* 飞书通讯录导入弹窗（两档三桶：铁证/疑似/新建） */}
+      <FeishuImportDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={() => load()} />
     </Stack>
   );
 }

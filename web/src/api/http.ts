@@ -31,6 +31,7 @@ import type { EffortReport } from '@/types/effort';
 import type { Review } from '@/types/review';
 import type { Change, RouteResult } from '@/types/change';
 import type { AuditLog, Risk, CreateRiskPayload, UpdateRiskPayload, ProjectDocument, UploadDocumentPayload, CreateLinkDocumentPayload } from '@/types/audit';
+import type { NotificationItem, NotificationListResult } from '@/types/notification';
 import type { WorkbenchData, WorkbenchReportClosure, Session } from '@/types/workbench';
 import type {
   DashboardDeliverableRow,
@@ -60,6 +61,10 @@ import type {
   PermissionMatrixResponse,
   PermissionActionMeta,
   MetaPermissionsResponse,
+  FeishuImportPreview,
+  FeishuImportPayload,
+  FeishuImportResult,
+  FeishuImportSearchResult,
 } from './contract';
 import { genRequestId } from '@/utils/format';
 
@@ -467,6 +472,22 @@ export class HttpApiClient implements ApiClient {
     return del<null>(`/admin/users/${openId}`);
   }
 
+  /* 飞书通讯录导入（仅 admin） */
+  /** 预览：拉取通讯录并按两档三桶分类 */
+  previewFeishuContacts(): Promise<FeishuImportPreview> {
+    return get<FeishuImportPreview>('/admin/feishu/contacts?preview=1');
+  }
+
+  /** 执行导入：initialStatus + 疑似档决策 + 可选联系人子集（搜索导入场景） */
+  importFeishuUsers(payload: FeishuImportPayload): Promise<FeishuImportResult> {
+    return post<FeishuImportResult>('/admin/feishu/import', payload);
+  }
+
+  /** 按姓名/关键字搜索通讯录（带三桶分类） */
+  searchFeishuUsers(query: string, pageSize?: number): Promise<FeishuImportSearchResult> {
+    return post<FeishuImportSearchResult>('/admin/feishu/search', { query, pageSize });
+  }
+
   /* E1.5 职位目录管理（仅 admin） */
   listRoles(): Promise<Role[]> {
     return get<Role[]>('/admin/roles');
@@ -696,6 +717,19 @@ export class HttpApiClient implements ApiClient {
       throw new ApiError(ErrorCode.E_NOT_FOUND, '文件不存在或无权访问', undefined, res.status);
     }
     return res.blob();
+  }
+
+  /* 站内通知（顶栏铃铛） */
+  listNotifications(opts?: { unread?: boolean; page?: number; pageSize?: number }): Promise<NotificationListResult> {
+    return get<NotificationListResult>(`/notifications${qs((opts || {}) as Record<string, unknown>)}`);
+  }
+
+  markNotificationRead(id: string): Promise<{ id: string; isRead: number }> {
+    return post<{ id: string; isRead: number }>(`/notifications/${id}/read`);
+  }
+
+  markAllNotificationsRead(): Promise<{ count: number }> {
+    return post<{ count: number }>('/notifications/read-all');
   }
 }
 
