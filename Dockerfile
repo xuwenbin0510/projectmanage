@@ -2,8 +2,8 @@
 FROM node:22-slim AS build
 WORKDIR /app
 
-# better-sqlite3 是原生模块，ECS 上 GitHub 预编译不通，必须 node-gyp 源码编译，
-# 需 python3 + make + g++；apt 改用华为云镜像（实测 InRelease 0.05s，远快于阿里云 1.5s）
+# better-sqlite3 为原生模块，构建阶段装 python3 + make + g++ 以支持 node-gyp 源码编译
+# apt 源替换为华为云镜像，加速构建期依赖安装
 RUN sed -i 's/deb.debian.org/mirrors.huaweicloud.com/g; s/security.debian.org/mirrors.huaweicloud.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
     sed -i 's/deb.debian.org/mirrors.huaweicloud.com/g; s/security.debian.org/mirrors.huaweicloud.com/g' /etc/apt/sources.list
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
