@@ -28,6 +28,19 @@ const OPEN_ID_REFERENCE_CHECKS = [
   { table: 'work_reports', col: 'author_open_id' },
 ];
 
+/**
+ * 部门名拼接：飞书一个用户可挂多个部门，用 "/" 拼成单字符串存储（上限 60 字）。
+ * 过滤空值，避免产生 "//" 或空串。
+ */
+function joinDeptNames(names) {
+  if (!Array.isArray(names)) return '';
+  return names
+    .map(function (n) { return String(n || '').trim(); })
+    .filter(Boolean)
+    .join('/')
+    .slice(0, 60);
+}
+
 /* ── 三桶分类 ───────────────────────────────────────── */
 
 /**
@@ -102,11 +115,11 @@ function backfillHarmless(localOpenId, contact, now) {
   if (!local) return;
   const incomingUnion = String(contact.unionId || '').trim();
   const incomingName = String(contact.name || '').trim();
-  const incomingDept = String((contact.departmentNames && contact.departmentNames[0]) || '').trim();
+  const incomingDept = joinDeptNames(contact.departmentNames);
   const incomingEmp = String(contact.employeeId || '').trim();
   const finalUnion = incomingUnion || local.union_id || null;
   const finalName = incomingName ? incomingName.slice(0, 40) : local.name;
-  const finalDept = incomingDept ? incomingDept.slice(0, 60) : local.dept;
+  const finalDept = incomingDept ? incomingDept : local.dept;
   const finalEmp = incomingEmp ? incomingEmp.slice(0, 40) : local.employee_id;
   db.prepare(
     'UPDATE users SET union_id = ?, name = ?, dept = ?, employee_id = ?, updated_at = ? WHERE open_id = ?',
@@ -128,11 +141,11 @@ function mergeLocal(localOpenId, contact, now) {
   const local = db.prepare('SELECT union_id, name, dept, employee_id FROM users WHERE open_id = ?').get(localOpenId);
   const incomingUnion = String(contact.unionId || '').trim();
   const incomingName = String(contact.name || '').trim();
-  const incomingDept = String((contact.departmentNames && contact.departmentNames[0]) || '').trim();
+  const incomingDept = joinDeptNames(contact.departmentNames);
   const incomingEmp = String(contact.employeeId || '').trim();
   const finalUnion = incomingUnion || (local && local.union_id) || null;
   const finalName = incomingName ? incomingName.slice(0, 40) : (local && local.name);
-  const finalDept = incomingDept ? incomingDept.slice(0, 60) : (local && local.dept);
+  const finalDept = incomingDept ? incomingDept : (local && local.dept);
   const finalEmp = incomingEmp ? incomingEmp.slice(0, 40) : (local && local.employee_id);
   const tx = db.transaction(function () {
     if (openIdChanged) {
@@ -171,7 +184,7 @@ function createLocalUserFromContact(contact, status, now) {
       String(contact.employeeId || '').slice(0, 40),
       String(contact.name || '').trim().slice(0, 40),
       email,
-      (contact.departmentNames && contact.departmentNames[0] ? contact.departmentNames[0] : '').slice(0, 60),
+      joinDeptNames(contact.departmentNames),
       'member',
       finalStatus,
       now,

@@ -38,7 +38,12 @@ async function feishuGet(path, token) {
  * @returns {object}
  */
 function normalizeUser(u, nameOf) {
-  const deptIds = Array.isArray(u.department_ids) ? u.department_ids.slice() : [];
+  // 关键：飞书 /contact/v3/users 列表接口【不返回 department_ids 字段】，必须靠
+  // 「按部门拉成员」时给成员打上的部门标记(_deptIds)来还原部门归属；若都没有则为空
+  // 数组（即飞书侧未归属任何部门的人员，如 Min / Eric Yi）。
+  const deptIds = (Array.isArray(u._deptIds) && u._deptIds.length)
+    ? u._deptIds.slice()
+    : (Array.isArray(u.department_ids) ? u.department_ids.slice() : []);
   const deptNames = deptIds
     .map(function (id) { return nameOf(id); })
     .filter(Boolean);
@@ -101,7 +106,13 @@ async function fetchUsersInDept(deptId, token) {
       + (pageToken ? '&page_token=' + encodeURIComponent(pageToken) : '');
     const data = await feishuGet('/contact/v3/users' + qs, token);
     const items = Array.isArray(data.items) ? data.items : [];
-    items.forEach(function (u) { users.push(u); });
+    items.forEach(function (u) {
+      // 列表接口不返回 department_ids，这里按「拉自哪个部门」给成员打上部门标记，
+      // 后续 normalizeUser 用它还原部门归属（多人部门会被 getFullContacts 聚合去重）。
+      u._deptIds = Array.isArray(u._deptIds) ? u._deptIds : [];
+      if (u._deptIds.indexOf(deptId) < 0) u._deptIds.push(deptId);
+      users.push(u);
+    });
     pageToken = data.has_more ? data.page_token : null;
   } while (pageToken);
   return users;
@@ -156,11 +167,11 @@ async function getFullContacts(token, opts) {
 
   const byId = {};
   const mergeDept = function (target, src) {
-    const merged = target.department_ids ? target.department_ids.slice() : [];
-    (src.department_ids || []).forEach(function (id) {
+    const merged = target._deptIds ? target._deptIds.slice() : [];
+    (src._deptIds || []).forEach(function (id) {
       if (merged.indexOf(id) < 0) merged.push(id);
     });
-    target.department_ids = merged;
+    target._deptIds = merged;
   };
 
   // 1) 部门遍历（有部门归属者）
