@@ -131,8 +131,6 @@ export function AdminAuditPage(): JSX.Element {
             select
             label="对象类型"
             value={entityType}
-            displayEmpty
-            renderValue={(v) => (v ? AUDIT_ENTITY_LABEL[v] ?? v : '全部')}
             onChange={(e) => setEntityType(e.target.value)}
             sx={{ minWidth: 150 }}
           >
@@ -148,8 +146,6 @@ export function AdminAuditPage(): JSX.Element {
             select
             label="动作"
             value={action}
-            displayEmpty
-            renderValue={(v) => (v ? AUDIT_ACTION_LABEL[v] ?? v : '全部')}
             onChange={(e) => setAction(e.target.value)}
             sx={{ minWidth: 150 }}
           >
