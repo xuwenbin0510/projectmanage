@@ -224,8 +224,8 @@ export class HttpApiClient implements ApiClient {
     return get<ProjectMember[]>(`/projects/${projectId}/members`);
   }
 
-  addMember(projectId: string, userOpenId: string, role: string): Promise<ProjectMember> {
-    return post<ProjectMember>(`/projects/${projectId}/members`, { userOpenId, role });
+  addMember(projectId: string, userId: number, role: string): Promise<ProjectMember> {
+    return post<ProjectMember>(`/projects/${projectId}/members`, { userId, role });
   }
 
   async removeMember(projectId: string, memberId: string): Promise<void> {
@@ -444,12 +444,14 @@ export class HttpApiClient implements ApiClient {
   }
 
   /* 管理后台 */
-  listUsers(): Promise<User[]> {
-    return get<User[]>('/admin/users');
+  listUsers(params?: { status?: 'active' | 'disabled' | 'pending' }): Promise<User[]> {
+    const qs = params?.status ? `?status=${encodeURIComponent(params.status)}` : '';
+    return get<User[]>('/admin/users' + qs);
   }
 
-  updateUserRole(openId: string, role: GlobalRole): Promise<User> {
-    return patch<User>(`/admin/users/${openId}`, { globalRole: role });
+  /* ⚠ 用户资源标识一律用系统身份键 users.id，不用 open_id（飞书跨系统标识，会变） */
+  updateUserRole(userId: number, role: GlobalRole): Promise<User> {
+    return patch<User>(`/admin/users/${userId}`, { globalRole: role });
   }
 
   /** 阶段一：新增用户（仅 admin）。响应含 defaultPassword 明文 */
@@ -458,18 +460,18 @@ export class HttpApiClient implements ApiClient {
   }
 
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin） */
-  updateUser(openId: string, patchBody: UpdateUserPayload): Promise<User> {
-    return patch<User>(`/admin/users/${openId}`, patchBody);
+  updateUser(userId: number, patchBody: UpdateUserPayload): Promise<User> {
+    return patch<User>(`/admin/users/${userId}`, patchBody);
   }
 
   /** 管理员重置用户密码（仅 admin）：重置为默认密码并强制下次改密 */
-  resetUserPassword(openId: string): Promise<{ defaultPassword: string; openId: string }> {
-    return post<{ defaultPassword: string; openId: string }>(`/admin/users/${openId}/reset-password`, {});
+  resetUserPassword(userId: number): Promise<{ defaultPassword: string; openId: string }> {
+    return post<{ defaultPassword: string; openId: string }>(`/admin/users/${userId}/reset-password`, {});
   }
 
   /** 物理删除用户（仅 admin） */
-  deleteUser(openId: string): Promise<null> {
-    return del<null>(`/admin/users/${openId}`);
+  deleteUser(userId: number): Promise<null> {
+    return del<null>(`/admin/users/${userId}`);
   }
 
   /* 飞书通讯录导入（仅 admin） */

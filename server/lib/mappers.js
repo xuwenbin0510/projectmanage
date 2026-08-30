@@ -348,6 +348,9 @@ function toApiMember(row, nameOf) {
     id: toStr(row.id),
     projectId: toStr(row.project_id),
     userOpenId: openId,
+    /** 系统稳定身份键 users.id（与 userOpenId 同源冗余输出，供前端做身份比对；
+     *  open_id 会因飞书应用隔离/重导而变，跨表比对一律以 userId 为准） */
+    userId: row.member_user_id != null && row.member_user_id !== '' ? Number(row.member_user_id) : null,
     userName: userName,
     projectRole: toStr(row.project_role, 'member'),
     assignedBy: toStr(row.assigned_by),

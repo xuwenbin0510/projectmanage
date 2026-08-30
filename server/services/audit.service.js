@@ -79,9 +79,24 @@ function listAudit(db, query) {
     where.push('action = @action');
     params.action = String(q.action);
   }
-  if (q.actor) {
-    where.push('(actor_open_id = @actor OR actor_name = @actor)');
-    params.actor = String(q.actor);
+  /* 按操作人过滤：优先用系统身份键 users.id。
+     `actorUserId` 是正规入口；`actor` 保留兼容——纯数字按 users.id 过滤，
+     其余按 open_id / 姓名匹配（open_id 是飞书跨系统标识，不推荐新代码使用）。 */
+  if (q.actorUserId !== undefined && q.actorUserId !== null && String(q.actorUserId).trim() !== '') {
+    const uid = Number(q.actorUserId);
+    if (Number.isFinite(uid) && uid > 0) {
+      where.push('actor_user_id = @actorUserId');
+      params.actorUserId = Math.trunc(uid);
+    }
+  } else if (q.actor) {
+    const n = Number(q.actor);
+    if (Number.isFinite(n) && n > 0) {
+      where.push('actor_user_id = @actorUid');
+      params.actorUid = Math.trunc(n);
+    } else {
+      where.push('(actor_open_id = @actor OR actor_name = @actor)');
+      params.actor = String(q.actor);
+    }
   }
   if (q.from) {
     where.push('created_at >= @from');

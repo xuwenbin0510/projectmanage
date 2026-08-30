@@ -217,7 +217,32 @@ function createRisk(db, req, projectId, payload) {
     const createdBy = me.open_id !== undefined ? me.open_id : me.openId;
     // 设计修正：边界把 open_id / 姓名解析为系统稳定身份键 users.id 落库
     const createdByUserId = mappers.resolveUserId(db, createdBy);
-    const ownerUserId = mappers.resolveUserIdByName(db, owner);
+    /* 身份键铁律：优先按系统身份键 users.id 解析负责人（前端正规入口传 ownerUserId）。
+       `risks.owner` 列按设计存**姓名显示值**——拿到 users.id 后反查姓名回填该列；
+       只有在取不到 users.id 时才回退按姓名解析（兼容历史数据与旧调用）。
+       ⚠ 早期前端传的是 open_id，而本函数按姓名解析，导致 owner_user_id 被写成 NULL。 */
+    let ownerText = String(owner || '');
+    let ownerUserId = null;
+    const rawOwnerUserId = p.ownerUserId;
+    if (rawOwnerUserId !== undefined && rawOwnerUserId !== null && String(rawOwnerUserId).trim() !== '') {
+      const n = Number(rawOwnerUserId);
+      if (Number.isFinite(n) && n > 0) {
+        const ou = db.prepare('SELECT id, name FROM users WHERE id = ?').get(Math.trunc(n));
+        if (ou) {
+          ownerUserId = ou.id;
+          ownerText = String(ou.name || '');
+        }
+      }
+    }
+    /* 兼容：前端若把 users.id 直接放进 `owner` 字段（纯数字），同样按系统身份键解析 */
+    if (!ownerUserId && /^\d+$/.test(ownerText)) {
+      const ou = db.prepare('SELECT id, name FROM users WHERE id = ?').get(Number(ownerText));
+      if (ou) {
+        ownerUserId = ou.id;
+        ownerText = String(ou.name || '');
+      }
+    }
+    if (!ownerUserId && ownerText) ownerUserId = mappers.resolveUserIdByName(db, ownerText);
 
     db.prepare(
       'INSERT INTO risks (' +
@@ -226,7 +251,7 @@ function createRisk(db, req, projectId, payload) {
         ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id, String(projectId), code, description, category, probability, impact, riskValue,
-      strategy, owner, status, reviewDate, createdBy, createdByUserId, ownerUserId, ts, ts
+      strategy, ownerText, status, reviewDate, createdBy, createdByUserId, ownerUserId, ts, ts
     );
 
     writeAudit(db, me, 'risk', id, 'create', projectId, '新增风险「' + code + ' ' + description + '」（风险值 ' + riskValue + '）');
@@ -294,11 +319,34 @@ function updateRisk(db, req, id, payload) {
         if (d) diff.push(d);
       }
     }
-    if (p.owner !== undefined) {
-      const v = String(p.owner).trim();
-      if (v !== before.owner) {
-        sets.push('owner = ?', 'owner_user_id = ?'); args.push(v, mappers.resolveUserIdByName(db, v));
-        const d = diffEntry('owner', '责任人', before.owner, v);
+    if (p.owner !== undefined || p.ownerUserId !== undefined) {
+      /* 身份键铁律：优先按系统身份键 users.id 解析（前端正规入口传 ownerUserId），
+         取到后反查姓名回填 `owner` 列（该列按设计存姓名显示值）；
+         取不到 users.id 时才回退按姓名解析，兼容历史数据与旧调用。 */
+      let ownerText = p.owner !== undefined ? String(p.owner).trim() : String(before.owner || '');
+      let ownerUserId = null;
+      if (p.ownerUserId !== undefined && p.ownerUserId !== null && String(p.ownerUserId).trim() !== '') {
+        const n = Number(p.ownerUserId);
+        if (Number.isFinite(n) && n > 0) {
+          const ou = db.prepare('SELECT id, name FROM users WHERE id = ?').get(Math.trunc(n));
+          if (ou) {
+            ownerUserId = ou.id;
+            ownerText = String(ou.name || '');
+          }
+        }
+      }
+      /* 兼容：前端若把 users.id 直接放进 `owner` 字段（纯数字），同样按系统身份键解析 */
+      if (!ownerUserId && /^\d+$/.test(ownerText)) {
+        const ou = db.prepare('SELECT id, name FROM users WHERE id = ?').get(Number(ownerText));
+        if (ou) {
+          ownerUserId = ou.id;
+          ownerText = String(ou.name || '');
+        }
+      }
+      if (!ownerUserId && ownerText) ownerUserId = mappers.resolveUserIdByName(db, ownerText);
+      if (ownerText !== before.owner) {
+        sets.push('owner = ?', 'owner_user_id = ?'); args.push(ownerText, ownerUserId);
+        const d = diffEntry('owner', '责任人', before.owner, ownerText);
         if (d) diff.push(d);
       }
     }

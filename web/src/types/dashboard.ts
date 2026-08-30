@@ -85,7 +85,12 @@ export interface DashboardOverviewQuery {
   status?: ProjectStatus | '';
   health?: Health | '';
   keyword?: string;
-  /** 任务负责人（openId）：只保留「项目内含该负责人真叶子任务」的项目；空串 = 不过滤 */
+  /**
+   * 任务负责人（系统身份键 users.id）：只保留「项目内含该负责人真叶子任务」的项目；空值 = 不过滤。
+   * ⚠ 本系统内关联一律用 users.id，不要用 open_id（跨系统标识，会变）。
+   */
+  ownerUserId?: number | string;
+  /** @deprecated 用 `ownerUserId`；仅为兼容旧调用保留，后端会解析成 users.id */
   ownerOpenId?: string;
   /** scope=mine 时：false=我参与的，true=我负责的（我是 PM） */
   onlyMine?: boolean;
@@ -238,8 +243,14 @@ export interface ReportMissingRow {
 
 /** 任务负责人选项（D01.5 · 全局总览「负责人」下拉数据源，服务端按姓名升序） */
 export interface OwnerOption {
-  /** 负责人 openId（wbs 叶子任务 owner；传给 query.ownerOpenId） */
-  openId: string;
+  /**
+   * 负责人系统身份键 users.id —— 本系统内关联/筛选的唯一正规入口。
+   * open_id 是飞书跨系统标识、会随应用隔离或重新导入而变化，绝不用于关联判定。
+   * null = 历史行未回填 owner_user_id（此时只能回退用 openId）。
+   */
+  userId: number | null;
+  /** @deprecated 负责人 openId，仅为兼容保留；新代码请用 userId 做筛选与比对 */
+  openId?: string;
   /** 负责人姓名；用户已移除回落「(已移除)」 */
   name: string;
 }
@@ -590,7 +601,7 @@ export interface DashboardTaskRow {
 /* ==========================================================================
  * 第二批 · 质量与交付下探（门控 / 交付物明细抽屉）
  * 对应后端接口 `GET /api/dashboard/gates`、`GET /api/dashboard/deliverables`。
- * 复用总览筛选子集（scope/type/status/health/keyword/ownerOpenId/onlyMine），
+ * 复用总览筛选子集（scope/type/status/health/keyword/ownerUserId/onlyMine），
  * 服务端 resolveScope 静默降级（无 dashboard:global 者恒 mine）。
  * ========================================================================== */
 
@@ -601,6 +612,9 @@ export interface DashboardGatesQuery {
   status?: ProjectStatus | '';
   health?: Health | '';
   keyword?: string;
+  /** 任务负责人（系统身份键 users.id）；本系统内关联一律用它，不用 open_id */
+  ownerUserId?: number | string;
+  /** @deprecated 用 `ownerUserId`；仅为兼容保留 */
   ownerOpenId?: string;
   onlyMine?: boolean;
   /** 门状态过滤（五态白名单）；不传 = 全量 */
@@ -635,6 +649,9 @@ export interface DashboardDeliverablesQuery {
   status?: ProjectStatus | '';
   health?: Health | '';
   keyword?: string;
+  /** 任务负责人（系统身份键 users.id）；本系统内关联一律用它，不用 open_id */
+  ownerUserId?: number | string;
+  /** @deprecated 用 `ownerUserId`；仅为兼容保留 */
   ownerOpenId?: string;
   onlyMine?: boolean;
   /** 交付状态过滤（待交付/已交付）；不传 = 全量 */

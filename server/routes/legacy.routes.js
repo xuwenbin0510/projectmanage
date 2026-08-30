@@ -138,7 +138,24 @@ function canEditProject(u, p) {
   if (!u || !p) return false;
   // 矩阵对齐：admin 恒放行；矩阵授予 project:edit 的角色（如 pmo）也能编辑
   if (isAdminUser(u) || canDo(resolveGlobalRoles(u), 'project:edit')) return true;
-  return p.pm === u.open_id || p.created_by === u.open_id;
+  /* 身份键铁律：用 users.id 判定归属，绝不用 open_id（后者随飞书重导变化，会在换 userid 后失配）。
+     与 project.service.updateProjectBasic 同源：创建人(created_by_user_id) 或 本项目的 PM(member_user_id)。 */
+  const meId = u.id != null ? Number(u.id) : null;
+  if (meId != null) {
+    const pid = p.id != null ? p.id : p.project_id;
+    if (pid != null) {
+      const row = db.prepare('SELECT created_by_user_id FROM projects WHERE id = ?').get(pid);
+      if (row && row.created_by_user_id === meId) return true;
+      if (
+        db
+          .prepare("SELECT 1 FROM project_members WHERE project_id = ? AND member_user_id = ? AND project_role = 'pm'")
+          .get(pid, meId) != null
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

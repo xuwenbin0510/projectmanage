@@ -20,6 +20,7 @@ export const ROUTES = {
   projectDocuments: (id: string) => `/projects/${id}/documents`,
   approvals: '/approvals',
   metrics: '/metrics',
+  admin: '/admin',
   adminUsers: '/admin/users',
   adminPermissions: '/admin/permissions',
   adminReviewTemplates: '/admin/review-templates',
@@ -58,10 +59,11 @@ export const MAIN_MENU: MenuItem[] = [
   {
     key: 'admin',
     label: '管理后台',
-    path: ROUTES.adminUsers,
+    path: ROUTES.admin,
     icon: 'admin',
     // B19：管理后台入口改为按权限矩阵判定，不再硬编码 admin/pmo。
     // HR负责人（cho）在矩阵中被授予 admin:user:role / admin:audit:view，应能看到入口。
+    // 入口指向 /admin 索引，由前端按权限落地到「第一个有权限的 Tab」（如仅审计权限→审计日志）。
     permissions: ['admin:user:role', 'admin:audit:view', 'admin:template'],
     mobile: true,
   },

@@ -52,7 +52,7 @@ router.get(
   requireAuth,
   asyncHandler(async function listPendingConfirmation(req, res) {
     const me = req.user || {};
-    res.json(ok(reportSvc.listPendingConfirmation(db, me.open_id)));
+    res.json(ok(reportSvc.listPendingConfirmation(db, me.id)));
   }),
 );
 

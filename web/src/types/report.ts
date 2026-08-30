@@ -47,7 +47,13 @@ export interface Report {
   week: string;
   weekStart: string;
   weekEnd: string;
+  /** @deprecated 作者 openId（飞书跨系统标识，会变）；判断「是不是我的周报」请用 authorUserId */
   author: string;
+  /**
+   * 作者系统身份键 users.id —— 本系统内身份判定的唯一正规入口。
+   * null = 历史行未回填 author_user_id（此时才回退用 author）。
+   */
+  authorUserId?: number | null;
   authorName: string;
   status: ReportStatus;
   /** ① 补充说明 */

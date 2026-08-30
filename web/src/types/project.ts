@@ -245,6 +245,9 @@ export interface ProjectMember {
   id: string;
   projectId: string;
   userOpenId: string;
+  /** 系统稳定身份键 users.id；跨表身份比对（如 WBS 负责人 vs 项目成员）以它为准，
+   *  避免 open_id 因飞书应用隔离/重新导入变化后比对失配。null = 历史行未回填 */
+  userId?: number | null;
   userName: string;
   /** 项目内角色 = 职位管理里的职位 role_key（视野维度由职位自身设定决定），不再限定为固定 ProjectRole 联合类型 */
   projectRole: string;

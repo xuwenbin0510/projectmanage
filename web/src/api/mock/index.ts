@@ -1022,12 +1022,14 @@ export class MockApiClient implements ApiClient {
     }
 
     payload.members.forEach((m, i) => {
-      const u = db.users.find((x) => x.openId === m.userOpenId);
+      /* 身份键铁律：优先按 users.id（系统身份键）定位用户，回落 open_id */
+      const u = db.users.find((x) => x.id === m.userId) ?? db.users.find((x) => x.openId === m.userOpenId);
       db.members.push({
         id: `${id}-MB${i + 1}`,
         projectId: id,
-        userOpenId: m.userOpenId,
-        userName: u?.name ?? m.userOpenId,
+        userOpenId: u?.openId ?? m.userOpenId ?? '',
+        userId: u?.id,
+        userName: u?.name ?? (m.userOpenId ?? ''),
         projectRole: m.role,
         assignedBy: me.openId,
         assignedAt: ts,
@@ -1141,7 +1143,7 @@ export class MockApiClient implements ApiClient {
     return deepClone(db.members.filter((m) => m.projectId === projectId));
   }
 
-  async addMember(projectId: string, userOpenId: string, role: string): Promise<ProjectMember> {
+  async addMember(projectId: string, userId: number, role: string): Promise<ProjectMember> {
     await delay();
     const db = getDb();
     assertWritable(db, projectId);
@@ -1149,11 +1151,13 @@ export class MockApiClient implements ApiClient {
     if ((role === 'pm' || role === 'tl') && db.members.some((m) => m.projectId === projectId && m.projectRole === role)) {
       throw new ApiError(ErrorCode.E_ROLE_CARDINALITY);
     }
-    const u = db.users.find((x) => x.openId === userOpenId) ?? nf();
+    /* 身份键铁律：按 users.id（系统身份键）定位用户 */
+    const u = db.users.find((x) => x.id === userId) ?? nf();
     const member: ProjectMember = {
       id: genId('MB'),
       projectId,
-      userOpenId,
+      userOpenId: u.openId,
+      userId: u.id,
       userName: u.name,
       projectRole: role,
       assignedBy: me.openId,
@@ -3162,8 +3166,10 @@ export class MockApiClient implements ApiClient {
     const reportDue = activeItems.length;
     const reportFilled = reportDue - reportMissing.length;
 
-    /* 5.5 D01.5：任务负责人选项池（基准 = itemsBase，不含 ownerOpenId；真叶子 owner 去重，姓名升序） */
-    const ownerOptions: Array<{ openId: string; name: string }> = (() => {
+    /* 5.5 D01.5：任务负责人选项池（基准 = itemsBase，不含负责人筛选；真叶子负责人去重，姓名升序）
+       ⚠ mock 数据以 open_id 为用户标识、没有系统身份键 users.id，故 userId 恒为 null，
+         由前端回退使用 openId；真实后端会返回 users.id（关联/筛选一律以它为准）。 */
+    const ownerOptions: Array<{ userId: number | null; openId: string; name: string }> = (() => {
       const baseIds = new Set(itemsBase.map((p) => p.id));
       const map = new Map<string, string>();
       leafNodesOf(db.wbsNodes)
@@ -3174,7 +3180,7 @@ export class MockApiClient implements ApiClient {
           }
         });
       return Array.from(map.entries())
-        .map(([openId, name]) => ({ openId, name }))
+        .map(([openId, name]) => ({ userId: null, openId, name }))
         .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
     })();
 
@@ -3819,19 +3825,20 @@ export class MockApiClient implements ApiClient {
 
   /* ── 管理后台 ─────────────────────────────────── */
 
-  async listUsers(): Promise<User[]> {
+  async listUsers(params?: { status?: string }): Promise<User[]> {
     await delay(80);
     const db = getDb();
     currentUser(db);
-    return deepClone(db.users);
+    const users = params?.status ? db.users.filter((u) => u.status === params.status) : db.users;
+    return deepClone(users);
   }
 
-  async updateUserRole(openId: string, role: GlobalRole): Promise<User> {
+  async updateUserRole(userId: number, role: GlobalRole): Promise<User> {
     await delay();
     const db = getDb();
     const me = assertCan(db, 'user.manage');
-    if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
-    const u = db.users.find((x) => x.openId === openId) ?? nf();
+    if ((Number(userId) === Number(me.id) || String(userId) === me.openId)) throw new ApiError(ErrorCode.E_SELF_ROLE);
+    const u = db.users.find((x) => (String(x.id) === String(userId) || x.openId === String(userId))) ?? nf();
     if (u.globalRole === 'admin' && role !== 'admin') {
       if (countAdmins(db) <= 1) throw new ApiError(ErrorCode.E_LAST_ADMIN);
     }
@@ -3840,7 +3847,7 @@ export class MockApiClient implements ApiClient {
     // E1.5：单值角色变更同步主职位；额外职位保留
     u.globalRoles = [role, ...(u.globalRoles || []).filter((r) => r !== role)];
     u.updatedAt = nowIso();
-    audit(db, me, 'user', openId, 'update', '', `修改用户「${u.name}」全局角色`, [
+    audit(db, me, 'user', String(userId), 'update', '', `修改用户「${u.name}」全局角色`, [
       { field: 'globalRole', label: '全局角色', before, after: role },
     ]);
     saveDb();
@@ -3894,11 +3901,11 @@ export class MockApiClient implements ApiClient {
   }
 
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin；只传需要更新的字段） */
-  async updateUser(openId: string, patchBody: UpdateUserPayload): Promise<User> {
+  async updateUser(userId: number, patchBody: UpdateUserPayload): Promise<User> {
     await delay();
     const db = getDb();
     const me = assertCan(db, 'user.manage');
-    const u = db.users.find((x) => x.openId === openId) ?? nf();
+    const u = db.users.find((x) => (String(x.id) === String(userId) || x.openId === String(userId))) ?? nf();
     if (patchBody.globalRoles !== undefined) {
       // E1.5：多全局职位数组（首项主职位，其余额外职位）；动态职位只校验非空，与真实后端同构
       const list = (Array.isArray(patchBody.globalRoles) ? patchBody.globalRoles : [])
@@ -3906,7 +3913,7 @@ export class MockApiClient implements ApiClient {
         .filter((r) => r.length > 0);
       if (!list.length) throw new ApiError(ErrorCode.E_VALIDATION, '至少需要一个全局职位');
       const primary = list[0];
-      if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
+      if ((Number(userId) === Number(me.id) || String(userId) === me.openId)) throw new ApiError(ErrorCode.E_SELF_ROLE);
       if (isAdminUser(u) && primary !== 'admin' && countAdmins(db) <= 1) {
         throw new ApiError(ErrorCode.E_LAST_ADMIN);
       }
@@ -3914,7 +3921,7 @@ export class MockApiClient implements ApiClient {
       u.globalRoles = list;
     } else if (patchBody.globalRole !== undefined) {
       if (!String(patchBody.globalRole).trim()) throw new ApiError(ErrorCode.E_VALIDATION, '全局角色不合法');
-      if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
+      if ((Number(userId) === Number(me.id) || String(userId) === me.openId)) throw new ApiError(ErrorCode.E_SELF_ROLE);
       if (u.globalRole === 'admin' && patchBody.globalRole !== 'admin') {
         if (countAdmins(db) <= 1) throw new ApiError(ErrorCode.E_LAST_ADMIN);
       }
@@ -3925,7 +3932,7 @@ export class MockApiClient implements ApiClient {
       if (patchBody.status !== 'active' && patchBody.status !== 'disabled') {
         throw new ApiError(ErrorCode.E_VALIDATION, '状态不合法');
       }
-      if (openId === me.openId && patchBody.status === 'disabled') throw new ApiError(ErrorCode.E_SELF_ROLE);
+      if ((Number(userId) === Number(me.id) || String(userId) === me.openId) && patchBody.status === 'disabled') throw new ApiError(ErrorCode.E_SELF_ROLE);
       u.status = patchBody.status;
     }
     if (patchBody.dept !== undefined) u.dept = String(patchBody.dept).slice(0, 60);
@@ -3942,29 +3949,29 @@ export class MockApiClient implements ApiClient {
     }
     if (patchBody.unionId !== undefined) u.unionId = String(patchBody.unionId).trim() || null;
     u.updatedAt = nowIso();
-    audit(db, me, 'user', openId, 'update', '', `更新用户「${u.name}」`, []);
+    audit(db, me, 'user', String(userId), 'update', '', `更新用户「${u.name}」`, []);
     saveDb();
     return deepClone(u);
   }
 
-  async resetUserPassword(openId: string): Promise<{ defaultPassword: string; openId: string }> {
+  async resetUserPassword(userId: number): Promise<{ defaultPassword: string; openId: string }> {
     await delay();
     const db = getDb();
     const me = assertCan(db, 'user.manage');
-    if (openId === me.openId) throw new ApiError(ErrorCode.E_SELF_ROLE);
-    const u = db.users.find((x) => x.openId === openId) ?? nf();
+    if ((Number(userId) === Number(me.id) || String(userId) === me.openId)) throw new ApiError(ErrorCode.E_SELF_ROLE);
+    const u = db.users.find((x) => (String(x.id) === String(userId) || x.openId === String(userId))) ?? nf();
     u.updatedAt = nowIso();
-    audit(db, me, 'user', openId, 'reset-password', '', `重置用户「${u.name}」密码`, []);
+    audit(db, me, 'user', String(userId), 'reset-password', '', `重置用户「${u.name}」密码`, []);
     saveDb();
-    return { defaultPassword: 'AstrBytes@2026', openId };
+    return { defaultPassword: 'AstrBytes@2026', openId: String(u.openId || '') };
   }
 
-  async deleteUser(openId: string): Promise<null> {
+  async deleteUser(userId: number): Promise<null> {
     await delay();
     const db = getDb();
     const me = assertCan(db, 'user.manage');
-    if (openId === me.openId) throw new ApiError(ErrorCode.E_FORBIDDEN, '不能删除自己');
-    const idx = db.users.findIndex((x) => x.openId === openId);
+    if ((Number(userId) === Number(me.id) || String(userId) === me.openId)) throw new ApiError(ErrorCode.E_FORBIDDEN, '不能删除自己');
+    const idx = db.users.findIndex((x) => (String(x.id) === String(userId) || x.openId === String(userId)));
     if (idx < 0) throw nf();
     db.users.splice(idx, 1);
     saveDb();

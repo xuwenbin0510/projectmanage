@@ -196,7 +196,7 @@ export function ProjectOverviewPage(): JSX.Element {
 
   const openManageMembers = async (): Promise<void> => {
     try {
-      const list = await api.listUsers();
+      const list = await api.listUsers({ status: 'active' });
       setAllUsers(list);
     } catch {
       setAllUsers([]);
@@ -220,7 +220,7 @@ export function ProjectOverviewPage(): JSX.Element {
     if (!project || !addUserOpenId) return;
     setMemberSaving(true);
     try {
-      await api.addMember(project.id, addUserOpenId, addRole);
+      await api.addMember(project.id, Number(addUserOpenId), addRole);
       await fetchDetail(project.id);
       setAddUserOpenId('');
       setAddRole('member');
@@ -1466,8 +1466,9 @@ export function ProjectOverviewPage(): JSX.Element {
                 onChange={(e) => setAddUserOpenId(e.target.value)}
               >
                 <MenuItem value="">请选择用户</MenuItem>
+                {/* 身份键铁律：下拉值用 users.id（系统身份键），不用 open_id */}
                 {allUsers.map((u) => (
-                  <MenuItem key={u.openId} value={u.openId}>
+                  <MenuItem key={u.id} value={String(u.id)}>
                     {u.name}（{u.dept || '—'}）
                   </MenuItem>
                 ))}

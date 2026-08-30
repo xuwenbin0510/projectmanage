@@ -140,8 +140,13 @@ export function ReportsPage(): JSX.Element {
    * （服务端同样按 `report:manage` 矩阵判定，与前端同源）。
    */
   const canReportManage = can('report:manage');
-  const canManage = (r: Report): boolean =>
-    USE_MOCK || !currentUser || canReportManage || currentUser.openId === r.author;
+  /* 身份键铁律：判断「是不是我的周报」用 users.id，不用 open_id（后者会随飞书重导变化，
+     换一次 userid 就失效一次）。仅当历史行缺 authorUserId 时才回退 open_id。 */
+  const canManage = (r: Report): boolean => {
+    if (USE_MOCK || !currentUser || canReportManage) return true;
+    if (r.authorUserId != null && currentUser.id != null) return Number(currentUser.id) === Number(r.authorUserId);
+    return currentUser.openId === r.author;
+  };
 
   /** 删除目标（null = 关闭二次确认弹窗） */
   const [deleteTarget, setDeleteTarget] = useState<Report | null>(null);

@@ -471,11 +471,15 @@ export function WbsPage(): JSX.Element {
   };
 
   // 改动 B：一人可担任多个角色 → db.members 一人多行，按 userOpenId 去重避免 MUI Select 重复 value
+  // userId 与 userOpenId 同源冗余携带，供下方「是否项目成员」以 users.id 为准做比对
   const memberOptions = useMemo(
     () =>
-      Array.from(new Map(members.map((m) => [m.userOpenId, m])).values()).map((m) => ({
-        value: m.userOpenId,
+      // 身份键铁律：去重键与 Select 值一律用 users.id（系统身份键）。
+      // open_id 是飞书跨系统标识、会变化，用它做值会在换 userid 后比对失配。
+      Array.from(new Map(members.map((m) => [m.userId ?? m.userOpenId, m])).values()).map((m) => ({
+        value: m.userId != null ? String(m.userId) : m.userOpenId,
         label: m.userName,
+        userId: m.userId ?? null,
       })),
     [members],
   );
@@ -488,6 +492,19 @@ export function WbsPage(): JSX.Element {
     () => (editingId ? flatNodes.find((n) => n.id === editingId) ?? null : null),
     [editingId, flatNodes],
   );
+
+  /**
+   * 当前编辑节点的负责人是否属于本项目成员。
+   * 以 users.id（稳定身份键）为准比对，open_id 仅在其缺失时兜底——
+   * open_id 会因飞书应用隔离 / 重新导入而变化，直接用它比对会在换 userid 后失配，
+   * 导致明明是项目成员却被误报「非项目成员」。
+   */
+  const ownerIsMember = useMemo(() => {
+    if (!editingNode) return true; // 新建态：值必然取自下拉，恒在成员内
+    const uid = editingNode.ownerUserId;
+    if (uid != null) return memberOptions.some((m) => m.userId === uid);
+    return memberOptions.some((m) => m.value === editingNode.owner);
+  }, [editingNode, memberOptions]);
 
   /** 当前表单「上级节点」对应的节点；空串 = 根层 */
   const formParent = useMemo(
@@ -574,7 +591,9 @@ export function WbsPage(): JSX.Element {
       parentId: node.parentId ?? '',
       nodeType: node.nodeType,
       name: node.name,
-      owner: node.owner,
+      /* 身份键铁律：回显用 users.id（与 memberOptions.value 同键），
+         仅在历史行未回填 owner_user_id 时才回退 open_id */
+      owner: node.ownerUserId != null ? String(node.ownerUserId) : node.owner,
       estimateDays: node.estimateDays,
       status: node.status,
       milestoneId: node.milestoneId ?? '',
@@ -1043,7 +1062,7 @@ export function WbsPage(): JSX.Element {
           onChange={(e) => setForm({ ...form, owner: e.target.value })}
           fullWidth
           helperText={
-            form.owner && !memberOptions.some((m) => m.value === form.owner)
+            form.owner && !ownerIsMember
               ? '该负责人当前不在本项目成员列表，请确认是否正确'
               : undefined
           }
@@ -1056,7 +1075,7 @@ export function WbsPage(): JSX.Element {
           ))}
           {/* 兜底：form.owner 有值但不在本项目成员下拉中（导入数据/历史残留），
               仍能回显真实姓名，避免下拉空白、且保存时后端会自动补为成员 */}
-          {form.owner && !memberOptions.some((m) => m.value === form.owner) && (
+          {form.owner && !ownerIsMember && (
             <MenuItem key={form.owner} value={form.owner}>
               {editingNode?.ownerName ?? form.owner}（非项目成员）
             </MenuItem>

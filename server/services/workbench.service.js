@@ -268,9 +268,9 @@ function listReportReminders(db, me) {
       /* 已提交未确认：仅当「我是确认人」才标「待确认」，否则标中性「待他人确认」
          （避免非确认人看到「待确认」暗示去确认，却与「待我确认周报」面板为空矛盾） */
       const authorRow = authorStmt.get(pid, curWeek);
-      const authorOpenId = authorRow ? mappers.toStr(authorRow.author_open_id) : '';
-      const isConfirmer = authorOpenId
-        ? reportService.resolveConfirmers(db, pid, authorOpenId).has(meOpenId)
+      const authorUserId = authorRow ? authorRow.author_user_id : null;
+      const isConfirmer = authorUserId != null
+        ? reportService.resolveConfirmers(db, pid, authorUserId).has(Number(myId))
         : false;
       state = isConfirmer ? '待确认' : '待他人确认';
     }
@@ -391,9 +391,9 @@ function listGateTodos(db, me) {
  * @returns {Array<{id: string, projectId: string, projectName: string, week: string, authorName: string, submittedAt: string}>}
  */
 function listReportConfirmations(db, me) {
-  const openId = String((me && (me.open_id !== undefined ? me.open_id : me.openId)) || '');
-  if (!openId) return [];
-  const reports = reportService.listPendingConfirmation(db, openId);
+  const meId = me && me.id != null ? Number(me.id) : null;
+  if (!meId) return [];
+  const reports = reportService.listPendingConfirmation(db, meId);
   if (!reports.length) return [];
 
   const pids = reports.map(function (r) { return String(r.projectId); });

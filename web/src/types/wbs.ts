@@ -104,6 +104,13 @@ export interface WbsNode {
   description: string;
   /** 负责人 openId（叶子必填；SK-13：仅 subtask 强制，无子 task 降级为告警） */
   owner: string;
+  /**
+   * 负责人系统稳定身份键 users.id（服务端派生，与 `owner` 同源冗余输出）。
+   * 跨表身份比对（负责人 vs 项目成员）一律以它为准——open_id 会因飞书应用隔离 /
+   * 重新导入而变化，用 open_id 比对会在换 userid 后失配，误报「非项目成员」。
+   * null = 历史行未回填。
+   */
+  ownerUserId?: number | null;
   /** 负责人姓名（服务端派生的展示字段） */
   ownerName: string;
   estimateDays: number;

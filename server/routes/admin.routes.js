@@ -52,6 +52,26 @@ function loadExtraRoles(openIds) {
 }
 
 /**
+ * 按路径参数定位用户。
+ *
+ * 身份键铁律：本系统以 `users.id` 为唯一身份键。纯数字一律按 users.id 解析（正规入口）；
+ * 非数字才回落 open_id（兼容旧调用，飞书 open_id 恒以 `ou_` 开头，不会与数字混淆）。
+ * open_id 是跨系统标识、会随重新导入变化，新代码不应再把它当作用户资源标识。
+ *
+ * @param {string|undefined} raw 路径参数值
+ * @returns {object|undefined} users 行
+ */
+function findUserByIdOrOpenId(raw) {
+  const s = String(raw === undefined || raw === null ? '' : raw).trim();
+  if (!s) return undefined;
+  if (/^\d+$/.test(s)) {
+    const byId = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(s));
+    if (byId) return byId;
+  }
+  return db.prepare('SELECT * FROM users WHERE open_id = ?').get(s);
+}
+
+/**
  * 用户列表。
  *
  * ⚠ 不限管理员：建项向导需要用它来挑成员，普通 PM 也必须能读。
@@ -61,9 +81,16 @@ router.get(
   '/admin/users',
   requireAuth,
   asyncHandler(async function listUsers(req, res) {
-    const rows = db
-      .prepare('SELECT * FROM users ORDER BY id ASC')
-      .all();
+    /* 可选 ?status=active|disabled|pending：成员选择器只取启用用户，避免把无效账号加进项目；
+       管理后台不传该参数，仍返回全部以便管理停用/待激活账号。 */
+    const statusFilter = req.query.status;
+    const VALID = ['active', 'disabled', 'pending'];
+    let rows;
+    if (VALID.indexOf(statusFilter) >= 0) {
+      rows = db.prepare('SELECT * FROM users WHERE status = ? ORDER BY id ASC').all(statusFilter);
+    } else {
+      rows = db.prepare('SELECT * FROM users ORDER BY id ASC').all();
+    }
     const extra = loadExtraRoles(rows.map(function (r) { return r.open_id; }));
     res.json(ok(rows.map(function (r) { return toApiUser(r, extra[r.open_id] || []); })));
   }),
@@ -88,14 +115,16 @@ router.get(
  *  - `E_VALIDATION` 角色 / 状态白名单校验
  */
 router.patch(
-  '/admin/users/:openId',
+  '/admin/users/:id',
   requireAuth,
   requirePermission('admin:user:role'),
   asyncHandler(async function updateUser(req, res) {
-    const openId = String(req.params.openId || '');
+    /* 路径参数优先按系统身份键 users.id 解析；非数字回落 open_id 兼容旧调用 */
+    const idOrOpenId = String(req.params.id || '');
     const body = req.body || {};
-    const target = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
-    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { openId: openId });
+    const target = findUserByIdOrOpenId(idOrOpenId);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { id: idOrOpenId });
+    const openId = String(target.open_id || '');
 
     const sets = [];
     const args = [];
@@ -119,7 +148,7 @@ router.patch(
       }
       const primary = list[0];
       const extra = list.slice(1);
-      if (openId === String(req.user.open_id)) {
+      if (target.id === req.user.id) {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
       if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE role_user_id = ? AND role_key = 'admin'").get(target.id)) && primary !== 'admin') {
@@ -140,7 +169,7 @@ router.patch(
           fields: [{ field: 'globalRole', message: '角色不合法' }],
         });
       }
-      if (openId === String(req.user.open_id)) {
+      if (target.id === req.user.id) {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
       if ((target.global_role === 'admin' || db.prepare("SELECT 1 FROM user_roles WHERE role_user_id = ? AND role_key = 'admin'").get(target.id)) && role !== 'admin') {
@@ -162,7 +191,7 @@ router.patch(
         });
       }
       // 防锁死①：不能把自己设为非 active（pending / disabled），否则管理员会把自己踢出系统
-      if (openId === String(req.user.open_id) && status !== 'active') {
+      if (target.id === req.user.id && status !== 'active') {
         throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
       }
       // 防锁死②：不能把唯一的 admin 设为非 active（pending / disabled），否则系统无人可管理
@@ -208,7 +237,7 @@ router.patch(
       if (next && next !== openId) {
         const clash = db.prepare('SELECT 1 FROM users WHERE open_id = ?').get(next);
         if (clash) throw new AppError(ErrorCode.E_CONFLICT, '新的 open_id 已存在于其他账号', { openId: next });
-        if (openId === String(req.user.open_id)) {
+        if (target.id === req.user.id) {
           throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
         }
         newOpenId = next;
@@ -297,16 +326,18 @@ function checkUserReferences(openId) {
 }
 
 router.delete(
-  '/admin/users/:openId',
+  '/admin/users/:id',
   requireAuth,
   requirePermission('admin:user:role'),
   asyncHandler(async function deleteUser(req, res) {
-    const openId = String(req.params.openId || '');
-    if (openId === String(req.user.open_id)) {
-      throw new AppError(ErrorCode.E_FORBIDDEN, '不能删除自己', { openId: openId });
+    /* 先按系统身份键定位，再比对「是不是删自己」——用 users.id 比用 open_id 严谨 */
+    const idOrOpenId = String(req.params.id || '');
+    const target = findUserByIdOrOpenId(idOrOpenId);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { id: idOrOpenId });
+    const openId = String(target.open_id || '');
+    if (Number(target.id) === Number(req.user && req.user.id)) {
+      throw new AppError(ErrorCode.E_FORBIDDEN, '不能删除自己', { id: target.id });
     }
-    const target = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
-    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { openId: openId });
 
     const refs = checkUserReferences(openId);
     if (refs.length) {
@@ -455,16 +486,17 @@ router.post(
  * 返回默认密码明文，便于管理员口述/发消息告知用户。
  */
 router.post(
-  '/admin/users/:openId/reset-password',
+  '/admin/users/:id/reset-password',
   requireAuth,
   requirePermission('admin:user:role'),
   asyncHandler(async function resetUserPassword(req, res) {
-    const openId = String(req.params.openId || '');
-    if (openId === String(req.user.open_id)) {
-      throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { openId: openId });
+    const idOrOpenId = String(req.params.id || '');
+    const target = findUserByIdOrOpenId(idOrOpenId);
+    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { id: idOrOpenId });
+    const openId = String(target.open_id || '');
+    if (Number(target.id) === Number(req.user && req.user.id)) {
+      throw new AppError(ErrorCode.E_SELF_ROLE, undefined, { id: target.id });
     }
-    const target = db.prepare('SELECT * FROM users WHERE open_id = ?').get(openId);
-    if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { openId: openId });
 
     const hashed = await hashPassword(DEFAULT_PASSWORD);
     const now = nowIso();

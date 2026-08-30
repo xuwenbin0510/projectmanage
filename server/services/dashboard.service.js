@@ -107,7 +107,17 @@ function normalizeQuery(query) {
     status: MANAGED_STATUSES.indexOf(q.status) >= 0 ? String(q.status) : '',
     health: enums.HEALTHS.indexOf(q.health) >= 0 ? String(q.health) : '',
     keyword: String(q.keyword === undefined || q.keyword === null ? '' : q.keyword).trim(),
-    /* 任务负责人（openId）：按「项目内含该负责人的真叶子任务」过滤项目；空串 = 不过滤 */
+    /* 任务负责人：按「项目内含该负责人的真叶子任务」过滤项目；空值 = 不过滤。
+       ⚠ 身份键铁律：本系统内一律以 users.id 关联。`ownerUserId` 是唯一正规入口；
+         `ownerOpenId` 仅为旧客户端兼容保留，进入后立刻解析成 users.id，
+         open_id 是飞书跨系统标识、会随应用隔离/重导而变，绝不参与任何关联判定。 */
+    ownerUserId: (function () {
+      const raw = q.ownerUserId;
+      if (raw === undefined || raw === null || String(raw).trim() === '') return '';
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? String(Math.trunc(n)) : '';
+    }()),
+    /** @deprecated 用 `ownerUserId`；仅为兼容旧调用保留 */
     ownerOpenId: String(q.ownerOpenId === undefined || q.ownerOpenId === null ? '' : q.ownerOpenId).trim(),
     onlyMine: !!onlyMine,
     page: page,
@@ -234,12 +244,16 @@ function listScopedRows(db, q, me, scope) {
   }
   /* D01.5 任务负责人：项目内含该负责人（openId）的**真叶子任务**（无子节点）即命中；
      相关子查询判叶子，与 D01 任务进展块 / 看板卡片口径一致（node_type 无法排除父节点） */
-  if (q.ownerOpenId) {
+  /* 任务负责人过滤：统一收敛到系统身份键 users.id 再入参。
+     ownerUserId 优先；ownerOpenId 仅兼容旧调用，先解析成 users.id（解析失败则不误过滤）。 */
+  let ownerId = q.ownerUserId ? Number(q.ownerUserId) : null;
+  if (!ownerId && q.ownerOpenId) ownerId = mappers.resolveUserId(db, q.ownerOpenId);
+  if (ownerId) {
     where.push(
       'EXISTS (SELECT 1 FROM wbs_nodes w WHERE w.project_id = p.id AND w.owner_user_id = ? '
       + 'AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id))',
     );
-    args.push(mappers.resolveUserId(db, q.ownerOpenId));
+    args.push(ownerId);
   }
 
   if (scope === 'mine') {
@@ -887,13 +901,16 @@ function computeWeeklyProgress(db, projectIds) {
  *
  * @param {import('better-sqlite3').Database} db
  * @param {Array<string>} projectIds 范围内项目 id
- * @returns {Array<{openId: string, name: string}>} 按姓名升序
+ * @returns {Array<{userId: number|null, openId: string, name: string}>} 按姓名升序；
+ *   `userId` 为系统身份键（前端筛选应传它），`openId` 仅为兼容保留
  */
 function computeOwnerOptions(db, projectIds) {
   const ids = (projectIds || []).map(String).filter(Boolean);
   if (!ids.length) return [];
 
-  const map = {}; // openId → name
+  /* 身份键铁律：以 users.id 为唯一去重键；open_id 仅作飞书对接属性随行携带，
+     不参与任何关联判定。仅当历史行缺 owner_user_id 时，才回退用 open_id 作键（此时 userId 为 null）。 */
+  const map = {}; // 去重键 → {userId, openId, name}
   chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
     db.prepare(
       'SELECT DISTINCT w.owner AS open_id, w.owner_user_id AS user_id, '
@@ -902,22 +919,31 @@ function computeOwnerOptions(db, projectIds) {
       + 'LEFT JOIN users u ON u.id = w.owner_user_id '
       + 'LEFT JOIN users u2 ON u2.open_id = w.owner '
       + 'WHERE w.project_id IN (' + placeholders(part) + ') '
-      + "AND w.owner IS NOT NULL AND w.owner != '' "
+      + 'AND (w.owner_user_id IS NOT NULL '
+      + "OR (w.owner IS NOT NULL AND w.owner != '')) "
       + 'AND NOT EXISTS (SELECT 1 FROM wbs_nodes c WHERE c.parent_id = w.id)',
     )
       .all(part)
       .forEach(function (r) {
+        const key = r.user_id != null
+          ? 'u' + String(r.user_id)
+          : (r.open_id ? 'o' + String(r.open_id) : '');
+        if (!key) return;
         const name = r.name_by_uid || r.name_by_oid || mappers.REMOVED_USER_NAME;
-        // 同 open_id 可能因「首行 owner_user_id 未回填」而先写入 (已移除)，
-        // 后续已解析行应覆盖；已回填的 user_id 路径优先于遗留 open_id 回退路径。
-        if (map[r.open_id] === undefined || map[r.open_id] === mappers.REMOVED_USER_NAME) {
-          map[r.open_id] = name;
+        const prev = map[key];
+        // 已解析出姓名的行优先覆盖「(已移除)」占位
+        if (!prev || prev.name === mappers.REMOVED_USER_NAME) {
+          map[key] = {
+            userId: r.user_id != null ? Number(r.user_id) : null,
+            openId: String(r.open_id || ''),
+            name: name,
+          };
         }
       });
   });
 
   return Object.keys(map)
-    .map(function (openId) { return { openId: openId, name: map[openId] }; })
+    .map(function (k) { return map[k]; })
     .sort(function (a, b) { return agg.compareText(a.name, b.name); });
 }
 
@@ -1043,7 +1069,7 @@ function getDashboardOverview(db, query, me) {
   const weeklyProgress = computeWeeklyProgress(db, projectIds);
 
   /* D01.5：任务负责人选项池（基于「忽略 ownerOpenId 过滤」的范围项目集，选项不随筛选漂移） */
-  const optionRows = listScopedRows(db, Object.assign({}, q, { ownerOpenId: '' }), me, scope);
+  const optionRows = listScopedRows(db, Object.assign({}, q, { ownerUserId: '', ownerOpenId: '' }), me, scope);
   const ownerOptions = computeOwnerOptions(db, optionRows.map(function (r) { return String(r.id); }));
 
   const overdueByProject = {};

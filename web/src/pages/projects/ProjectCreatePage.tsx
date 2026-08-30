@@ -45,7 +45,10 @@ import { classifyProject } from '@/api/mock/rules';
 /* ── 表单模型 ─────────────────────────────────────── */
 
 interface MemberDraft {
-  userOpenId: string;
+  /** 系统身份键 users.id（正规入口）；前端选人下拉传此值 */
+  userId?: number;
+  /** 兼容旧调用/历史数据；优先用 userId */
+  userOpenId?: string;
   role: ProjectRole;
 }
 
@@ -168,7 +171,7 @@ export function ProjectCreatePage(): JSX.Element {
     }),
   );
 
-  const { data: users } = useAsync<User[]>(() => api.listUsers(), []);
+  const { data: users } = useAsync<User[]>(() => api.listUsers({ status: 'active' }), []);
   const userList: User[] = users ?? [];
 
   /** 动态职位目录（单一真相源 = 后台 roles 表，替代写死的 PROJECT_ROLES / PROJECT_ROLE_LABEL） */
@@ -311,7 +314,9 @@ export function ProjectCreatePage(): JSX.Element {
     return defs;
   }, [selectedTpl, form.type]);
 
-  const nameOf = (openId: string): string => userList.find((u) => u.openId === openId)?.name ?? openId;
+  /* 身份键铁律：按 users.id 查姓名（系统身份键），openId 仅兜底兼容 */
+  const nameOf = (idOrOpenId: string): string =>
+    userList.find((u) => String(u.id) === String(idOrOpenId) || u.openId === idOrOpenId)?.name ?? idOrOpenId;
 
   /* ── 分步校验 ────────────────────────────────── */
 
@@ -360,7 +365,7 @@ export function ProjectCreatePage(): JSX.Element {
 
     if (target >= 4) {
       // 复合键防御：同一人可担任多个角色，但「同一人 + 同一角色」不能重复
-      const keys = form.members.map((m) => `${m.userOpenId}::${m.role}`);
+      const keys = form.members.map((m) => `${m.userId ?? m.userOpenId}::${m.role}`);
       if (new Set(keys).size !== keys.length) next.members = '同一成员的同一角色不能重复添加';
       else {
         // 团队约束：读模板 definition.team（缺省回落系统默认，与后端 assertMemberCardinality 同口径）
@@ -390,10 +395,10 @@ export function ProjectCreatePage(): JSX.Element {
 
   /** 按「人 + 角色」组合挑选下一个候选：优先补齐关键角色，兜底扫描全部组合 */
   const addMember = (): void => {
-    const used = new Set(form.members.map((m) => `${m.userOpenId}::${m.role}`));
+    const used = new Set(form.members.map((m) => `${m.userId ?? m.userOpenId}::${m.role}`));
     const desired: ProjectRole = pmCount === 0 ? 'pm' : tlCount === 0 ? 'tl' : 'member';
 
-    let hit: User | undefined = userList.find((u) => !used.has(`${u.openId}::${desired}`));
+    let hit: User | undefined = userList.find((u) => !used.has(`${u.id}::${desired}`));
     let role: ProjectRole = desired;
 
     if (!hit) {
@@ -401,7 +406,7 @@ export function ProjectCreatePage(): JSX.Element {
       for (const u of userList) {
         for (const r of roleOptions) combos.push({ user: u, role: r.roleKey as ProjectRole });
       }
-      const found = combos.find((c) => !used.has(`${c.user.openId}::${c.role}`));
+      const found = combos.find((c) => !used.has(`${c.user.id}::${c.role}`));
       if (found) {
         hit = found.user;
         role = found.role;
@@ -412,7 +417,8 @@ export function ProjectCreatePage(): JSX.Element {
       toast.warning('所有「成员 + 角色」组合都已用尽');
       return;
     }
-    patch({ members: [...form.members, { userOpenId: hit.openId, role }] });
+    /* 身份键铁律：选人下拉传 users.id（系统身份键） */
+    patch({ members: [...form.members, { userId: hit.id, role }] });
   };
 
   const updateMember = (index: number, p: Partial<MemberDraft>): void => {
@@ -441,12 +447,13 @@ export function ProjectCreatePage(): JSX.Element {
       goal: goals,
       planStart: form.planStart,
       planEnd: form.planEnd,
-      pm: pmMember?.userOpenId ?? '',
+      pm: pmMember?.userId != null ? String(pmMember.userId) : (pmMember?.userOpenId ?? ''),
       classifyInput,
       classifySuggested: classifyResult.suggested,
       classifyOverrideReason: isOverride ? form.overrideReason.trim() : '',
       templateId: selectedTemplateId || undefined,
-      members: form.members.map((m) => ({ userOpenId: m.userOpenId, role: m.role })),
+      /* 身份键铁律：建项目成员传 userId（users.id），后端按系统身份键落 member_user_id */
+      members: form.members.map((m) => ({ userId: m.userId, role: m.role })),
       milestones: form.milestones.map((m) => ({
         code: m.code,
         name: m.name.trim(),
@@ -647,23 +654,29 @@ export function ProjectCreatePage(): JSX.Element {
       )}
 
       <Stack spacing={1.25}>
+        {/* 身份键铁律：成员下拉值与去重键一律用 users.id（系统身份键），不用 open_id */}
         {form.members.map((m, i) => (
-          <Stack key={`${m.userOpenId}::${m.role}::${i}`} direction="row" spacing={1.25} alignItems="center">
-            <UserAvatar name={nameOf(m.userOpenId)} />
+          <Stack
+            key={`${m.userId ?? m.userOpenId}::${m.role}::${i}`}
+            direction="row"
+            spacing={1.25}
+            alignItems="center"
+          >
+            <UserAvatar name={nameOf(m.userId != null ? String(m.userId) : (m.userOpenId ?? ''))} />
             <TextField
               select
               size="small"
               label="成员"
-              value={m.userOpenId}
-              onChange={(e) => updateMember(i, { userOpenId: e.target.value })}
+              value={m.userId != null ? String(m.userId) : (m.userOpenId ?? '')}
+              onChange={(e) => updateMember(i, { userId: Number(e.target.value), userOpenId: undefined })}
               sx={{ flex: '1 1 200px', minWidth: 160 }}
             >
               {userList.map((u) => (
                 <MenuItem
-                  key={u.openId}
-                  value={u.openId}
+                  key={u.id}
+                  value={String(u.id)}
                   disabled={form.members.some(
-                    (x, xi) => xi !== i && x.userOpenId === u.openId && x.role === m.role,
+                    (x, xi) => xi !== i && (x.userId ?? x.userOpenId) === String(u.id) && x.role === m.role,
                   )}
                 >
                   {u.name} · {u.dept}
@@ -683,7 +696,10 @@ export function ProjectCreatePage(): JSX.Element {
                   key={r.roleKey}
                   value={r.roleKey}
                   disabled={form.members.some(
-                    (x, xi) => xi !== i && x.userOpenId === m.userOpenId && x.role === r.roleKey,
+                    (x, xi) =>
+                      xi !== i &&
+                      (x.userId ?? x.userOpenId) === (m.userId ?? m.userOpenId) &&
+                      x.role === r.roleKey,
                   )}
                 >
                   {r.name}

@@ -89,7 +89,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (me) {
         useAuthStore
           .getState()
-          .setProjectRoles(members.filter((m) => m.userOpenId === me.openId).map((m) => m.projectRole));
+          .setProjectRoles(
+            members
+              .filter((m) => m.userId != null && Number(m.userId) === Number(me.id))
+              .map((m) => m.projectRole),
+          );
       }
     } finally {
       set({ detailLoading: false });

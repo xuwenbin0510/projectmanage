@@ -316,6 +316,36 @@ function loadTaskStats(db, projectId, milestoneIds) {
 }
 
 /**
+ * 批量统计各项目的 WBS 真叶子加权进度（列表页用，避免逐项目 N+1）。
+ *
+ * 背景：列表进度原用「里程碑达成率」，但大量项目**没有里程碑**（或里程碑未标记 doneAt），
+ * 导致进度恒为 0，与实际完成情况脱节。改为与里程碑/详情页同源的
+ * `rollupProjectProgress`（真叶子按 estimateDays 加权），口径统一。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {Array<string>} projectIds
+ * @returns {Map<string, number>} projectId → 进度百分比（0-100）
+ */
+function loadWbsProgressBatch(db, projectIds) {
+  const map = new Map();
+  const ids = (projectIds || []).map(function (x) { return String(x); }).filter(Boolean);
+  if (!ids.length) return map;
+  const ph = ids.map(function () { return '?'; }).join(',');
+  const rows = db.prepare('SELECT * FROM wbs_nodes WHERE project_id IN (' + ph + ')').all(ids);
+
+  const byProject = {};
+  rows.forEach(function (r) {
+    const pid = String(r.project_id);
+    (byProject[pid] = byProject[pid] || []).push(mappers.toApiWbsNode(r));
+  });
+
+  Object.keys(byProject).forEach(function (pid) {
+    map.set(pid, wbs.rollupProjectProgress(wbs.sortByWbsCode(byProject[pid])));
+  });
+  return map;
+}
+
+/**
  * 里程碑 + 门 + 检查项 + 任务统计 聚合视图（里程碑页 / 概览页唯一数据源）。
  *
  * ⚠ 批次 3 起本函数**只做薄转发**：真实现统一在 `milestone.service.listMilestonesWithGate`，
@@ -391,7 +421,7 @@ function loadListContext(db, projectIds) {
  * @param {import('better-sqlite3').Database} db
  * @returns {object} ProjectListItem
  */
-function toListItem(row, ctx, todayStr, db, highRiskMap) {
+function toListItem(row, ctx, todayStr, db, highRiskMap, wbsProgressMap) {
   const projectId = mappers.toStr(row.id);
   const msList = (ctx.milestones[projectId] || []).slice();
   const gates = ctx.gates[projectId] || [];
@@ -414,11 +444,17 @@ function toListItem(row, ctx, todayStr, db, highRiskMap) {
     currentGateStatus: gate ? gate.status : '未开始',
     gatePassed: rules.countPassedGates(gates),
     gateTotal: gates.length,
-    /* 列表进度口径 = 里程碑达成率（与前端 Mock `toListItem` 逐字一致，不用 WBS 加权，
-       否则同一个项目在列表页与项目详情页会显示两个不同的百分比） */
+    /* 列表进度口径 = WBS 真叶子加权进度，与详情页 / 里程碑统计同源（均走
+       `wbs.rollupProjectProgress` = 真叶子按 estimateDays 加权）。
+       ⚠ 早期版本用「里程碑达成率」（milestoneDone / milestoneTotal），但大量项目
+       **没有里程碑**、或里程碑未标记 doneAt，导致进度恒为 0 与实际完成情况脱节；
+       改用同源口径后，列表页与详情页显示同一个百分比。
+       无 WBS 数据时回退里程碑达成率，兼容纯里程碑项目。 */
     progress: status === '已结项'
       ? 100
-      : (sorted.length ? Math.round((milestoneDone / sorted.length) * 100) : 0),
+      : (wbsProgressMap && wbsProgressMap.has(projectId)
+        ? (Number(wbsProgressMap.get(projectId)) || 0)
+        : (sorted.length ? Math.round((milestoneDone / sorted.length) * 100) : 0)),
     milestoneDone: milestoneDone,
     milestoneTotal: sorted.length,
     nextMilestoneDate: next ? next.currentDate || null : null,
@@ -472,7 +508,11 @@ function listProjects(db, query, me) {
   const todayStr = dates.today();
   /* 一次性批量统计所有项目高风险数（替代 toListItem 内逐项目 N+1 查询） */
   const highRiskMap = riskService.countHighRisksBatch(db, rows.map(function (r) { return String(r.id); }));
-  let items = rows.map(function (r) { return toListItem(r, ctx, todayStr, db, highRiskMap); });
+  /* 一次性批量统计所有项目 WBS 真叶子加权进度（列表进度口径，避免 N+1） */
+  const wbsProgressMap = loadWbsProgressBatch(db, rows.map(function (r) { return String(r.id); }));
+  let items = rows.map(function (r) {
+    return toListItem(r, ctx, todayStr, db, highRiskMap, wbsProgressMap);
+  });
 
   /* pm 过滤按「PM 姓名」匹配（与前端 Mock 口径一致），须在聚合后进行 */
   if (q.pm) {
@@ -504,7 +544,8 @@ function listMyProjectItems(db, me) {
     .all(myId);
   const ctx = loadListContext(db, rows.map(function (r) { return String(r.id); }));
   const todayStr = dates.today();
-  return rows.map(function (r) { return toListItem(r, ctx, todayStr, db); });
+  const wbsProgressMap = loadWbsProgressBatch(db, rows.map(function (r) { return String(r.id); }));
+  return rows.map(function (r) { return toListItem(r, ctx, todayStr, db, undefined, wbsProgressMap); });
 }
 
 /* ── 建项校验 ───────────────────────────────────────── */
@@ -547,9 +588,11 @@ function assertCreatePayload(payload) {
 function assertMemberCardinality(members, tpl) {
   const list = Array.isArray(members) ? members : [];
 
-  /* 角色合法性（与模板无关，保留）：scope=project 且启用的角色方可作为项目成员角色 */
+  /* 角色合法性（与模板无关，保留）：scope=project 且启用的角色方可作为项目成员角色。
+     身份键铁律：userId（users.id）或 userOpenId（open_id）任一非空即视为已选成员。 */
   const bad = list.filter(function (m) {
-    return !m || !String(m.userOpenId || '').trim() || !roleCatalog.isProjectRole(m.role);
+    const hasIdentity = String(m.userId ?? m.userOpenId ?? '').trim() !== '';
+    return !m || !hasIdentity || !roleCatalog.isProjectRole(m.role);
   });
   if (bad.length) {
     throw new AppError(ErrorCode.E_VALIDATION, '成员角色不合法', {
@@ -706,6 +749,35 @@ function templateMilestoneSpecs(template, planStart, planEnd) {
  * @param {object} me 当前用户 users 行
  * @returns {object} Project
  */
+/**
+ * 边界把「建项目成员」解析为系统稳定身份键 users.id（与 member.service.addMember 同口径）。
+ * 前端正规入口传 userId（users.id）；兼容旧调用传 userOpenId（open_id，
+ * 或把 users.id 误放此字段的纯数字）。解析失败返回 null。
+ * @param {import('better-sqlite3').Database} db
+ * @param {{userId?:number|string, userOpenId?:string}|null|undefined} m
+ * @returns {object|null}
+ */
+function resolveMemberIdentity(db, m) {
+  if (m && m.userId !== undefined && m.userId !== null && String(m.userId).trim() !== '') {
+    const n = Number(m.userId);
+    if (Number.isFinite(n) && n > 0) {
+      const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Math.trunc(n));
+      if (u) return u;
+    }
+  }
+  const openIdParam = m ? String(m.userOpenId || '').trim() : '';
+  if (openIdParam) {
+    const byOpen = db.prepare('SELECT * FROM users WHERE open_id = ? OR union_id = ?').get(openIdParam, openIdParam);
+    if (byOpen) return byOpen;
+    /* 兼容：前端可能把 users.id 放进 userOpenId 字段（纯数字），按系统身份键再查一次 */
+    if (/^\d+$/.test(openIdParam)) {
+      const byId = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(openIdParam));
+      if (byId) return byId;
+    }
+  }
+  return null;
+}
+
 function createProject(db, payload, me) {
   assertCreatePayload(payload);
 
@@ -797,6 +869,7 @@ function createProject(db, payload, me) {
   `);
 
   const pmMember = (payload.members || []).filter(function (m) { return m.role === 'pm'; })[0];
+  const pmUser = resolveMemberIdentity(db, pmMember);
   const createdBy = me && me.open_id ? String(me.open_id) : '';
   const createdByUserId = me && me.id != null ? Number(me.id) : mappers.resolveUserId(db, createdBy);
 
@@ -819,7 +892,7 @@ function createProject(db, payload, me) {
       plan_end: String(payload.planEnd),
       approval_step: 0,
       template_id: tpl.id,
-      pm: pmMember ? String(pmMember.userOpenId) : createdBy,
+      pm: pmUser ? String(pmUser.open_id) : createdBy,
       created_by: createdBy,
       created_by_user_id: createdByUserId,
       created_at: ts,
@@ -827,14 +900,19 @@ function createProject(db, payload, me) {
     });
 
     (payload.members || []).forEach(function (m, i) {
+      /* 身份键铁律：优先按 users.id 解析成员（前端正规入口传 userId），
+         取不到再回退 open_id；解析失败则跳过（assertMemberCardinality 已前置校验必填）。
+         落库 member_user_id = users.id（稳定身份键），user_open_id = users 表当前 open_id。 */
+      const u = resolveMemberIdentity(db, m);
+      if (!u) return;
       insMember.run(
         projectId + '-MB' + (i + 1),
         projectId,
-        String(m.userOpenId),
+        String(u.open_id),
         String(m.role),
         createdBy,
         ts,
-        mappers.resolveUserId(db, m.userOpenId),
+        Number(u.id),
         createdByUserId,
       );
     });
@@ -842,10 +920,11 @@ function createProject(db, payload, me) {
     /* 决策「开放自建 + 自己是 PM」：创建人恒登记为 PM 成员
        —— 若其已在 payload.members 中以 pm 角色出现则跳过，避免 (project_id, user_open_id, project_role) UNIQUE 冲突 */
     const creatorIsPm = (payload.members || []).some(function (m) {
-      return m.role === 'pm' && String(m.userOpenId) === createdBy;
+      const u = resolveMemberIdentity(db, m);
+      return m.role === 'pm' && u && u.id === createdByUserId;
     });
     if (createdBy && !creatorIsPm) {
-      insMember.run(projectId + '-MBC', projectId, createdBy, 'pm', createdBy, createdByUserId, createdByUserId);
+      insMember.run(projectId + '-MBC', projectId, createdBy, 'pm', createdBy, ts, createdByUserId, createdByUserId);
     }
 
     specList.forEach(function (spec, idx) {

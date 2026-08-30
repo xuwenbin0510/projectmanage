@@ -208,7 +208,7 @@ export function MetricsPage(): JSX.Element {
         status: query.status ?? '',
         health: query.health ?? '',
         keyword: query.keyword ?? '',
-        ownerOpenId: query.ownerOpenId ?? '',
+        ownerUserId: query.ownerUserId ?? '',
         onlyMine: query.onlyMine ?? false,
         gateStatus,
       },
@@ -233,7 +233,7 @@ export function MetricsPage(): JSX.Element {
         status: query.status ?? '',
         health: query.health ?? '',
         keyword: query.keyword ?? '',
-        ownerOpenId: query.ownerOpenId ?? '',
+        ownerUserId: query.ownerUserId ?? '',
         onlyMine: query.onlyMine ?? false,
         docStatus,
       },
@@ -476,18 +476,19 @@ export function MetricsPage(): JSX.Element {
               </MenuItem>
             ))}
           </TextField>
-          {/* D01.5：任务负责人筛选（选项 = 范围内项目真叶子任务负责人去重，服务端 ownerOptions） */}
+          {/* D01.5：任务负责人筛选（选项 = 范围内项目真叶子任务负责人去重，服务端 ownerOptions）
+              身份键铁律：筛选值用 users.id（系统身份键），不用飞书 open_id */}
           <TextField
             size="small"
             select
             label="任务负责人"
-            value={query.ownerOpenId ?? ''}
-            onChange={(e) => setQuery({ ownerOpenId: e.target.value || undefined })}
+            value={query.ownerUserId != null && query.ownerUserId !== '' ? String(query.ownerUserId) : ''}
+            onChange={(e) => setQuery({ ownerUserId: e.target.value || undefined })}
             sx={{ minWidth: 124 }}
           >
             <MenuItem value="">全部</MenuItem>
             {(data?.ownerOptions ?? []).map((o) => (
-              <MenuItem key={o.openId} value={o.openId}>
+              <MenuItem key={o.userId != null ? `u${o.userId}` : `o${o.openId ?? ''}`} value={o.userId != null ? String(o.userId) : (o.openId ?? '')}>
                 {o.name}
               </MenuItem>
             ))}

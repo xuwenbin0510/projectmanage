@@ -1649,6 +1649,71 @@ function migrationV25(db, now) {
   console.log('[migrations] v25 权限矩阵补 3 个后台配置 action（admin:permission:config / admin:feishu:import / report:manage）');
 }
 
+/**
+ * v26 · 历史表 open_id 与 users 表重新对齐（换 userid 后的数据自愈）
+ *
+ * 背景：飞书 open_id 按应用隔离、重新导入会变化。系统曾「更换 userid」，
+ * 当时只更新了 `users.open_id` 与 `project_members.user_open_id`，
+ * 其它历史表（典型：`wbs_nodes.owner`）仍残留**旧 open_id**，导致：
+ *   - WBS 编辑负责人被误判「非项目成员」（旧前端按 open_id 跨表比对）；
+ *   - 任何按 open_id 做的跨表身份比对全线失配。
+ *
+ * 修复：以各表 v24 已回填的 `*_user_id`（users.id = 系统稳定身份键）为准，
+ * 反查 `users.open_id` 回写对应 open_id 列，让历史表与用户表恢复同源。
+ *
+ * 幂等：仅更新「user_id 有效 且 与 users.open_id 不一致」的行，重复执行零副作用。
+ *
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrationV26(db) {
+  /* [表名, users.id 列, open_id 列]——与 scripts/backfill_prod_identity.cjs 同源 */
+  const PAIRS = [
+    ['risks', 'created_by_user_id', 'created_by'],
+    ['changes', 'created_by_user_id', 'created_by'],
+    ['review_steps', 'assignee_user_id', 'assignee_open_id'],
+    ['review_steps', 'decided_by_user_id', 'decided_by'],
+    ['review_approvals', 'actor_user_id', 'actor_open_id'],
+    ['reviews', 'initiator_user_id', 'initiator_open_id'],
+    ['project_members', 'member_user_id', 'user_open_id'],
+    ['project_members', 'assigned_by_user_id', 'assigned_by'],
+    ['user_roles', 'role_user_id', 'user_open_id'],
+    ['user_roles', 'assigned_by_user_id', 'assigned_by'],
+    ['notifications', 'user_id', 'user_open_id'],
+    ['audit_logs', 'actor_user_id', 'actor_open_id'],
+    ['work_reports', 'author_user_id', 'author_open_id'],
+    ['permission_rules', 'updated_by_user_id', 'updated_by'],
+    ['projects', 'created_by_user_id', 'created_by'],
+    ['wbs_nodes', 'owner_user_id', 'owner'],
+    ['wbs_nodes', 'created_by_user_id', 'created_by'],
+    ['quality_gates', 'decided_by_user_id', 'decided_by'],
+    ['project_documents', 'baselined_by_user_id', 'baselined_by'],
+    ['project_documents', 'uploaded_by_user_id', 'uploaded_by'],
+  ];
+
+  let fixed = 0;
+  const tx = db.transaction(function () {
+    PAIRS.forEach(function (pair) {
+      const table = pair[0];
+      const uidCol = pair[1];
+      const oidCol = pair[2];
+      if (!tableExists(db, table) || !hasColumn(db, table, uidCol) || !hasColumn(db, table, oidCol)) return;
+      const n = db
+        .prepare(
+          'UPDATE ' + table + ' SET ' + oidCol + ' = (SELECT u.open_id FROM users u WHERE u.id = ' + table + '.' + uidCol + ') '
+          + 'WHERE ' + table + '.' + uidCol + ' IS NOT NULL '
+          + 'AND ' + table + '.' + oidCol + ' IS NOT NULL AND ' + table + '.' + oidCol + " <> '' "
+          + 'AND EXISTS (SELECT 1 FROM users u2 WHERE u2.id = ' + table + '.' + uidCol + ') '
+          + 'AND NOT EXISTS (SELECT 1 FROM users u3 WHERE u3.id = ' + table + '.' + uidCol
+          + ' AND u3.open_id = ' + table + '.' + oidCol + ')'
+        )
+        .run().changes;
+      fixed += n;
+    });
+  });
+  tx();
+  console.log('[migrations] v26 历史表 open_id 与 users 重新对齐，校正 %d 行（幂等）', fixed);
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1681,6 +1746,7 @@ const MIGRATIONS = [
   { version: 23, name: 'connect-v23-auth-gate', up: migrationV23 },
   { version: 24, name: 'connect-v24-user-id-columns', up: migrationV24 },
   { version: 25, name: 'connect-v25-admin-config-actions', up: migrationV25 },
+  { version: 26, name: 'connect-v26-openid-realign', up: migrationV26 },
 ];
 
 /**

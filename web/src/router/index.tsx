@@ -32,6 +32,9 @@ import { AdminReviewTemplatesPage } from '@/pages/admin/AdminReviewTemplatesPage
 import { AdminTemplatesPage } from '@/pages/admin/AdminTemplatesPage';
 import { AdminRolesPage } from '@/pages/admin/AdminRolesPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
+import { AdminPageGuard } from '@/components/common/AdminPageGuard';
+import { firstPermittedAdminPath } from '@/config/adminTabs';
+import { usePermission } from '@/hooks';
 
 /**
  * 登录守卫：未登录一律回登录页，并把原始深链记在 state 里
@@ -60,6 +63,12 @@ function RedirectIfAuthed({ children }: { children: ReactNode }): JSX.Element {
   const user = useAuthStore((s) => s.user);
   if (user) return <Navigate to={ROUTES.workbench} replace />;
   return <>{children}</>;
+}
+
+/** 管理后台索引：按权限落地到「第一个有权限的 Tab」，而非硬编码用户与职位 */
+function AdminLanding(): JSX.Element {
+  const { can } = usePermission();
+  return <Navigate to={firstPermittedAdminPath(can)} replace />;
 }
 
 /**
@@ -119,13 +128,55 @@ export function AppRouter(): JSX.Element {
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="metrics" element={<MetricsPage />} />
 
-        <Route path="admin" element={<Navigate to={ROUTES.adminUsers} replace />} />
-        <Route path="admin/users" element={<AdminUsersPage />} />
-        <Route path="admin/permissions" element={<AdminPermissionsPage />} />
-        <Route path="admin/review-templates" element={<AdminReviewTemplatesPage />} />
-        <Route path="admin/templates" element={<AdminTemplatesPage />} />
-        <Route path="admin/roles" element={<AdminRolesPage />} />
-        <Route path="admin/audit-logs" element={<AdminAuditPage />} />
+        <Route path="admin" element={<AdminLanding />} />
+        <Route
+          path="admin/users"
+          element={
+            <AdminPageGuard action="admin:user:role">
+              <AdminUsersPage />
+            </AdminPageGuard>
+          }
+        />
+        <Route
+          path="admin/permissions"
+          element={
+            <AdminPageGuard action="admin:permission:config">
+              <AdminPermissionsPage />
+            </AdminPageGuard>
+          }
+        />
+        <Route
+          path="admin/review-templates"
+          element={
+            <AdminPageGuard action="admin:template">
+              <AdminReviewTemplatesPage />
+            </AdminPageGuard>
+          }
+        />
+        <Route
+          path="admin/templates"
+          element={
+            <AdminPageGuard action="admin:template">
+              <AdminTemplatesPage />
+            </AdminPageGuard>
+          }
+        />
+        <Route
+          path="admin/roles"
+          element={
+            <AdminPageGuard action="admin:user:role">
+              <AdminRolesPage />
+            </AdminPageGuard>
+          }
+        />
+        <Route
+          path="admin/audit-logs"
+          element={
+            <AdminPageGuard action="admin:audit:view">
+              <AdminAuditPage />
+            </AdminPageGuard>
+          }
+        />
 
         <Route path="*" element={<NotFoundPage />} />
       </Route>

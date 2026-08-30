@@ -101,7 +101,23 @@ function assertRoleUnique(db, projectId, role) {
 function addMember(db, req, projectId, payload) {
   const pid = String(projectId || '');
   const body = payload || {};
-  const userOpenId = String(body.userOpenId || '').trim();
+  /* 身份键铁律：优先按系统身份键 users.id 定位（前端正规入口传 userId），
+     找不到再回退 open_id 兼容旧调用。定位到用户后，后续一律以 users 表
+     **当前**的 open_id 写入，避免历史表残留旧 open_id（换 userid 后失配的根因）。 */
+  let user = null;
+  const rawUserId = body.userId;
+  if (rawUserId !== undefined && rawUserId !== null && String(rawUserId).trim() !== '') {
+    const n = Number(rawUserId);
+    if (Number.isFinite(n) && n > 0) user = db.prepare('SELECT * FROM users WHERE id = ?').get(Math.trunc(n));
+  }
+  const userOpenIdParam = String(body.userOpenId || '').trim();
+  if (!user && userOpenIdParam) {
+    user = findUserRow(db, userOpenIdParam);
+    /* 兼容：前端若把 users.id 直接放进 userOpenId 字段（纯数字），按系统身份键再查一次 */
+    if (!user && /^\d+$/.test(userOpenIdParam)) {
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(userOpenIdParam));
+    }
+  }
   const role = String(body.role || '').trim();
   const actor = req.user || {};
 
@@ -110,7 +126,7 @@ function addMember(db, req, projectId, payload) {
     rbac.assertCan(db, req, 'project:member:assign', pid);
 
     const fields = [];
-    if (!userOpenId) fields.push({ field: 'userOpenId', message: '请选择成员' });
+    if (!user) fields.push({ field: 'userId', message: '请选择成员' });
     /* 项目内角色合法集 = 职位管理里「项目视野（scope=project）」且启用的职位；
        公司级职位在用户层分配，不在此处选 */
     const roleRow = db
@@ -119,8 +135,8 @@ function addMember(db, req, projectId, payload) {
     if (!roleRow) fields.push({ field: 'role', message: '该角色不是有效的项目内职位' });
     if (fields.length) throw new AppError(ErrorCode.E_VALIDATION, '成员参数不合法', { fields: fields });
 
-    const user = findUserRow(db, userOpenId);
-    if (!user) throw new AppError(ErrorCode.E_NOT_FOUND, '用户不存在', { userOpenId: userOpenId });
+    /* user 已在事务外按 users.id / open_id 定位完成；此处取 users 表当前 open_id 写入 */
+    const userOpenId = String(user.open_id || '');
 
     /* pm / tl 为单例角色：一个项目内只能有一名。
        改派语义 —— 若该项目已有同角色成员，先让位（删旧）再插入新成员，

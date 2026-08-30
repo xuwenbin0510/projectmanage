@@ -660,8 +660,12 @@ export function ReportFormModal({
                         helperText={errors.risks?.[index]?.owner?.message}
                       >
                         <MenuItem value="">（未选）</MenuItem>
-                        {Array.from(new Map(members.map((m) => [m.userOpenId, m])).values()).map((m) => (
-                          <MenuItem key={m.userOpenId} value={m.userOpenId}>
+                        {/* 身份键铁律：下拉值用 users.id（系统身份键），不用 open_id */}
+                        {Array.from(new Map(members.map((m) => [m.userId ?? m.userOpenId, m])).values()).map((m) => (
+                          <MenuItem
+                            key={m.userId ?? m.userOpenId}
+                            value={m.userId != null ? String(m.userId) : m.userOpenId}
+                          >
                             {m.userName}
                           </MenuItem>
                         ))}

@@ -76,10 +76,38 @@ function normalizePriority(raw) {
  * @param {string|undefined} openId
  * @returns {number|null}
  */
-function resolveOwnerUserId(db, openId) {
-  if (!openId) return null;
-  // 身份设计铁律：写边界把传入的 open_id（可能来自不同飞书空间）经统一桥接解析成 users.id
-  return mappers.resolveUserId(db, openId);
+function resolveOwnerUserId(db, idOrOpenId) {
+  if (idOrOpenId === undefined || idOrOpenId === null || String(idOrOpenId).trim() === '') return null;
+  const s = String(idOrOpenId).trim();
+  /* 身份设计铁律：本系统内关联一律以 users.id 为准。
+     纯数字 → 直接按系统身份键 users.id 解析（前端正规入口就传这个）；
+     非数字 → 视为飞书 open_id 兼容入口，经桥接解析成 users.id。
+     open_id 是按应用隔离、会随重新导入变化的跨系统标识，绝不作为关联键落库。 */
+  if (/^\d+$/.test(s)) {
+    try {
+      const row = db.prepare('SELECT id FROM users WHERE id = ?').get(Number(s));
+      if (row) return row.id;
+    } catch (e) { /* 落回 open_id 兼容路径 */ }
+  }
+  return mappers.resolveUserId(db, s);
+}
+
+/**
+ * 由系统身份键反查飞书 open_id。
+ * 仅用于回填 `owner` 展示列（历史前端/导出仍在读它），**不参与任何关联判定**。
+ * @param {import('better-sqlite3').Database} db
+ * @param {string|number|undefined} idOrOpenId
+ * @returns {string} open_id；解析不到返回 ''
+ */
+function resolveOwnerOpenId(db, idOrOpenId) {
+  const uid = resolveOwnerUserId(db, idOrOpenId);
+  if (!uid) return '';
+  try {
+    const row = db.prepare('SELECT open_id FROM users WHERE id = ?').get(uid);
+    return row ? String(row.open_id || '') : '';
+  } catch (e) {
+    return '';
+  }
 }
 
 function loadNodes(db, projectId) {
@@ -425,7 +453,9 @@ function createWbsNode(db, req, projectId, payload) {
       nodeType,
       String(p.name === undefined || p.name === null ? '' : p.name),
       String(p.description === undefined || p.description === null ? '' : p.description),
-      String(p.owner),
+      /* owner 列仅作展示/兼容：由身份键反查当前 open_id；
+         关联一律走 owner_user_id（下一行） */
+      resolveOwnerOpenId(db, p.owner),
       resolveOwnerUserId(db, p.owner),
       Number(p.estimateDays) || 0,
       startDate,
@@ -539,13 +569,26 @@ function updateWbsNode(db, req, id, payload) {
       sets.push('description = ?');
       args.push(String(p.description === null ? '' : p.description));
     }
-    if (p.owner !== undefined && String(p.owner) !== node.owner) {
-      effOwner = String(p.owner);
-      sets.push('owner = ?');
-      args.push(effOwner);
-      sets.push('owner_user_id = ?');
-      args.push(resolveOwnerUserId(db, effOwner));
-      diff.push({ field: 'owner', label: '负责人', before: node.ownerName, after: effOwner ? nameOf(effOwner) : '' });
+    /* 负责人：以系统身份键 users.id 为「是否变更」的比对基准。
+       不能用 owner（open_id）比对——它是跨系统标识、会变，会导致同一人被误判为改动。 */
+    if (p.owner !== undefined) {
+      const newUid = resolveOwnerUserId(db, p.owner);
+      const oldUid = node.owner_user_id != null && node.owner_user_id !== ''
+        ? Number(node.owner_user_id)
+        : null;
+      if (newUid !== oldUid) {
+        effOwner = resolveOwnerOpenId(db, p.owner);
+        sets.push('owner = ?');
+        args.push(effOwner);
+        sets.push('owner_user_id = ?');
+        args.push(newUid);
+        diff.push({
+          field: 'owner',
+          label: '负责人',
+          before: node.ownerName,
+          after: newUid ? nameOf(String(newUid)) : '',
+        });
+      }
     }
     if (p.estimateDays !== undefined && Number(p.estimateDays) !== node.estimateDays) {
       effEstimate = Number(p.estimateDays) || 0;

@@ -169,6 +169,9 @@ function rowToApiReport(row, taskRows, riskRows) {
     weekStart: toStr(row.week_start),
     weekEnd: toStr(row.week_end),
     author: toStr(row.author_open_id),
+    /* 系统身份键 users.id：前端判断「是不是我的周报」一律用它
+       （open_id 是飞书跨系统标识，会随重新导入变化，不能用于本系统身份判定） */
+    authorUserId: row.author_user_id != null && row.author_user_id !== '' ? Number(row.author_user_id) : null,
     authorName: toStr(row.author_name),
     status: toStr(row.status, '草稿'),
     doneNote: toStr(row.done_note),
@@ -997,54 +1000,60 @@ function updateReport(db, id, payload, me) {
  * @param {string} authorOpenId 周报作者 openId
  * @returns {Set<string>} 可确认人 openId 集合（已排除作者本人）
  */
-function resolveConfirmers(db, projectId, authorOpenId) {
+/**
+ * 解析某项目周报的「可确认人」集合。
+ * ⚠️ 身份键铁律：一律返回 **users.id（系统唯一身份键）** 集合，绝不以 open_id 做判定键。
+ *    open_id 是跨系统、会随飞书重新导入变化的标识，用它匹配会在换 userid 后失配。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} projectId 项目 id
+ * @param {number|string|null} authorUserId 周报作者 users.id（用于排除作者自确认）
+ * @returns {Set<number>} 可确认人 users.id 集合（已排除作者本人）
+ */
+function resolveConfirmers(db, projectId, authorUserId) {
   const pid = toStr(projectId).trim();
-  const author = toStr(authorOpenId).trim();
+  const author = authorUserId != null && authorUserId !== '' ? Number(authorUserId) : null;
   const result = new Set();
   if (!pid) return result;
 
-  /* 1. 权威 pm 集合（结构化角色源）。经 member_user_id 桥接回主空间 open_id，
-   *    解决导入成员 user_open_id 属「另一套飞书空间」、与登录用户 open_id 对不上的根因。 */
+  /* 1. 权威 pm 集合（结构化角色源）——直接取 member_user_id（= users.id） */
   const pmRows = db
     .prepare(
-      "SELECT u.open_id FROM project_members pm JOIN users u ON u.id = pm.member_user_id WHERE pm.project_id = ? AND pm.project_role = 'pm'"
+      "SELECT pm.member_user_id FROM project_members pm WHERE pm.project_id = ? AND pm.project_role = 'pm' AND pm.member_user_id IS NOT NULL"
     )
     .all(pid);
-  const pmSet = new Set(pmRows.map(function (r) { return toStr(r.open_id); }).filter(Boolean));
+  const pmSet = new Set(
+    pmRows
+      .map(function (r) { return Number(r.member_user_id); })
+      .filter(function (n) { return Number.isFinite(n); })
+  );
 
   /* 2. 确认人来源
    *    - 项目有 PM：确认人 = 本项目的 PM 集合（团队成员写周报由本项目 PM 确认）。
-   *    - 项目无 PM：升级到 PMO ∪ admin 兜底（全局项目治理角色，先于管理层介入），
-   *      而非直接跳管理层。PMO 由「全局职位 pmo（users.global_role 或 user_roles.role_key='pmo'）」构成。
-   *    同样经 role_user_id 桥接回主空间 open_id。 */
+   *    - 项目无 PM：升级到 PMO ∪ admin 兜底（全局项目治理角色）。
+   *    全部经 users.id（role_user_id / global_role 对应 id）解析，绝不依赖 open_id。 */
   if (pmSet.size === 0) {
     const pmoRows = db
       .prepare(
-        "SELECT open_id FROM users WHERE global_role = 'pmo' "
-        + "UNION SELECT u.open_id FROM user_roles ur JOIN users u ON u.id = ur.role_user_id WHERE ur.role_key = 'pmo'",
+        "SELECT id FROM users WHERE global_role = 'pmo' "
+        + "UNION SELECT role_user_id FROM user_roles WHERE role_key = 'pmo' AND role_user_id IS NOT NULL"
       )
       .all();
-    pmoRows.forEach(function (r) {
-      const v = toStr(r.open_id);
-      if (v) result.add(v);
-    });
+    pmoRows.forEach(function (r) { const v = Number(r.id); if (Number.isFinite(v)) result.add(v); });
     const adminRows = db
       .prepare(
-        "SELECT open_id FROM users WHERE global_role = 'admin' "
-        + "UNION SELECT u.open_id FROM user_roles ur JOIN users u ON u.id = ur.role_user_id WHERE ur.role_key = 'admin'",
+        "SELECT id FROM users WHERE global_role = 'admin' "
+        + "UNION SELECT role_user_id FROM user_roles WHERE role_key = 'admin' AND role_user_id IS NOT NULL"
       )
       .all();
-    adminRows.forEach(function (r) {
-      const v = toStr(r.open_id);
-      if (v) result.add(v);
-    });
+    adminRows.forEach(function (r) { const v = Number(r.id); if (Number.isFinite(v)) result.add(v); });
   } else {
     pmSet.forEach(function (v) { result.add(v); });
   }
 
   /* 3. 作者排除：仅当作者「不是 PM」时剔除（普通成员写的周报由 PM 批，禁止自确认）；
-   *    PM 写自己项目的周报可自批（PM 亲手跟进任务是常态，且全局总览已提供管理层审查通道）。 */
-  if (author && !pmSet.has(author)) result.delete(author);
+   *    PM 写自己项目的周报可自批。author 与 pmSet 均为 users.id，同源比对。 */
+  if (author != null && !pmSet.has(author)) result.delete(author);
   return result;
 }
 
@@ -1066,6 +1075,7 @@ function confirmReport(db, id, me) {
   const reportId = toStr(id).trim();
   const actor = me || {};
   const meOpenId = toStr(actor.open_id);
+  const meId = actor.id != null ? Number(actor.id) : null;
 
   const tx = db.transaction(function () {
     const row = db.prepare('SELECT * FROM work_reports WHERE id = ?').get(reportId);
@@ -1080,8 +1090,8 @@ function confirmReport(db, id, me) {
       );
     }
 
-    const confirmers = resolveConfirmers(db, toStr(row.project_id), toStr(row.author_open_id));
-    if (!meOpenId || !confirmers.has(meOpenId)) {
+    const confirmers = resolveConfirmers(db, toStr(row.project_id), row.author_user_id);
+    if (!meId || !confirmers.has(meId)) {
       throw new AppError(ErrorCode.E_FORBIDDEN, '您不是该周报的确认人', { id: reportId });
     }
 
@@ -1123,6 +1133,7 @@ function rejectReport(db, id, reason, me) {
   const rejectReason = toStr(reason).trim();
   const actor = me || {};
   const meOpenId = toStr(actor.open_id);
+  const meId = actor.id != null ? Number(actor.id) : null;
 
   /* 先做无副作用的入参校验，避免打开事务 */
   if (!rejectReason) {
@@ -1144,8 +1155,8 @@ function rejectReport(db, id, reason, me) {
       );
     }
 
-    const confirmers = resolveConfirmers(db, toStr(row.project_id), toStr(row.author_open_id));
-    if (!meOpenId || !confirmers.has(meOpenId)) {
+    const confirmers = resolveConfirmers(db, toStr(row.project_id), row.author_user_id);
+    if (!meId || !confirmers.has(meId)) {
       throw new AppError(ErrorCode.E_FORBIDDEN, '您不是该周报的确认人', { id: reportId });
     }
 
@@ -1178,9 +1189,9 @@ function rejectReport(db, id, reason, me) {
  * @param {string} userOpenId 当前用户 openId
  * @returns {object[]} Report[]（按 submitted_at 倒序）
  */
-function listPendingConfirmation(db, userOpenId) {
-  const meOpenId = toStr(userOpenId).trim();
-  if (!meOpenId) return [];
+function listPendingConfirmation(db, userId) {
+  const meId = userId != null && userId !== '' ? Number(userId) : null;
+  if (!meId) return [];
 
   const rows = db
     .prepare(
@@ -1189,10 +1200,11 @@ function listPendingConfirmation(db, userOpenId) {
     .all();
   if (!rows.length) return [];
 
-  /* 逐条按确认人集合过滤（作者本人已在 resolveConfirmers 内排除） */
+  /* 逐条按确认人集合过滤（作者本人已在 resolveConfirmers 内排除）；
+     身份键一律用 users.id，不用 open_id（后者随飞书重导变化，会在换 userid 后失配）。 */
   const pending = rows.filter(function (r) {
-    const confirmers = resolveConfirmers(db, toStr(r.project_id), toStr(r.author_open_id));
-    return confirmers.has(meOpenId);
+    const confirmers = resolveConfirmers(db, toStr(r.project_id), r.author_user_id);
+    return confirmers.has(meId);
   });
   if (!pending.length) return [];
 

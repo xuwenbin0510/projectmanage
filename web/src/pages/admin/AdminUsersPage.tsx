@@ -155,8 +155,8 @@ export function AdminUsersPage(): JSX.Element {
   /** 保存某用户的多职位（首项为主职位） */
   const saveRoles = async (u: User, roles: string[]): Promise<void> => {
     try {
-      const updated = await api.updateUser(u.openId, { globalRoles: roles });
-      setUsers((list) => list.map((x) => (x.openId === u.openId ? updated : x)));
+      const updated = await api.updateUser(u.id, { globalRoles: roles });
+      setUsers((list) => list.map((x) => (x.id === u.id ? updated : x)));
       toast.success(`已更新 ${u.name} 的职位`);
     } catch (e) {
       toast.error(e);
@@ -174,8 +174,8 @@ export function AdminUsersPage(): JSX.Element {
   /** 改某用户状态（仅 admin；统一封装更新 + 失败回刷） */
   const changeStatus = async (u: User, next: 'active' | 'disabled' | 'pending', successMsg: string): Promise<void> => {
     try {
-      const updated = await api.updateUser(u.openId, { status: next });
-      setUsers((list) => list.map((x) => (x.openId === u.openId ? updated : x)));
+      const updated = await api.updateUser(u.id, { status: next });
+      setUsers((list) => list.map((x) => (x.id === u.id ? updated : x)));
       toast.success(successMsg);
     } catch (e) {
       toast.error(e);
@@ -211,7 +211,7 @@ export function AdminUsersPage(): JSX.Element {
     if (!resetTarget) return;
     setResetting(true);
     try {
-      const res = await api.resetUserPassword(resetTarget.openId);
+      const res = await api.resetUserPassword(resetTarget.id);
       setResetTarget(null);
       toast.success(`已重置 ${resetTarget.name} 的密码，临时密码：${res.defaultPassword}（请通知其首次登录修改）`);
     } catch (e) {
@@ -281,7 +281,7 @@ export function AdminUsersPage(): JSX.Element {
     if (!editTarget) return;
     setEditing(true);
     try {
-      const updated = await api.updateUser(editTarget.openId, {
+      const updated = await api.updateUser(editTarget.id, {
         name: editForm.name.trim(),
         dept: editForm.dept.trim() || undefined,
         email: editForm.email.trim() || undefined,
@@ -290,7 +290,7 @@ export function AdminUsersPage(): JSX.Element {
         unionId: editForm.unionId.trim(),
         globalRoles: mergeRoles(editForm.primaryRole, editForm.extraRoles),
       });
-      setUsers((list) => list.map((x) => (x.openId === updated.openId ? updated : x)));
+      setUsers((list) => list.map((x) => (x.id === updated.id ? updated : x)));
       setEditOpen(false);
       toast.success(`已更新 ${updated.name} 的资料`);
     } catch (e) {
@@ -307,7 +307,7 @@ export function AdminUsersPage(): JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleting, setDeleting] = useState(false);
   const openDelete = (u: User): void => {
-    if (me?.openId === u.openId) {
+    if (me?.id === u.id) {
       toast.error('不能删除自己');
       return;
     }
@@ -317,8 +317,8 @@ export function AdminUsersPage(): JSX.Element {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
-      await api.deleteUser(deleteTarget.openId);
-      setUsers((list) => list.filter((x) => x.openId !== deleteTarget.openId));
+      await api.deleteUser(deleteTarget.id);
+      setUsers((list) => list.filter((x) => x.id !== deleteTarget.id));
       toast.success(`已删除用户 ${deleteTarget.name}`);
       setDeleteTarget(null);
     } catch (e: any) {
@@ -586,7 +586,7 @@ export function AdminUsersPage(): JSX.Element {
         {menuAnchor?.user.status === 'active' && (
           <>
             <MenuItem
-              disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+              disabled={menuAnchor ? me?.id === menuAnchor.user.id : false}
               onClick={() => {
                 if (menuAnchor) disableUser(menuAnchor.user);
                 closeMenu();
@@ -596,7 +596,7 @@ export function AdminUsersPage(): JSX.Element {
               停用
             </MenuItem>
             <MenuItem
-              disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+              disabled={menuAnchor ? me?.id === menuAnchor.user.id : false}
               onClick={() => {
                 if (menuAnchor) setPendingUser(menuAnchor.user);
                 closeMenu();
@@ -620,7 +620,7 @@ export function AdminUsersPage(): JSX.Element {
         )}
         <Divider />
         <MenuItem
-          disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+          disabled={menuAnchor ? me?.id === menuAnchor.user.id : false}
           onClick={() => {
             if (menuAnchor) openReset(menuAnchor.user);
             closeMenu();
@@ -630,7 +630,7 @@ export function AdminUsersPage(): JSX.Element {
           重置密码
         </MenuItem>
         <MenuItem
-          disabled={menuAnchor ? me?.openId === menuAnchor.user.openId : false}
+          disabled={menuAnchor ? me?.id === menuAnchor.user.id : false}
           onClick={() => {
             if (menuAnchor) openDelete(menuAnchor.user);
             closeMenu();

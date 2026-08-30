@@ -6,18 +6,11 @@
  */
 import { useNavigate } from 'react-router-dom';
 import { Box, Tab, Tabs } from '@mui/material';
-import { ROUTES } from '@/config/routes';
 import { useLocation } from 'react-router-dom';
 import { usePermission } from '@/hooks';
+import { ADMIN_TABS } from '@/config/adminTabs';
 
-const ADMIN_TABS = [
-  { key: 'users', label: '用户与职位', path: ROUTES.adminUsers, action: 'admin:user:role' },
-  { key: 'permissions', label: '权限矩阵', path: ROUTES.adminPermissions, action: 'admin:permission:config' },
-  { key: 'reviewTemplates', label: '审批配置', path: ROUTES.adminReviewTemplates, action: 'admin:template' },
-  { key: 'templates', label: '内置模板', path: ROUTES.adminTemplates, action: 'admin:template' },
-  { key: 'roles', label: '职位管理', path: ROUTES.adminRoles, action: 'admin:user:role' },
-  { key: 'audit', label: '审计日志', path: ROUTES.adminAuditLog, action: 'admin:audit:view' },
-];
+export { ADMIN_TABS };
 
 /** 根据当前路径定位激活 Tab（前缀匹配） */
 function activeOf(pathname: string): string | false {

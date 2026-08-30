@@ -70,7 +70,8 @@ export interface CreateProjectPayload {
   classifyInput: ClassifyInput;
   classifySuggested: ProjectType;
   classifyOverrideReason: string;
-  members: Array<{ userOpenId: string; role: ProjectRole }>;
+  /** 建项成员：优先 userId（users.id 系统身份键），兼容 userOpenId（open_id） */
+  members: Array<{ userId?: number; userOpenId?: string; role: ProjectRole }>;
   /**
    * 方案A（阶段三补）：建项向导显式选中的生命周期模板 id（必须属于 type 分类且启用）。
    * 不传时服务端回落「分类下唯一生效模板」（旧行为）。
@@ -314,7 +315,8 @@ export interface ApiClient {
 
   /* 成员 */
   listMembers(projectId: string): Promise<ProjectMember[]>;
-  addMember(projectId: string, userOpenId: string, role: string): Promise<ProjectMember>;
+  /** 添加项目成员：传入 userId（users.id 系统身份键） */
+  addMember(projectId: string, userId: number, role: string): Promise<ProjectMember>;
   removeMember(projectId: string, memberId: string): Promise<void>;
 
   /* 质量门 P0-05 P0-06（挂在里程碑上 · 决策 D-A） */
@@ -416,16 +418,20 @@ export interface ApiClient {
   getWorkbenchReportClosure(): Promise<WorkbenchReportClosure>;
 
   /* 管理后台 */
-  listUsers(): Promise<User[]>;
-  updateUserRole(openId: string, role: GlobalRole): Promise<User>;
+  /** @param params.status 可选过滤：'active' | 'disabled' | 'pending'。
+   *  项目成员选择器传 'active' 只取启用用户；管理后台不传，返回全部。 */
+  listUsers(params?: { status?: 'active' | 'disabled' | 'pending' }): Promise<User[]>;
+  /* ⚠ 用户资源标识一律用系统身份键 users.id（number），不用 open_id：
+     open_id 是飞书跨系统标识、会随重新导入变化，不能作为本系统的用户标识。 */
+  updateUserRole(userId: number, role: GlobalRole): Promise<User>;
   /** 阶段一：新增用户（仅 admin）。响应 data 含 defaultPassword（创建即写入默认密码） */
   createUser(payload: CreateUserPayload): Promise<User & { defaultPassword?: string }>;
   /** 阶段一：通用更新（角色/状态/部门/姓名/工号/邮箱，仅 admin；只传需要更新的字段） */
-  updateUser(openId: string, patch: UpdateUserPayload): Promise<User>;
+  updateUser(userId: number, patch: UpdateUserPayload): Promise<User>;
   /** 管理员重置用户密码（仅 admin）：重置为默认密码并强制下次改密，返回默认密码明文 */
-  resetUserPassword(openId: string): Promise<{ defaultPassword: string; openId: string }>;
+  resetUserPassword(userId: number): Promise<{ defaultPassword: string; openId: string }>;
   /** 物理删除用户（仅 admin）：删前校验业务引用，有则拒绝 */
-  deleteUser(openId: string): Promise<null>;
+  deleteUser(userId: number): Promise<null>;
 
   /* E1.5 职位目录管理（仅 admin） */
   listRoles(): Promise<Role[]>;
