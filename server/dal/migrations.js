@@ -1699,7 +1699,7 @@ function migrationV26(db) {
       if (!tableExists(db, table) || !hasColumn(db, table, uidCol) || !hasColumn(db, table, oidCol)) return;
       const n = db
         .prepare(
-          'UPDATE ' + table + ' SET ' + oidCol + ' = (SELECT u.open_id FROM users u WHERE u.id = ' + table + '.' + uidCol + ') '
+          'UPDATE OR IGNORE ' + table + ' SET ' + oidCol + ' = (SELECT u.open_id FROM users u WHERE u.id = ' + table + '.' + uidCol + ') '
           + 'WHERE ' + table + '.' + uidCol + ' IS NOT NULL '
           + 'AND ' + table + '.' + oidCol + ' IS NOT NULL AND ' + table + '.' + oidCol + " <> '' "
           + 'AND EXISTS (SELECT 1 FROM users u2 WHERE u2.id = ' + table + '.' + uidCol + ') '
