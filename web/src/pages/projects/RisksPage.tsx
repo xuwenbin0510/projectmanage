@@ -155,14 +155,27 @@ export function RisksPage(): JSX.Element {
 
   const liveValue = form.probability * form.impact;
 
+  /* 移动端（<600px）只保留「描述 / 风险值 / 状态 / 操作」四列，
+   * 编号·类别·责任人·复评日 折到 sm 以上再显示；桌面（≥600px）渲染与样式完全不变。 */
   const columns: Array<Column<Risk>> = [
-    { key: 'code', label: '编号', width: 90 },
+    { key: 'code', label: '编号', width: 90, hideBelow: 'sm' },
     {
       key: 'description',
       label: '风险描述',
-      render: (r) => <Typography sx={{ fontSize: 14 }}>{r.description}</Typography>,
+      render: (r) => (
+        <Typography
+          sx={{
+            fontSize: 14,
+            /* 移动端限宽换行，避免长描述把表格撑成横向长条；sm 及以上恢复原单行不换行 */
+            maxWidth: { xs: 200, sm: 'none' },
+            whiteSpace: { xs: 'normal', sm: 'nowrap' },
+          }}
+        >
+          {r.description}
+        </Typography>
+      ),
     },
-    { key: 'category', label: '类别', width: 96 },
+    { key: 'category', label: '类别', width: 96, hideBelow: 'sm' },
     {
       key: 'riskValue',
       label: '风险值',
@@ -180,12 +193,13 @@ export function RisksPage(): JSX.Element {
         </Typography>
       ),
     },
-    { key: 'owner', label: '责任人', width: 96 },
+    { key: 'owner', label: '责任人', width: 96, hideBelow: 'sm' },
     { key: 'status', label: '状态', width: 96, render: (r) => <StatusChip status={r.status} /> },
     {
       key: 'reviewDate',
       label: '复评日',
       width: 110,
+      hideBelow: 'sm',
       render: (r) => <Typography sx={{ fontSize: 13 }}>{fmtDate(r.reviewDate)}</Typography>,
     },
     ...(canEdit

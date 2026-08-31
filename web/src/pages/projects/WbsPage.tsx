@@ -42,7 +42,7 @@ import type { WbsNodeType, WbsTreeNode, TaskStatus, WbsRules, Priority } from '@
 import { useWbsStore } from '@/stores/wbsStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { useFlowStore } from '@/stores/flowStore';
-import { usePermission, useToast } from '@/hooks';
+import { usePermission, useToast, useResponsive } from '@/hooks';
 import { api, USE_MOCK } from '@/api/client';
 import { csvDateStamp, downloadCsv, fetchCsv, toCsv } from '@/utils/csv';
 import { allowedChildTypes, resolveWbsRules, validateWbsPlacement } from '@/api/mock/rules';
@@ -233,6 +233,7 @@ export function WbsPage(): JSX.Element {
   const navigate = useNavigate();
   const toast = useToast();
   const { can } = usePermission();
+  const { isMobile } = useResponsive();
 
   const project = useProjectStore((s) => s.current);
   const projectType = project?.type ?? 'A';
@@ -724,149 +725,290 @@ export function WbsPage(): JSX.Element {
         className={highlightNodeId === node.id ? `wbs-locate${highlightDim ? ' wbs-locate--dim' : ''}` : undefined}
         label={
           <WbsRowDroppable node={node} isOver={dragOverId === node.id} pos={dropPos} isActive={activeDragId === node.id}>
-            <WbsDragHandle id={node.id} disabled={!editable} />
-            <Typography variant="caption" sx={{ color: 'text.secondary', width: 38, flexShrink: 0 }}>
-              {node.wbsCode}
-            </Typography>
-            <Chip size="small" variant="outlined" label={WBS_NODE_TYPE_LABEL[node.nodeType]} sx={{ height: 20, flexShrink: 0 }} />
-            <Typography sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto' }} noWrap>
-              {node.name}
-            </Typography>
-            {/* R4-P0-5：节点行状态标识（全节点可见，父/叶同规则） */}
-            <StatusChip
-              status={node.status}
-              variant="soft"
-              sx={{ width: 52, justifyContent: 'center', flexShrink: 0 }}
-            />
-            {boundMs && (
-              <Chip
-                size="small"
-                variant="outlined"
-                icon={<FlagOutlinedIcon sx={{ fontSize: 13 }} />}
-                label={`${boundMs.code} ${boundMs.name}`}
-                sx={{ height: 20, flexShrink: 0 }}
-              />
-            )}
-            {/* R3-3 / B16：行内计划起止区间，去掉「开始/截止」字样省空间；逾期红 / 临期黄仅作用于截止 */}
-            {!node.startDate && !node.dueDate ? (
-              <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
-                —
-              </Typography>
-            ) : (
-              <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignItems: 'baseline' }}>
-                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  {fmtDate(node.startDate) || '—'}
-                </Typography>
-                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  →
-                </Typography>
-                <Typography
-                  variant="caption"
-                  sx={{
-                    color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
-                    fontWeight: overdue || dueSoon ? 600 : 400,
-                  }}
-                >
-                  {fmtDate(node.dueDate) || '—'}
-                  {overdue ? ' · 逾期' : dueSoon ? ' · 临期' : ''}
-                </Typography>
-              </Stack>
-            )}
-            {/* R3-5：日志聚合徽标（n=0 弱化样式，仍可点击查看空态） */}
-            <Chip
-              size="small"
-              label={`日志 ${logCount}`}
-              variant={logCount > 0 ? 'filled' : 'outlined'}
-              color={logCount > 0 ? 'primary' : 'default'}
-              sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
-              onClick={(e) => {
-                e.stopPropagation();
-                setLogDetailNode(node);
-              }}
-            />
-            {/* D04.2 反查：任务附件徽标（点击跳文档页并筛选该任务） */}
-            <Chip
-              size="small"
-              label={`附件 ${docCountByNode[node.id] ?? 0}`}
-              variant={(docCountByNode[node.id] ?? 0) > 0 ? 'filled' : 'outlined'}
-              color={(docCountByNode[node.id] ?? 0) > 0 ? 'secondary' : 'default'}
-              sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate(`${ROUTES.projectDocuments(id)}?node=${node.id}`);
-              }}
-            />
-            {/* R4-P0-4：写日志入口（页内开 ReportFormModal，不再跳转工作日志页）
-                R5-P0-3 源头拦截：仅叶子可点，父节点禁用置灰 + Tooltip 引导（AC-3.1/3.2）；
-                PermissionButton 见 disabledReason 即自动 disabled + Tooltip，无需再加 disabled / 包 span */}
-            {canWriteLog && (
-              <PermissionButton
-                action="report:write"
-                disabledReason={
-                  archived ? '项目已归档' : isLeaf ? '' : '该任务已有下级，请在具体子任务上记录工作日志'
-                }
-                size="small"
-                sx={{ height: 24, minWidth: 0, px: 1, fontSize: 12, flexShrink: 0 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setReportLockNodeId(node.id);
-                  setReportModalOpen(true);
-                }}
-              >
-                写日志
-              </PermissionButton>
-            )}
-            {node.warnings.length > 0 && (
-              <Tooltip title={node.warnings.join('；')} arrow>
-                <WarningAmberIcon sx={{ fontSize: 16, color: toneColor.warning }} />
-              </Tooltip>
-            )}
-            {/* R4-P0-5：进度条全节点渲染（父节点=子树叶子加权汇总，D1）+ 悬停百分比/状态 + 状态色调 */}
-            <Tooltip title={`${node.name} ${progress}%（${node.status}）`} arrow>
-              <Box sx={{ width: 120, flexShrink: 0 }}>
-                <ProgressBar value={progress} height={5} showLabel={false} tone={progressToneOf(node.status)} />
-              </Box>
-            </Tooltip>
-            {/* B9（R5）：全节点「估 x.x · 实 x.x 人日」只读（前端零聚合，直接用出参
-                estimateDays/effortHours/effortChildCount；父=Σ 子由服务端 decorateEffort 保证） */}
-            <Tooltip
-              title={isLeaf ? '估算 vs 累计实际工时（人日）' : `实为 Σ ${node.effortChildCount} 个子任务（由工作日志累计）`}
-              arrow
-            >
-              <Typography
-                variant="caption"
-                sx={{ color: 'text.secondary', width: 116, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}
-              >
-                估 {fmtDays(node.estimateDays)} · 实 {fmtDays(node.effortHours)}
-              </Typography>
-            </Tooltip>
-            {node.ownerName ? (
-              <UserAvatar name={node.ownerName} size={24} />
-            ) : (
-              <Typography variant="caption" color="text.secondary">
-                无负责人
-              </Typography>
-            )}
-            {editable && (
-              <Stack direction="row" spacing={0.25} sx={{ flexShrink: 0 }}>
-                <IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(node); }}>
-                  <EditOutlinedIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-                <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(node); }}>
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-                <Tooltip title={canAddChild ? '新建子节点' : '该节点下不可再建子节点（已达层级上限或必为叶子）'} arrow>
-                  <span>
-                    <IconButton
+            {isMobile ? (
+              /* 移动端（≤600px）：两行堆叠卡片，避免定宽列被 overflow-x:hidden 裁掉 */
+              <Stack direction="column" spacing={0.5} sx={{ py: 0.5, pr: 1, minWidth: 0, width: '100%' }}>
+                {/* 行1：拖拽柄 + 编码 + 类型 + 名称（可换行）+ 告警 + 操作 */}
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0, width: '100%' }}>
+                  <WbsDragHandle id={node.id} disabled={!editable} />
+                  <Typography variant="caption" sx={{ color: 'text.secondary', width: 32, flexShrink: 0 }}>
+                    {node.wbsCode}
+                  </Typography>
+                  <Chip size="small" variant="outlined" label={WBS_NODE_TYPE_LABEL[node.nodeType]} sx={{ height: 20, flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto', whiteSpace: 'normal' }}>
+                    {node.name}
+                  </Typography>
+                  {node.warnings.length > 0 && (
+                    <Tooltip title={node.warnings.join('；')} arrow>
+                      <WarningAmberIcon sx={{ fontSize: 16, color: toneColor.warning, flexShrink: 0 }} />
+                    </Tooltip>
+                  )}
+                  {editable && (
+                    <Stack direction="row" spacing={0.25} sx={{ flexShrink: 0 }}>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(node); }}>
+                        <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                      <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(node); }}>
+                        <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                      <Tooltip title={canAddChild ? '新建子节点' : '该节点下不可再建子节点（已达层级上限或必为叶子）'} arrow>
+                        <span>
+                          <IconButton size="small" disabled={!canAddChild} onClick={(e) => { e.stopPropagation(); openCreate(node.id); }}>
+                            <AddIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Stack>
+                  )}
+                </Stack>
+                {/* 行2：状态 + 里程碑 + 起止 + 日志 + 附件 + 写日志 + 进度 + 估/实 + 负责人（自动换行） */}
+                <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" sx={{ minWidth: 0, width: '100%', pl: 4 }}>
+                  <StatusChip status={node.status} variant="soft" sx={{ justifyContent: 'center', flexShrink: 0 }} />
+                  {boundMs && (
+                    <Chip
                       size="small"
-                      disabled={!canAddChild}
-                      onClick={(e) => { e.stopPropagation(); openCreate(node.id); }}
+                      variant="outlined"
+                      icon={<FlagOutlinedIcon sx={{ fontSize: 13 }} />}
+                      label={`${boundMs.code} ${boundMs.name}`}
+                      sx={{ height: 20, flexShrink: 0 }}
+                    />
+                  )}
+                  {!node.startDate && !node.dueDate ? (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
+                      —
+                    </Typography>
+                  ) : (
+                    <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignItems: 'baseline' }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                        {fmtDate(node.startDate) || '—'}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                        →
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
+                          fontWeight: overdue || dueSoon ? 600 : 400,
+                        }}
+                      >
+                        {fmtDate(node.dueDate) || '—'}
+                        {overdue ? ' · 逾期' : dueSoon ? ' · 临期' : ''}
+                      </Typography>
+                    </Stack>
+                  )}
+                  <Chip
+                    size="small"
+                    label={`日志 ${logCount}`}
+                    variant={logCount > 0 ? 'filled' : 'outlined'}
+                    color={logCount > 0 ? 'primary' : 'default'}
+                    sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLogDetailNode(node);
+                    }}
+                  />
+                  <Chip
+                    size="small"
+                    label={`附件 ${docCountByNode[node.id] ?? 0}`}
+                    variant={(docCountByNode[node.id] ?? 0) > 0 ? 'filled' : 'outlined'}
+                    color={(docCountByNode[node.id] ?? 0) > 0 ? 'secondary' : 'default'}
+                    sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`${ROUTES.projectDocuments(id)}?node=${node.id}`);
+                    }}
+                  />
+                  {canWriteLog && (
+                    <PermissionButton
+                      action="report:write"
+                      disabledReason={
+                        archived ? '项目已归档' : isLeaf ? '' : '该任务已有下级，请在具体子任务上记录工作日志'
+                      }
+                      size="small"
+                      sx={{ height: 24, minWidth: 0, px: 1, fontSize: 12, flexShrink: 0 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setReportLockNodeId(node.id);
+                        setReportModalOpen(true);
+                      }}
                     >
-                      <AddIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                      写日志
+                    </PermissionButton>
+                  )}
+                  <Tooltip title={`${node.name} ${progress}%（${node.status}）`} arrow>
+                    <Box sx={{ width: 96, flexShrink: 0 }}>
+                      <ProgressBar value={progress} height={5} showLabel={false} tone={progressToneOf(node.status)} />
+                    </Box>
+                  </Tooltip>
+                  <Tooltip
+                    title={isLeaf ? '估算 vs 累计实际工时（人日）' : `实为 Σ ${node.effortChildCount} 个子任务（由工作日志累计）`}
+                    arrow
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{ color: 'text.secondary', flexShrink: 0, whiteSpace: 'nowrap' }}
+                    >
+                      估 {fmtDays(node.estimateDays)} · 实 {fmtDays(node.effortHours)}
+                    </Typography>
+                  </Tooltip>
+                  {node.ownerName ? (
+                    <UserAvatar name={node.ownerName} size={24} />
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">
+                      无负责人
+                    </Typography>
+                  )}
+                </Stack>
               </Stack>
+            ) : (
+              /* 桌面端：保持原单行布局不变（由 WbsRowDroppable 内部 Stack 承载 isOver/isActive 高亮） */
+              <>
+                <WbsDragHandle id={node.id} disabled={!editable} />
+                <Typography variant="caption" sx={{ color: 'text.secondary', width: 38, flexShrink: 0 }}>
+                  {node.wbsCode}
+                </Typography>
+                <Chip size="small" variant="outlined" label={WBS_NODE_TYPE_LABEL[node.nodeType]} sx={{ height: 20, flexShrink: 0 }} />
+                <Typography sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto' }} noWrap>
+                  {node.name}
+                </Typography>
+                {/* R4-P0-5：节点行状态标识（全节点可见，父/叶同规则） */}
+                <StatusChip
+                  status={node.status}
+                  variant="soft"
+                  sx={{ width: 52, justifyContent: 'center', flexShrink: 0 }}
+                />
+                {boundMs && (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    icon={<FlagOutlinedIcon sx={{ fontSize: 13 }} />}
+                    label={`${boundMs.code} ${boundMs.name}`}
+                    sx={{ height: 20, flexShrink: 0 }}
+                  />
+                )}
+                {/* R3-3 / B16：行内计划起止区间，去掉「开始/截止」字样省空间；逾期红 / 临期黄仅作用于截止 */}
+                {!node.startDate && !node.dueDate ? (
+                  <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
+                    —
+                  </Typography>
+                ) : (
+                  <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignItems: 'baseline' }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                      {fmtDate(node.startDate) || '—'}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                      →
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
+                        fontWeight: overdue || dueSoon ? 600 : 400,
+                      }}
+                    >
+                      {fmtDate(node.dueDate) || '—'}
+                      {overdue ? ' · 逾期' : dueSoon ? ' · 临期' : ''}
+                    </Typography>
+                  </Stack>
+                )}
+                {/* R3-5：日志聚合徽标（n=0 弱化样式，仍可点击查看空态） */}
+                <Chip
+                  size="small"
+                  label={`日志 ${logCount}`}
+                  variant={logCount > 0 ? 'filled' : 'outlined'}
+                  color={logCount > 0 ? 'primary' : 'default'}
+                  sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setLogDetailNode(node);
+                  }}
+                />
+                {/* D04.2 反查：任务附件徽标（点击跳文档页并筛选该任务） */}
+                <Chip
+                  size="small"
+                  label={`附件 ${docCountByNode[node.id] ?? 0}`}
+                  variant={(docCountByNode[node.id] ?? 0) > 0 ? 'filled' : 'outlined'}
+                  color={(docCountByNode[node.id] ?? 0) > 0 ? 'secondary' : 'default'}
+                  sx={{ height: 20, flexShrink: 0, cursor: 'pointer' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`${ROUTES.projectDocuments(id)}?node=${node.id}`);
+                  }}
+                />
+                {/* R4-P0-4：写日志入口（页内开 ReportFormModal，不再跳转工作日志页）
+                    R5-P0-3 源头拦截：仅叶子可点，父节点禁用置灰 + Tooltip 引导（AC-3.1/3.2）；
+                    PermissionButton 见 disabledReason 即自动 disabled + Tooltip，无需再加 disabled / 包 span */}
+                {canWriteLog && (
+                  <PermissionButton
+                    action="report:write"
+                    disabledReason={
+                      archived ? '项目已归档' : isLeaf ? '' : '该任务已有下级，请在具体子任务上记录工作日志'
+                    }
+                    size="small"
+                    sx={{ height: 24, minWidth: 0, px: 1, fontSize: 12, flexShrink: 0 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setReportLockNodeId(node.id);
+                      setReportModalOpen(true);
+                    }}
+                  >
+                    写日志
+                  </PermissionButton>
+                )}
+                {node.warnings.length > 0 && (
+                  <Tooltip title={node.warnings.join('；')} arrow>
+                    <WarningAmberIcon sx={{ fontSize: 16, color: toneColor.warning }} />
+                  </Tooltip>
+                )}
+                {/* R4-P0-5：进度条全节点渲染（父节点=子树叶子加权汇总，D1）+ 悬停百分比/状态 + 状态色调 */}
+                <Tooltip title={`${node.name} ${progress}%（${node.status}）`} arrow>
+                  <Box sx={{ width: 120, flexShrink: 0 }}>
+                    <ProgressBar value={progress} height={5} showLabel={false} tone={progressToneOf(node.status)} />
+                  </Box>
+                </Tooltip>
+                {/* B9（R5）：全节点「估 x.x · 实 x.x 人日」只读（前端零聚合，直接用出参
+                    estimateDays/effortHours/effortChildCount；父=Σ 子由服务端 decorateEffort 保证） */}
+                <Tooltip
+                  title={isLeaf ? '估算 vs 累计实际工时（人日）' : `实为 Σ ${node.effortChildCount} 个子任务（由工作日志累计）`}
+                  arrow
+                >
+                  <Typography
+                    variant="caption"
+                    sx={{ color: 'text.secondary', width: 116, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}
+                  >
+                    估 {fmtDays(node.estimateDays)} · 实 {fmtDays(node.effortHours)}
+                  </Typography>
+                </Tooltip>
+                {node.ownerName ? (
+                  <UserAvatar name={node.ownerName} size={24} />
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    无负责人
+                  </Typography>
+                )}
+                {editable && (
+                  <Stack direction="row" spacing={0.25} sx={{ flexShrink: 0 }}>
+                    <IconButton size="small" onClick={(e) => { e.stopPropagation(); openEdit(node); }}>
+                      <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                    <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(node); }}>
+                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                    <Tooltip title={canAddChild ? '新建子节点' : '该节点下不可再建子节点（已达层级上限或必为叶子）'} arrow>
+                      <span>
+                        <IconButton
+                          size="small"
+                          disabled={!canAddChild}
+                          onClick={(e) => { e.stopPropagation(); openCreate(node.id); }}
+                        >
+                          <AddIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </Stack>
+                )}
+              </>
             )}
           </WbsRowDroppable>
         }

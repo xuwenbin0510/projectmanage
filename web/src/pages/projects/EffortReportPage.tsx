@@ -40,6 +40,9 @@ interface SortState {
   order: 'asc' | 'desc';
 }
 
+/** 移动端（<600px）隐藏该单元格；sm 及以上恢复为普通表格单元格（与 DataTable 的 hideBelow:'sm' 同口径） */
+const hideBelowSm = { display: { xs: 'none', sm: 'table-cell' } } as const;
+
 /** 汇总卡片（品牌青左侧竖条装饰，参考 ReportsPage SectionTitle 范式） */
 function SummaryCard(props: {
   label: string;
@@ -268,18 +271,20 @@ export function EffortReportPage(): JSX.Element {
         subtitle={`共 ${report.rows.length} 行（父 ${summary.parentCount} / 叶 ${summary.leafCount}）· 点击表头同层排序 · 父行折叠/展开 · 任务行展开看实际工时构成`}
       >
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 900 }}>
+          {/* 移动端（<600px）隐藏「里程碑 / 负责人 / 展开」三列并把最小宽度降到 480，
+              首列的展开/构成按钮仍在，功能不缺；sm 及以上完全等同改动前（minWidth 900、九列全显）。 */}
+          <Table size="small" sx={{ minWidth: { xs: 480, sm: 900 } }}>
             <TableHead>
               <TableRow sx={{ '& th': { borderBottom: `1px solid ${tokens.border.subtle}`, whiteSpace: 'nowrap' } }}>
                 <TableCell sx={{ pl: 2 }}>节点</TableCell>
-                <TableCell>里程碑</TableCell>
-                <TableCell>负责人</TableCell>
+                <TableCell sx={hideBelowSm}>里程碑</TableCell>
+                <TableCell sx={hideBelowSm}>负责人</TableCell>
                 <TableCell align="right">{sortableHeader('estimateDays', '估算人日')}</TableCell>
                 <TableCell align="right">{sortableHeader('effortHours', '累计实际工时')}</TableCell>
                 <TableCell align="right">{sortableHeader('diff', '差值')}</TableCell>
                 <TableCell align="right">{sortableHeader('diffRate', '偏差率')}</TableCell>
                 <TableCell align="right">{sortableHeader('progress', '进度')}</TableCell>
-                <TableCell align="right" sx={{ pr: 2 }}>展开</TableCell>
+                <TableCell align="right" sx={{ pr: 2, ...hideBelowSm }}>展开</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -326,7 +331,7 @@ export function EffortReportPage(): JSX.Element {
                         )}
                       </Stack>
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={hideBelowSm}>
                       {r.milestoneCode ? (
                         <Chip
                           size="small"
@@ -341,7 +346,7 @@ export function EffortReportPage(): JSX.Element {
                         </Typography>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={hideBelowSm}>
                       <Typography variant="caption">{r.ownerName || '—'}</Typography>
                     </TableCell>
                     <TableCell align="right">
@@ -375,7 +380,7 @@ export function EffortReportPage(): JSX.Element {
                         </Typography>
                       </Stack>
                     </TableCell>
-                    <TableCell align="right">
+                    <TableCell align="right" sx={hideBelowSm}>
                       <Typography variant="caption" color="text.secondary">
                         {hasChildren ? (collapsed ? '展开' : '收起') : bdOpen ? '收起' : '构成'}
                       </Typography>

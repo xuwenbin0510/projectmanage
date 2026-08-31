@@ -3341,10 +3341,6 @@ export class MockApiClient implements ApiClient {
       return a.name.localeCompare(b.name, 'zh-CN');
     });
 
-    const averageProgress = items.length
-      ? Math.round(items.reduce((n, p) => n + (Number(p.progress) || 0), 0) / items.length)
-      : 0;
-
     /* D11：门控 / 交付物 / 周报闭环聚合（输入 = 范围内项目 scopeIds，与服务端对齐） */
     const gates = (() => {
       const inScope = db.gates.filter((g) => scopeIds.has(g.projectId));
@@ -3427,7 +3423,6 @@ export class MockApiClient implements ApiClient {
         pendingReportConfirm: reportClosure.submitted,
         reportClosureConfirmed: reportClosure.confirmed,
         reportClosureRate: reportClosure.closureRate,
-        averageProgress,
       },
       statusDonut,
       health,

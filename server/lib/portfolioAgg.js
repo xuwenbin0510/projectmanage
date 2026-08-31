@@ -354,26 +354,6 @@ function aggregateOverdueDuration(tasks, todayStr) {
 }
 
 /**
- * 整体进度（0~100 整数）。
- *
- * ⚠ 口径 = `ProjectListItem.progress`（**里程碑达成率**）的算术平均，
- *   与项目详情页的「WBS 加权进度」是两个口径，UI 必须在副标题标注，
- *   否则用户会质疑「总览 62% 与详情 71% 谁对」。
- *
- * @param {Array<object>} items ProjectListItem[]
- * @returns {number}
- */
-function averageProgress(items) {
-  const list = asArray(items);
-  if (!list.length) return 0;
-  const sum = list.reduce(function (n, p) {
-    const v = Number(p && p.progress);
-    return n + (Number.isFinite(v) ? v : 0);
-  }, 0);
-  return Math.round(sum / list.length);
-}
-
-/**
  * 任务进度三段（B12 全局总览「任务进度环」数据源）。
  *
  * 输入 = 范围内**全量叶子任务（含已完成）**（与 B17 状态分布同一基数），
@@ -544,5 +524,4 @@ module.exports = {
   aggregateTaskProgress,
   aggregateTaskTimeline,
   countOverdueTasks,
-  averageProgress,
 };

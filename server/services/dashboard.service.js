@@ -411,7 +411,9 @@ function countReportFill(db, projectIds) {
     db.prepare(
       'SELECT DISTINCT project_id FROM work_reports WHERE project_id IN ('
       + placeholders(part)
-      + ") AND week = ? AND status = '已提交'",
+      /* 已交口径 = 状态机「已提交 → 已确认」任一即算已交（已确认是已提交的闭环态）；
+       * `草稿`/`已打回` 视为未交。原逻辑只认 `已提交`，会漏算已确认周报。 */
+      + ") AND week = ? AND status IN ('已提交', '已确认')",
     )
       .all(part.concat([week]))
       .forEach(function (r) { filledSet[mappers.toStr(r.project_id)] = true; });
@@ -751,9 +753,12 @@ function computeWeeklyProgress(db, projectIds) {
   chunk(activeIds, SQL_IN_CHUNK).forEach(function (part) {
     db.prepare(
       'SELECT DISTINCT project_id FROM work_reports WHERE project_id IN ('
-      + placeholders(part) + ') AND week = ? AND status = ?',
+      + placeholders(part) + ') AND week = ? AND status IN (?, ?)',
     )
-      .all(part.concat([week, '已提交']))
+      /* 已交口径 = 状态机「已提交 → 已确认」任一即算已交；
+       * 仅 `草稿`/`已打回` 视为未交（打回需重新提交）。原逻辑只认 `已提交`，
+       * 会把已确认周报误判为未提交，导致「周报动态」与「未提交清单」对不上。 */
+      .all(part.concat([week, '已提交', '已确认']))
       .forEach(function (r) { filledLastWeek[mappers.toStr(r.project_id)] = true; });
   });
   const missing = activeIds
@@ -1013,8 +1018,20 @@ function getDashboardOverview(db, query, me) {
   const projectIds = items.map(function (p) { return String(p.id); });
   /* 全量叶子（含已完成）· 同一批 wbs_nodes SELECT，零额外 SQL（B17 状态分布口径） */
   const allLeafTasks = listScopeAllLeafTasks(db, projectIds);
-  /* 在办叶子（既有口径逐字不变：所有既有聚合继续用 tasks） */
-  const tasks = allLeafTasks.filter(function (n) { return n.status !== '完成'; });
+
+  /* ⚠ 任务负责人筛选口径修正（2026-08-31）：
+   *   listScopedRows 的 owner 过滤是「项目级」（筛出含该负责人叶子任务的项目），
+   *   但下方「任务级面板」（逾期/负荷/分布/时间轴/各项目任务量）若直接吃 allLeafTasks，
+   *   会把这些项目里**他人**的任务也算进来（即用户看到的"选徐文斌却显示秦岭逾期任务"）。
+   *   故在真实叶子算完后，按任务 owner_user_id 再过滤一次；ownerId 为空（未选负责人）时不误过滤。 */
+  let ownerId = q.ownerUserId ? Number(q.ownerUserId) : null;
+  if (!ownerId && q.ownerOpenId) ownerId = mappers.resolveUserId(db, q.ownerOpenId);
+  const ownerLeafTasks = ownerId
+    ? allLeafTasks.filter(function (n) { return n.ownerUserId === ownerId; })
+    : allLeafTasks;
+
+  /* 在办叶子（既有口径逐字不变：所有既有聚合继续用 tasks）；任务级面板统一走 ownerLeafTasks */
+  const tasks = ownerLeafTasks.filter(function (n) { return n.status !== '完成'; });
 
   /* 项目名 / PM 名查表：ownerLoad 的跨项目明细与 reportMissing 共用 */
   const nameById = {};
@@ -1032,13 +1049,13 @@ function getDashboardOverview(db, query, me) {
   const overdueTasks = agg.countOverdueTasks(tasks, todayStr);
 
   /* B12 新增：任务进度环 + 任务时间轴三栏（与工作台口径逐字一致） */
-  const taskProgress = agg.aggregateTaskProgress(allLeafTasks);   // 全量叶子（含已完成）
-  const taskTimeline = agg.aggregateTaskTimeline(items, allLeafTasks, nameById, todayStr);
-  const projectTaskStats = agg.aggregateProjectTaskStats(allLeafTasks, nameById, todayStr);   // 逐项目任务量（⑤各项目任务量面板）
+  const taskProgress = agg.aggregateTaskProgress(ownerLeafTasks);   // 全量叶子（含已完成，已按负责人过滤）
+  const taskTimeline = agg.aggregateTaskTimeline(items, ownerLeafTasks, nameById, todayStr);
+  const projectTaskStats = agg.aggregateProjectTaskStats(ownerLeafTasks, nameById, todayStr);   // 逐项目任务量（⑤各项目任务量面板）
 
   /* B17 追加三张分布图（放在 overdueTasks 之后） */
   const priorityDist = agg.aggregatePriorityDist(tasks);           // 在办叶子
-  const statusDist = agg.aggregateStatusDist(allLeafTasks);        // 全量叶子（含已完成）
+  const statusDist = agg.aggregateStatusDist(ownerLeafTasks);        // 全量叶子（含已完成，已按负责人过滤）
   const overdueDuration = agg.aggregateOverdueDuration(tasks, todayStr); // 在办叶子
 
   /* 周报：只有「进行中」且「本周有未完成叶子任务计划窗口相交」的项目才需填（与工作台提醒同一口径） */
@@ -1099,7 +1116,6 @@ function getDashboardOverview(db, query, me) {
       pendingReportConfirm: reportClosure.submitted,
       reportClosureConfirmed: reportClosure.confirmed,
       reportClosureRate: reportClosure.closureRate,
-      averageProgress: agg.averageProgress(items),
     },
     statusDonut: statusDonut,
     health: health,
@@ -1157,9 +1173,15 @@ function getDashboardTasks(db, query, me) {
   const dueWindow = DUE_WINDOWS.indexOf(String((query && query.dueWindow) || '')) >= 0 ? String(query.dueWindow) : '';
 
   /* 基数：taskStatus → 全量叶子（含已完成）；否则 → 在办叶子 */
-  const base = dim.kind === 'taskStatus'
+  let base = dim.kind === 'taskStatus'
     ? listScopeAllLeafTasks(db, projectIds)
     : listScopeLeafTasks(db, projectIds);
+
+  /* 任务负责人筛选：与 getDashboardOverview 同口径——项目级过滤只收窄项目集，
+     下钻明细须再按任务 owner_user_id 过滤，避免露出同项目他人任务（2026-08-31 口径修正） */
+  let drillOwnerId = q.ownerUserId ? Number(q.ownerUserId) : null;
+  if (!drillOwnerId && q.ownerOpenId) drillOwnerId = mappers.resolveUserId(db, q.ownerOpenId);
+  if (drillOwnerId) base = base.filter(function (n) { return n.ownerUserId === drillOwnerId; });
 
   /* projectId → projectName（范围内项目名，缺失回落未命名项目） */
   const nameById = {};

@@ -338,6 +338,8 @@ export function MilestonesPage(): JSX.Element {
       ? reschedule.date.diff(dayjs(reschedule.ms.currentDate), 'day')
       : null;
 
+  /* 移动端（<600px）只保留「里程碑 / 计划日期 / 状态 / 达成 / 操作」，
+   * 目标·偏差·关联任务·文档 折到 sm 以上再显示；桌面（≥600px）列集与列宽完全不变。 */
   const columns: Array<Column<MilestoneWithGate>> = [
     {
       key: 'name',
@@ -359,6 +361,7 @@ export function MilestonesPage(): JSX.Element {
       key: 'target',
       label: '目标 / 达成标准',
       width: 200,
+      hideBelow: 'sm',
       render: (m) =>
         m.target ? (
           <Tooltip title={m.target} arrow>
@@ -382,7 +385,8 @@ export function MilestonesPage(): JSX.Element {
     {
       key: 'current',
       label: '计划日期（到期）',
-      width: 200,
+      /* 移动端（<600px）收窄到 120px，sm 及以上仍为原来的 200px */
+      width: { xs: 120, sm: 200 },
       render: (m) => {
         /* P1-M14：运行期越界标红（日期 > planEnd）。YYYY-MM-DD 定长字符串，字典序即可比较 */
         const outOfRange = Boolean(project?.planEnd) && m.currentDate > project!.planEnd;
@@ -444,6 +448,7 @@ export function MilestonesPage(): JSX.Element {
       key: 'delay',
       label: '偏差',
       width: 96,
+      hideBelow: 'sm',
       render: (m) => {
         if (m.delayDays === 0) return <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>准时</Typography>;
         const late = m.delayDays > 0;
@@ -503,6 +508,7 @@ export function MilestonesPage(): JSX.Element {
       key: 'tasks',
       label: '关联任务',
       width: 170,
+      hideBelow: 'sm',
       render: (m) =>
         m.taskStats.total === 0 ? (
           <Typography variant="caption" color="text.disabled">
@@ -555,6 +561,7 @@ export function MilestonesPage(): JSX.Element {
       key: 'docs',
       label: '文档',
       width: 90,
+      hideBelow: 'sm',
       render: (m) => {
         const n = docCountByMs[m.id] ?? 0;
         return (

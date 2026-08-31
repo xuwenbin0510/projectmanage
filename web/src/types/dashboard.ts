@@ -116,8 +116,6 @@ export interface OverviewStats {
   reportFilled: number;
   /** 本周应填报项目数（范围内 status='进行中'） */
   reportDue: number;
-  /** 整体进度 0~100（口径：里程碑达成率的算术平均） */
-  averageProgress: number;
   /** D11：范围内待确认周报数（work_reports.status='已提交'） */
   pendingReportConfirm: number;
   /** D11：范围内已确认周报数（work_reports.status='已确认'），口径对齐「我的工作台」 */

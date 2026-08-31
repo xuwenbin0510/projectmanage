@@ -72,7 +72,12 @@ export function AppLayout(): JSX.Element {
             pb: isMobile ? 9 : 3,
           }}
         >
-          <Outlet />
+          {/* 内容区统一限宽：超宽屏(>1600px)停在 1600 居中，不再满铺拉伸导致面板变形；
+              窄屏占满可用宽度并随响应式 padding 自动排布。全局统一收口，单页无需各自包裹
+              （MetricsPage 自身同款包裹保留，双 maxWidth 嵌套等价、零风险）。 */}
+          <Box sx={{ maxWidth: 1600, mx: 'auto', width: '100%' }}>
+            <Outlet />
+          </Box>
         </Box>
 
         {isMobile && (
