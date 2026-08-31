@@ -25,7 +25,11 @@ import { useToast } from '@/hooks/useToast';
 import { ApiError, ErrorCode } from '@/types/api';
 import { api, USE_MOCK } from '@/api/client';
 import { isInFeishu, hasFeishuSdk, requestAuthCode, waitSdkReady } from '@/utils/feishu';
-import { tokens } from '@/theme/tokens';
+
+/** 统一青蓝品牌色（登录/首页品牌页专用，不随全局主题变蓝） */
+const BRAND = '#6DA8AE';
+const BRAND_LIGHT = '#86C7CC';
+const BRAND_DEEP = '#2E7D87';
 
 interface LocationState {
   from?: string;
@@ -189,299 +193,370 @@ export function LoginPage(): JSX.Element {
     <Box
       sx={{
         minHeight: '100vh',
-        display: 'flex',
-        bgcolor: '#0A0E12',
+        width: '100%',
+        position: 'relative',
+        overflow: 'hidden',
         color: '#E8EAED',
+        // ① 全屏深色画布（细网格 + 双辉光，自包含无外部依赖）
+        bgcolor: '#0A0E12',
+        backgroundImage:
+          'linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px)',
+        backgroundSize: '48px 48px',
+        display: 'flex',
+        alignItems: 'stretch',
+        justifyContent: 'center',
       }}
     >
-      {/* 左侧品牌区 */}
+      {/* 辉光关键帧（纯 CSS，无外部依赖） */}
+      <style>{`
+        @keyframes glowPulse {
+          0%, 100% { opacity: 0.24; }
+          50% { opacity: 0.45; }
+        }
+      `}</style>
+
+      {/* 双辉光：角落柔和青蓝光晕，缓慢呼吸，营造科技堡垒氛围 */}
       <Box
         sx={{
-          flex: 1,
-          display: { xs: 'none', md: 'flex' },
-          flexDirection: 'column',
-          justifyContent: 'space-between',
-          p: 6,
-          background:
-            'radial-gradient(ellipse at 20% 20%, rgba(109,168,174,0.10) 0%, transparent 40%), radial-gradient(ellipse at 80% 80%, rgba(45,95,100,0.12) 0%, transparent 45%), #0A0E12',
-          borderRight: '1px solid rgba(255,255,255,0.06)',
+          position: 'absolute',
+          top: -160,
+          left: -120,
+          width: 540,
+          height: 540,
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(109,168,174,0.32) 0%, transparent 70%)',
+          filter: 'blur(32px)',
+          pointerEvents: 'none',
+          animation: 'glowPulse 8s ease-in-out infinite',
         }}
-      >
-        <Stack direction="row" spacing={2} alignItems="center">
-          <Box
-            component="img"
-            src="/logo_dark.png"
-            alt="logo"
-            sx={{
-              height: 48,
-              width: 'auto',
-              display: 'block',
-              objectFit: 'contain',
-              filter: 'drop-shadow(0 0 16px rgba(109,168,174,0.35))',
-            }}
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-          <Typography sx={{ fontSize: 26, fontWeight: 700, letterSpacing: 2, color: '#fff' }}>
-            项目管理系统
-          </Typography>
-        </Stack>
-
-        <Box sx={{ maxWidth: 560 }}>
-          <Chip
-            size="small"
-            label="COMMERCIAL PIPELINE"
-            sx={{
-              mb: 2,
-              color: tokens.brand.primary,
-              bgcolor: 'rgba(109,168,174,0.12)',
-              border: '1px solid rgba(109,168,174,0.25)',
-              fontWeight: 600,
-              letterSpacing: 1,
-            }}
-          />
-          <Typography
-            variant="h2"
-            sx={{
-              fontSize: { md: 44, lg: 52 },
-              fontWeight: 700,
-              lineHeight: 1.18,
-              mb: 2.5,
-              color: '#fff',
-            }}
-          >
-            把每一次推进，
-            <br />
-            沉淀成可信的增长证据。
-          </Typography>
-          <Typography sx={{ fontSize: 16, color: 'rgba(255,255,255,0.55)', lineHeight: 1.7, mb: 4 }}>
-            面向高客单价、长周期航天 B2B 业务的独立项目作战系统。
-            流程 · 决策 · 交付，全程可审计。
-          </Typography>
-
-          <Stack spacing={2.5}>
-            {HERO_POINTS.map((p, idx) => (
-              <Stack key={idx} direction="row" spacing={2} alignItems="center">
-                <Box
-                  sx={{
-                    width: 38,
-                    height: 38,
-                    borderRadius: 2,
-                    display: 'grid',
-                    placeItems: 'center',
-                    bgcolor: 'rgba(109,168,174,0.10)',
-                    border: '1px solid rgba(109,168,174,0.18)',
-                    color: tokens.brand.primary,
-                  }}
-                >
-                  <p.icon sx={{ fontSize: 20 }} />
-                </Box>
-                <Typography sx={{ fontSize: 14, color: 'rgba(255,255,255,0.72)' }}>{p.text}</Typography>
-              </Stack>
-            ))}
-          </Stack>
-        </Box>
-
-        <Typography sx={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }}>
-          © 2026 AstrByte Space Data. All rights reserved.
-        </Typography>
-      </Box>
-
-      {/* 右侧登录区 */}
+      />
       <Box
         sx={{
-          flex: { xs: 1, md: '0 0 480px', lg: '0 0 520px' },
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          p: { xs: 3, sm: 5 },
+          position: 'absolute',
+          bottom: -180,
+          right: -100,
+          width: 580,
+          height: 580,
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(46,125,135,0.34) 0%, transparent 70%)',
+          filter: 'blur(32px)',
+          pointerEvents: 'none',
+          animation: 'glowPulse 10s ease-in-out infinite',
+        }}
+      />
+
+      {/* ② 限宽内容壳：超宽屏不再拉伸，居中收口 */}
+      <Box
+        sx={{
           position: 'relative',
+          zIndex: 1,
+          width: '100%',
+          maxWidth: 1280,
+          mx: 'auto',
+          minHeight: '100vh',
+          display: 'flex',
         }}
       >
-        <Card
-          elevation={0}
+        {/* 左侧品牌区 */}
+        <Box
           sx={{
-            width: '100%',
-            maxWidth: 420,
-            p: { xs: 3, sm: 4 },
-            bgcolor: 'rgba(255,255,255,0.03)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            borderRadius: 3,
-            backdropFilter: 'blur(8px)',
+            flex: 1,
+            display: { xs: 'none', md: 'flex' },
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            p: 6,
+            borderRight: '1px solid rgba(255,255,255,0.06)',
           }}
         >
-          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5 }}>
-            <RocketLaunchOutlinedIcon sx={{ color: tokens.brand.primary, fontSize: 28 }} />
-            <Typography variant="h5" sx={{ fontWeight: 700, color: '#fff' }}>
-              登录系统
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Box
+              component="img"
+              src="/logo_dark.png"
+              alt="logo"
+              sx={{
+                height: 48,
+                width: 'auto',
+                display: 'block',
+                objectFit: 'contain',
+                filter: 'drop-shadow(0 0 16px rgba(109,168,174,0.35))',
+              }}
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
+            />
+            <Typography sx={{ fontSize: 26, fontWeight: 700, letterSpacing: 2, color: '#fff' }}>
+              项目管理系统
             </Typography>
           </Stack>
-          <Typography sx={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', mb: 3 }}>
-            使用企业邮箱与密码登录项目管理系统
-          </Typography>
 
-          <Stack spacing={2.5}>
-            <TextField
-              fullWidth
-              label="邮箱"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handlePasswordLogin();
-              }}
-              autoFocus
-              disabled={loading}
+          <Box sx={{ maxWidth: 560 }}>
+            <Chip
+              size="small"
+              label="COMMERCIAL PIPELINE"
               sx={{
-                '& .MuiOutlinedInput-root': {
-                  bgcolor: 'rgba(255,255,255,0.04)',
-                  '& fieldset': { borderColor: 'rgba(255,255,255,0.12)' },
-                  '&:hover fieldset': { borderColor: 'rgba(109,168,174,0.5)' },
-                  '&.Mui-focused fieldset': { borderColor: tokens.brand.primary },
-                },
-                '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.5)' },
-                '& .MuiInputBase-input': { color: '#fff' },
+                mb: 2,
+                color: BRAND,
+                bgcolor: 'rgba(109,168,174,0.12)',
+                border: '1px solid rgba(109,168,174,0.25)',
+                fontWeight: 600,
+                letterSpacing: 1,
               }}
             />
-            <TextField
-              fullWidth
-              label="密码"
-              type={showPwd ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handlePasswordLogin();
-              }}
-              disabled={loading}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      edge="end"
-                      onClick={() => setShowPwd((v) => !v)}
-                      sx={{ color: 'rgba(255,255,255,0.4)' }}
-                    >
-                      {showPwd ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
+            <Typography
+              variant="h2"
               sx={{
-                '& .MuiOutlinedInput-root': {
-                  bgcolor: 'rgba(255,255,255,0.04)',
-                  '& fieldset': { borderColor: 'rgba(255,255,255,0.12)' },
-                  '&:hover fieldset': { borderColor: 'rgba(109,168,174,0.5)' },
-                  '&.Mui-focused fieldset': { borderColor: tokens.brand.primary },
-                },
-                '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.5)' },
-                '& .MuiInputBase-input': { color: '#fff' },
-              }}
-            />
-
-            <Button
-              variant="contained"
-              size="large"
-              fullWidth
-              disabled={loading}
-              onClick={() => void handlePasswordLogin()}
-              sx={{
-                py: 1.25,
-                bgcolor: tokens.brand.primary,
-                color: '#0A0E12',
+                fontSize: { xs: 32, md: 38, lg: 50 },
                 fontWeight: 700,
-                '&:hover': { bgcolor: '#7FBAC0' },
+                lineHeight: 1.28,
+                mb: 2.5,
+                color: '#fff',
+                '& > span': { display: 'block', whiteSpace: 'nowrap' },
               }}
             >
-              {loading ? '登录中…' : '登 录'}
-            </Button>
-          </Stack>
+              <span>把每一次推进，</span>
+              <span>沉淀成可信的增长证据。</span>
+            </Typography>
+            <Typography sx={{ fontSize: 16, color: 'rgba(255,255,255,0.55)', lineHeight: 1.7, mb: 4 }}>
+              面向高客单价、长周期航天 B2B 业务的独立项目作战系统。
+              流程 · 决策 · 交付，全程可审计。
+            </Typography>
 
-          <Divider sx={{ my: 3, borderColor: 'rgba(255,255,255,0.08)' }}>
-            <Typography sx={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>或</Typography>
-          </Divider>
+            <Stack spacing={2.5}>
+              {HERO_POINTS.map((p, idx) => (
+                <Stack key={idx} direction="row" spacing={2} alignItems="center">
+                  <Box
+                    sx={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 2,
+                      display: 'grid',
+                      placeItems: 'center',
+                      bgcolor: 'rgba(109,168,174,0.10)',
+                      border: '1px solid rgba(109,168,174,0.18)',
+                      color: BRAND,
+                    }}
+                  >
+                    <p.icon sx={{ fontSize: 20 }} />
+                  </Box>
+                  <Typography sx={{ fontSize: 14, color: 'rgba(255,255,255,0.72)' }}>{p.text}</Typography>
+                </Stack>
+              ))}
+            </Stack>
+          </Box>
 
-          <Stack spacing={1.5}>
-            {!feishuChecked ? (
+          <Typography sx={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }}>
+            © 2026 AstrByte Space Data. All rights reserved.
+          </Typography>
+        </Box>
+
+        {/* 右侧登录区 */}
+        <Box
+          sx={{
+            flex: { xs: 1, md: '0 0 480px', lg: '0 0 520px' },
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            p: { xs: 3, sm: 5 },
+            position: 'relative',
+          }}
+        >
+          {/* ④ 右侧玻璃登录卡 */}
+          <Card
+            elevation={0}
+            sx={{
+              width: '100%',
+              maxWidth: 420,
+              p: { xs: 3, sm: 4 },
+              bgcolor: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(109,168,174,0.22)',
+              borderRadius: 3,
+              backdropFilter: 'blur(14px)',
+              boxShadow: '0 8px 40px rgba(0,0,0,0.45)',
+              position: 'relative',
+              overflow: 'hidden',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 3,
+                background: `linear-gradient(90deg, ${BRAND}, ${BRAND_LIGHT})`,
+              },
+            }}
+          >
+            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 0.5 }}>
+              <RocketLaunchOutlinedIcon sx={{ color: BRAND, fontSize: 28 }} />
+              <Typography variant="h5" sx={{ fontWeight: 700, color: '#fff' }}>
+                登录系统
+              </Typography>
+            </Stack>
+            <Typography sx={{ fontSize: 13, color: 'rgba(255,255,255,0.45)', mb: 3 }}>
+              使用企业邮箱与密码登录项目管理系统
+            </Typography>
+
+            <Stack spacing={2.5}>
+              <TextField
+                fullWidth
+                label="邮箱"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handlePasswordLogin();
+                }}
+                autoFocus
+                disabled={loading}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    bgcolor: 'rgba(255,255,255,0.04)',
+                    '& fieldset': { borderColor: 'rgba(255,255,255,0.12)' },
+                    '&:hover fieldset': { borderColor: 'rgba(109,168,174,0.5)' },
+                    '&.Mui-focused fieldset': { borderColor: BRAND },
+                  },
+                  '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.5)' },
+                  '& .MuiInputBase-input': { color: '#fff' },
+                }}
+              />
+              <TextField
+                fullWidth
+                label="密码"
+                type={showPwd ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handlePasswordLogin();
+                }}
+                disabled={loading}
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        edge="end"
+                        onClick={() => setShowPwd((v) => !v)}
+                        sx={{ color: 'rgba(255,255,255,0.4)' }}
+                      >
+                        {showPwd ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    bgcolor: 'rgba(255,255,255,0.04)',
+                    '& fieldset': { borderColor: 'rgba(255,255,255,0.12)' },
+                    '&:hover fieldset': { borderColor: 'rgba(109,168,174,0.5)' },
+                    '&.Mui-focused fieldset': { borderColor: BRAND },
+                  },
+                  '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.5)' },
+                  '& .MuiInputBase-input': { color: '#fff' },
+                }}
+              />
+
               <Button
-                variant="outlined"
+                variant="contained"
                 size="large"
                 fullWidth
-                disabled
+                disabled={loading}
+                onClick={() => void handlePasswordLogin()}
                 sx={{
-                  borderColor: 'rgba(255,255,255,0.12)',
-                  color: 'rgba(255,255,255,0.4)',
+                  py: 1.25,
+                  bgcolor: BRAND,
+                  color: '#0A0E12',
+                  fontWeight: 700,
+                  '&:hover': { bgcolor: BRAND_LIGHT },
                 }}
               >
-                正在检测登录环境…
+                {loading ? '登录中…' : '登 录'}
               </Button>
-            ) : feishuReady ? (
-              <>
+            </Stack>
+
+            <Divider sx={{ my: 3, borderColor: 'rgba(255,255,255,0.08)' }}>
+              <Typography sx={{ fontSize: 12, color: 'rgba(255,255,255,0.3)' }}>或</Typography>
+            </Divider>
+
+            <Stack spacing={1.5}>
+              {!feishuChecked ? (
                 <Button
                   variant="outlined"
                   size="large"
                   fullWidth
-                  disabled={feishuBusy}
-                  onClick={() => void handleFeishuLogin()}
+                  disabled
                   sx={{
-                    borderColor: tokens.brand.primary,
-                    color: '#fff',
-                    '&:hover': {
-                      borderColor: tokens.brand.primary,
-                      color: '#fff',
-                      bgcolor: 'rgba(109,168,174,0.08)',
-                    },
+                    borderColor: 'rgba(255,255,255,0.12)',
+                    color: 'rgba(255,255,255,0.4)',
                   }}
                 >
-                  {feishuBusy ? '飞书免登中…' : '使用飞书账号登录'}
+                  正在检测登录环境…
                 </Button>
-                {feishuFailed && (
+              ) : feishuReady ? (
+                <>
                   <Button
                     variant="outlined"
                     size="large"
                     fullWidth
-                    disabled={!appId}
-                    onClick={() => void handleFeishuWebLogin()}
+                    disabled={feishuBusy}
+                    onClick={() => void handleFeishuLogin()}
                     sx={{
-                      borderColor: 'rgba(255,255,255,0.15)',
-                      color: 'rgba(255,255,255,0.85)',
-                      '&:hover': { borderColor: tokens.brand.primary, color: '#fff' },
+                      borderColor: BRAND,
+                      color: '#fff',
+                      '&:hover': {
+                        borderColor: BRAND,
+                        color: '#fff',
+                        bgcolor: 'rgba(109,168,174,0.08)',
+                      },
                     }}
                   >
-                    {appId ? '免登失败，改用浏览器登录' : '飞书 Web 登录未启用'}
+                    {feishuBusy ? '飞书免登中…' : '使用飞书账号登录'}
                   </Button>
-                )}
-              </>
-            ) : (
-              <Button
-                variant="outlined"
-                size="large"
-                fullWidth
-                disabled={!appId}
-                onClick={() => void handleFeishuWebLogin()}
-                sx={{
-                  borderColor: 'rgba(255,255,255,0.15)',
-                  color: 'rgba(255,255,255,0.85)',
-                  '&:hover': { borderColor: tokens.brand.primary, color: '#fff' },
-                }}
-              >
-                {appId ? '使用飞书账号登录（浏览器）' : '飞书 Web 登录未启用'}
-              </Button>
+                  {feishuFailed && (
+                    <Button
+                      variant="outlined"
+                      size="large"
+                      fullWidth
+                      disabled={!appId}
+                      onClick={() => void handleFeishuWebLogin()}
+                      sx={{
+                        borderColor: 'rgba(255,255,255,0.15)',
+                        color: 'rgba(255,255,255,0.85)',
+                        '&:hover': { borderColor: BRAND, color: '#fff' },
+                      }}
+                    >
+                      {appId ? '免登失败，改用浏览器登录' : '飞书 Web 登录未启用'}
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <Button
+                  variant="outlined"
+                  size="large"
+                  fullWidth
+                  disabled={!appId}
+                  onClick={() => void handleFeishuWebLogin()}
+                  sx={{
+                    borderColor: 'rgba(255,255,255,0.15)',
+                    color: 'rgba(255,255,255,0.85)',
+                    '&:hover': { borderColor: BRAND, color: '#fff' },
+                  }}
+                >
+                  {appId ? '使用飞书账号登录（浏览器）' : '飞书 Web 登录未启用'}
+                </Button>
+              )}
+            </Stack>
+
+            {!appId && !feishuReady && (
+              <Typography variant="caption" sx={{ display: 'block', mt: 2, color: 'rgba(255,255,255,0.35)' }}>
+                未配置飞书凭证时，请使用邮箱密码登录。首次登录默认密码为 AstrBytes@2026，登录后请立即修改。
+              </Typography>
             )}
-          </Stack>
 
-          {!appId && !feishuReady && (
-            <Typography variant="caption" sx={{ display: 'block', mt: 2, color: 'rgba(255,255,255,0.35)' }}>
-              未配置飞书凭证时，请使用邮箱密码登录。首次登录默认密码为 AstrBytes@2026，登录后请立即修改。
-            </Typography>
-          )}
-
-          {USE_MOCK && (
-            <Typography variant="caption" sx={{ display: 'block', mt: 2, color: tokens.brand.primary }}>
-              当前为 Mock 模式，仅用于本地演示。
-            </Typography>
-          )}
-        </Card>
+            {USE_MOCK && (
+              <Typography variant="caption" sx={{ display: 'block', mt: 2, color: BRAND }}>
+                当前为 Mock 模式，仅用于本地演示。
+              </Typography>
+            )}
+          </Card>
+        </Box>
       </Box>
     </Box>
   );
