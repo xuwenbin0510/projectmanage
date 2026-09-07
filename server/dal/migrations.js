@@ -1714,6 +1714,29 @@ function migrationV26(db) {
   console.log('[migrations] v26 历史表 open_id 与 users 重新对齐，校正 %d 行（幂等）', fixed);
 }
 
+/* ── 迁移 v27：progress_snapshots 加 source 列（D03 · 到点快照架构） ── */
+
+/**
+ * v27 = `progress_snapshots` 增加 `source` 列，区分快照来源。
+ *
+ * D03 快照采集从「周报提交触发」升级为「到点定时 + 启动补偿」架构后，
+ * 同一周的快照可能来自三种通道，环比口径需要区分对待：
+ *  - `report`    ：周报提交时采集（原唯一通道，存量行全部回填此值）；
+ *  - `scheduled` ：每周一 00:10 定时器对刚结束周的全项目全量采集（最接近周末真值）；
+ *  - `backfill`  ：服务启动补偿——发现某项目该周无快照时补拍（晚于周界，状态非周末真值，
+ *                  前端环比面板需标注「补拍基准」提示）。
+ *
+ * 幂等：hasColumn 判重，已存在则零副作用。
+ *
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrationV27(db) {
+  if (!tableExists(db, 'progress_snapshots')) return;
+  if (hasColumn(db, 'progress_snapshots', 'source')) return;
+  db.exec("ALTER TABLE progress_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'report'");
+  console.log('[migrations] v27 progress_snapshots 加 source 列（report/scheduled/backfill，D03 到点快照）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1747,6 +1770,7 @@ const MIGRATIONS = [
   { version: 24, name: 'connect-v24-user-id-columns', up: migrationV24 },
   { version: 25, name: 'connect-v25-admin-config-actions', up: migrationV25 },
   { version: 26, name: 'connect-v26-openid-realign', up: migrationV26 },
+  { version: 27, name: 'connect-v27-snapshot-source', up: migrationV27 },
 ];
 
 /**

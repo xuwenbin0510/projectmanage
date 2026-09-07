@@ -13,9 +13,10 @@ const path = require('path');
 const express = require('express');
 
 const cfg = require('./config');           // ① 配置硬校验（可能 process.exit(1)）
-require('./db');                           // ② 连接 + 迁移 + 播种（副作用导入）
+const db = require('./db');                // ② 连接 + 迁移 + 播种（副作用导入）
 const apiRoutes = require('./server/routes/index.routes');
 const { errorMiddleware } = require('./server/lib/envelope');
+const { initSnapshotScheduler } = require('./server/services/snapshotScheduler');
 
 const app = express();
 
@@ -53,6 +54,8 @@ const server = app.listen(cfg.PORT, '0.0.0.0', function onListen() {
   console.log('[PM] 飞书凭证: ' + (cfg.FEISHU_APP_ID ? '已配置' : '未配置'));
   console.log('[PM] 免密登录(ALLOW_DEV_LOGIN): ' + (cfg.ALLOW_DEV_LOGIN ? '开启' : '关闭'));
   if (typeof apiRoutes.warnDeprecated === 'function') apiRoutes.warnDeprecated();
+  /* D03 到点快照：启动补偿（上周/前周缺失项目补拍）+ 每周一 00:10 定时全量快照 */
+  initSnapshotScheduler(db);
 });
 
 /* 优雅退出：容器滚动更新时不要吞掉在途请求 */

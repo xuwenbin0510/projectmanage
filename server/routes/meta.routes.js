@@ -119,4 +119,34 @@ router.get(
   }),
 );
 
+/**
+ * GET /api/meta/roles —— 职位目录（仅登录可读，供新建项目 / 管理成员等下拉选择）。
+ *
+ * 与 admin 职位管理写接口（`/api/admin/roles`，需 admin:user:role）刻意分离：
+ * 此处只读、不要求管理员权限，避免非管理员在「团队组建 / 管理成员」时因拿不到可选角色而列表为空。
+ * 实际成员增删改仍由 `/projects/:id/members` 的 `project:member:assign` 把关，安全性不降级。
+ * 仅返回已启用职位（下拉无需展示禁用项）；排序与 `roles` 表 order_no 一致。
+ */
+router.get(
+  '/meta/roles',
+  requireAuth,
+  asyncHandler(async function getMetaRoles(req, res) {
+    const rows = db.prepare('SELECT * FROM roles WHERE enabled = 1 ORDER BY order_no ASC, role_key ASC').all();
+    res.json(
+      ok(
+        rows.map(function (r) {
+          return {
+            roleKey: r.role_key,
+            name: r.name,
+            scope: r.scope,
+            enabled: Number(r.enabled) === 1,
+            description: r.description,
+            orderNo: Number(r.order_no) || 0,
+          };
+        }),
+      ),
+    );
+  }),
+);
+
 module.exports = router;

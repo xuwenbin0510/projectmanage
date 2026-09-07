@@ -661,8 +661,9 @@ function countReportClosureItems(db, projectIds, nameById) {
  * 三个维度，全部基于「**上周**（上一自然 ISO 周 · 周一~周日）」范围——周一开周例会回顾的是
  * 上一个完整周的主要进展，周报 `week` 字段即按周码存储，天然匹配：
  *  ① 周报动态：范围内项目上周（`week = 上周周码`）的周报，按提交/更新时间倒序。
- *  ② 上周任务进展：范围内叶子任务（`node_type='task'`）中 `updated_at` 落在
- *     [上周一 00:00, 本周一 00:00) 者，含「仅进度更新」与「已完成」两类（完成态置 `done:true` 高亮）。
+ *  ② 上周任务更新情况：范围内叶子任务（`node_type='task'`）中 `updated_at` 落在
+ *     [上周一 00:00, 本周一 00:00) 者。**任何属性变更**（进度/状态/名称/责任人等）都会刷新
+ *     updated_at，故此列表是「更新了什么任务」而非「推进了多少进度」；完成态置 `done:true` 高亮。
  *  ③ 上周达成里程碑：范围内里程碑 `done_at（YYYY-MM-DD）` 落在上周区间者。
  *
  * 与全局总览同源同口径：scope / 过滤 / 决策 ⑥ 已通过 `projectIds` 传入（调用方已算好范围），
@@ -768,7 +769,8 @@ function computeWeeklyProgress(db, projectIds) {
     })
     .sort(function (a, b) { return agg.compareText(a.projectName, b.projectName); });
 
-  /* ② 上周任务进展：**真叶子**（leafNodesOf，含已完成）且 updated_at 落在 [上周一, 本周一)。
+  /* ② 上周任务更新情况：**真叶子**（leafNodesOf，含已完成）且 updated_at 落在 [上周一, 本周一)。
+     注意 updated_at 是「任何属性变更」口径（进度/状态/名称/责任人/日期……），不限进度调整；
      不用 `node_type='task'` 直滤——父节点 node_type 也是 task（实测 9 个有子父任务），会混入汇总行；
      `collectScopeLeafTasks` 复用总览同款全量拉取 + 项目分组判叶子，口径与看板卡片一致。 */
   const tasks = collectScopeLeafTasks(db, ids, true)
@@ -813,13 +815,16 @@ function computeWeeklyProgress(db, projectIds) {
       });
   });
 
-  /* ④ D03 任务进度环比：上周 vs 前周全量快照（progress_snapshots，周报提交时采集） */
+  /* ④ D03 任务进度环比：上周 vs 前周全量快照（progress_snapshots，周报提交时采集）
+     2026-09 改进：① 不再截断 50 条，全量返回（前端滚动展示）；② added 细分
+     「真新增」（任务创建于上周一及以后）与「首次纳入快照」（任务早于上周一、
+     仅因前周无快照——快照功能上线过渡期产物），避免新增虚高误导。 */
   const prevWeek = dates.weekCode(dates.addDays(dates.today(), -14));
   const snapByWeek = function (wk) {
-    const map = {}; // objectId -> {progress, status, wbsCode, name, projectId}
+    const map = {}; // objectId -> {progress, status, wbsCode, name, projectId, createdAt}
     chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
       db.prepare(
-        'SELECT s.object_id, s.progress, s.status, n.wbs_code, n.name, n.project_id '
+        'SELECT s.object_id, s.progress, s.status, n.wbs_code, n.name, n.project_id, n.created_at '
         + 'FROM progress_snapshots s JOIN wbs_nodes n ON n.id = s.object_id '
         + 'WHERE s.project_id IN (' + placeholders(part) + ") AND s.object_type = 'task' AND s.week = ?",
       )
@@ -831,6 +836,7 @@ function computeWeeklyProgress(db, projectIds) {
             wbsCode: mappers.toStr(r.wbs_code),
             name: mappers.toStr(r.name),
             projectId: mappers.toStr(r.project_id),
+            createdAt: mappers.toStr(r.created_at),
           };
         });
     });
@@ -848,27 +854,57 @@ function computeWeeklyProgress(db, projectIds) {
     const progress = ls.progress;
     const delta = added ? 0 : progress - prevProgress;
     if (!added && delta === 0) return; // 只看有实质变化的（新增 / 推进 / 回退 / 完成）
+    /* 真新增：创建日期 ≥ 上周一（created_at 前 10 位 'YYYY-MM-DD' 与 lastStart 同构可直接比较）；
+       前周无快照但创建更早 = 首次纳入快照（历史任务，非真新增） */
+    const createdDate = (ls.createdAt || '').slice(0, 10);
+    const newTask = added && !!createdDate && createdDate >= lastStart;
     deltaTasks.push({
       nodeId: objectId,
       wbsCode: ls.wbsCode,
       name: ls.name,
       projectId: ls.projectId,
       projectName: projName[ls.projectId] || agg.UNNAMED_PROJECT,
-      prevProgress: prevProgress, // -1 = 前周无快照（新增任务）
+      prevProgress: prevProgress, // -1 = 前周无快照（新增/纳入任务）
       progress: progress,
       delta: delta,
       done: ls.status === '完成' || progress >= 100,
       added: added,
+      newTask: newTask,
     });
   });
   deltaTasks.sort(function (a, b) { return b.delta - a.delta; });
+
+  /* 补拍基准元数据：该周快照里 source='backfill' 的项目（启动补偿补拍，
+     状态非周末真值），前端环比面板据此标注「补拍基准」提示。 */
+  const backfilledProjectsOf = function (wk) {
+    const names = [];
+    chunk(ids, SQL_IN_CHUNK).forEach(function (part) {
+      db.prepare(
+        "SELECT DISTINCT s.project_id FROM progress_snapshots s "
+        + 'WHERE s.project_id IN (' + placeholders(part) + ") AND s.week = ? AND s.source = 'backfill'",
+      )
+        .all(part.concat([wk]))
+        .forEach(function (r) {
+          const pid = mappers.toStr(r.project_id);
+          const nm = projName[pid];
+          if (nm && names.indexOf(nm) === -1) names.push(nm);
+        });
+    });
+    return names;
+  };
+
   const delta = {
     prevWeek: prevWeek,
-    tasks: deltaTasks.slice(0, 50),
+    tasks: deltaTasks, // 全量返回，不做 50 条截断（前端滚动展示）
     advancedCount: deltaTasks.filter(function (t) { return t.delta > 0; }).length,
     completedCount: deltaTasks.filter(function (t) { return t.done; }).length,
-    addedCount: deltaTasks.filter(function (t) { return t.added; }).length,
+    addedCount: deltaTasks.filter(function (t) { return t.added && t.newTask; }).length,
+    backfillCount: deltaTasks.filter(function (t) { return t.added && !t.newTask; }).length,
     netPoints: deltaTasks.reduce(function (s, t) { return s + (t.delta > 0 ? t.delta : 0); }, 0),
+    snapshotMeta: {
+      prevWeek: { week: prevWeek, backfilledProjects: backfilledProjectsOf(prevWeek) },
+      lastWeek: { week: week, backfilledProjects: backfilledProjectsOf(week) },
+    },
   };
 
   /* ⑤ D03 里程碑双周对比：done_at 落在 [前周一, 前周日] 的达成数（上周达成 = milestones.length） */

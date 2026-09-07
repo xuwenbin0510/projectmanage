@@ -15,7 +15,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@': new URL('./src', import.meta.url).pathname,
+      // 项目位于含非 ASCII（中文）字符的目录时，URL.pathname 返回百分号编码路径，
+      // 会导致 Vite 解析 @ 别名下的文件 ENOENT。用 decodeURIComponent 还原真实路径。
+      '@': decodeURIComponent(new URL('./src', import.meta.url).pathname),
     },
   },
   server: {

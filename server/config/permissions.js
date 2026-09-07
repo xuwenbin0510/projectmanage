@@ -17,7 +17,6 @@
  *   它**不再是判定数据源**——改权限请改数据库，不要改这个常量。
  */
 
-const { isGlobalRole } = require('../services/roleCatalog');
 const permissionCatalog = require('../services/permissionCatalog');
 
 /**
@@ -133,9 +132,13 @@ function canDo(globalRoles, action, projectRoles) {
   // rule 形状保持 {roles: string[]}，其余 5 步（admin 短路 / scope / 项目内）逐字不变。
   const rule = permissionCatalog.rolesFor(key);
   if (!rule) return false;
-  // 跨项目效力：仅真正 scope=global 的角色（由 roles 表决定，非写死）享有跨项目权力
+  // 跨项目效力：globalRoles 来自 users.global_role / user_roles（职位目录授予），
+  // 职位身份持有的角色命中矩阵即跨项目生效。不再要求 isGlobalRole——pm/sale 等
+  // scope=project 的角色作为「职位」授予时同样应跨项目生效，否则 project:create
+  // 等无项目上下文的 action 对这些职位永远 E_FORBIDDEN（鸡生蛋）。Bugfix 2026-09-07。
+  // scope=project 的「仅项目内」约束仍由下方 projectRoles（project_members）路径承担。
   const cross = list.some(function (g) {
-    return isGlobalRole(g) && rule.roles.indexOf(g) >= 0;
+    return rule.roles.indexOf(g) >= 0;
   });
   if (cross) return true;
   // 项目内效力：项目成员角色命中即可（项目成员天然是 project scope）
