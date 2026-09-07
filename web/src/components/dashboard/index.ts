@@ -42,6 +42,8 @@ export { ReportClosureDrawer } from './ReportClosureDrawer';
 export type { ReportClosureDrawerProps } from './ReportClosureDrawer';
 export { ReportClosureListDrawer } from './ReportClosureListDrawer';
 export type { ReportClosureListDrawerProps } from './ReportClosureListDrawer';
+export { MilestoneDueDrawer } from './MilestoneDueDrawer';
+export type { MilestoneDueDrawerProps, MilestoneDueItem } from './MilestoneDueDrawer';
 export { TaskTimeRow } from './TaskTimeRow';
 export type { TaskTimeRowProps } from './TaskTimeRow';
 export { ProjectTaskCountPanel } from './ProjectTaskCountPanel';

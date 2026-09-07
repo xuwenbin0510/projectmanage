@@ -6,7 +6,7 @@
  * 在运行时自动判定（mock 模式读 roles-catalog，真实模式读后端 roles 表）。
  */
 import type { RoleKey } from '@/types/project';
-import { isGlobalRole, isProjectRole } from './roles-catalog';
+import { isProjectRole } from './roles-catalog';
 
 export interface PermRule {
   /** 允许的角色（不区分 global/project，由 scope 决定跨项目效力） */
@@ -116,8 +116,10 @@ export function canDo(
   if (list.includes('admin')) return true;
   const ruleRoles = rolesFor(action);
   if (!ruleRoles.length) return false;
-  // 全局职位：仅 scope=global 的角色跨项目生效
-  if (list.some((g) => isGlobalRole(g) && ruleRoles.includes(g as RoleKey))) return true;
+  // 全局职位（users.global_role / user_roles，职位目录授予）：以职位身份持有的角色命中矩阵即跨项目生效。
+  // 不再要求 isGlobalRole——pm/sale 等 scope=project 的角色作为「职位」授予时同样应跨项目生效，
+  // 否则「新建项目」等无项目上下文的 action 对这些职位永远 false（鸡生蛋）。Bugfix 2026-09-07。
+  if (list.some((g) => ruleRoles.includes(g as RoleKey))) return true;
   // 项目角色：命中即项目内生效（scope=project 的角色仅在本项目内）
   return projectRoles.some((r) => isProjectRole(r) && ruleRoles.includes(r as RoleKey));
 }

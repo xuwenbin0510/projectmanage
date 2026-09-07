@@ -125,8 +125,11 @@ export function ChangesPage(): JSX.Element {
       .then((r) => {
         if (!cancelled) setRoute(r);
       })
-      .catch(() => {
-        if (!cancelled) setRoute(null);
+      .catch((e) => {
+        if (!cancelled) {
+          setRoute(null);
+          toast.warning('流转路径预检失败，请检查变更参数或稍后重试');
+        }
       });
     return () => {
       cancelled = true;

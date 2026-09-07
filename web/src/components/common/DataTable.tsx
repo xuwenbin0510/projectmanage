@@ -80,10 +80,13 @@ export function DataTable<T>({
   if (loading) return <LoadingState variant="skeleton" rows={5} height={44} />;
   if (!rows.length) return <EmptyState title={emptyTitle} description={emptyDescription} dense />;
 
+  const isFixed = tableLayout === 'fixed';
+
   return (
     <Box>
       <TableContainer sx={{ overflowX: 'auto', width: '100%' }}>
-        <Table size={dense ? 'small' : 'medium'} sx={{ tableLayout, minWidth: 'max-content' }}>
+        {/* fixed：列宽按 width 比例伸缩铺满容器，故不设 max-content 下限；auto：保持既有行为 */}
+        <Table size={dense ? 'small' : 'medium'} sx={{ tableLayout, minWidth: isFixed ? undefined : 'max-content' }}>
           <TableHead>
             <TableRow>
               {columns.map((c) => (
@@ -92,7 +95,7 @@ export function DataTable<T>({
                   align={c.align ?? 'left'}
                   sx={{
                     width: c.width,
-                    maxWidth: c.width,
+                    maxWidth: isFixed ? undefined : c.width,
                     whiteSpace: 'nowrap',
                     overflow: c.width ? 'hidden' : undefined,
                     textOverflow: c.width ? 'ellipsis' : undefined,
@@ -118,7 +121,7 @@ export function DataTable<T>({
                     align={c.align ?? 'left'}
                     sx={{
                       width: c.width,
-                      maxWidth: c.width,
+                      maxWidth: isFixed ? undefined : c.width,
                       whiteSpace: 'nowrap',
                       overflow: c.width ? 'hidden' : undefined,
                       textOverflow: c.width ? 'ellipsis' : undefined,

@@ -173,7 +173,11 @@ export function ReportsPage(): JSX.Element {
     void api
       .listPendingConfirmation()
       .then((list) => setConfirmableIds(new Set(list.map((p) => p.id))))
-      .catch(() => setConfirmableIds(new Set()))
+      .catch((e) => {
+        // 确认名单加载失败退化为空集合（无「待确认」标记），但必须让用户知道原因
+        setConfirmableIds(new Set());
+        toast.error(e, '待确认周报列表加载失败，确认标记可能不完整');
+      })
       .finally(() => setConfirmableLoading(false));
   }, []);
 

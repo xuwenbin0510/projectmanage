@@ -289,8 +289,11 @@ export function BoardPage(): JSX.Element {
         });
         setMilestoneNames(map);
       })
-      .catch(() => {
-        if (alive) setMilestoneNames({});
+      .catch((e) => {
+        if (alive) {
+          setMilestoneNames({});
+          toast.warning('里程碑信息加载失败，看板列头将不显示里程碑编号');
+        }
       });
     return () => {
       alive = false;

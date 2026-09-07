@@ -324,24 +324,41 @@ export interface TaskDeltaItem {
   delta: number;
   /** 上周快照已达成完成（status=完成 或 progress=100） */
   done: boolean;
-  /** 前周无快照（上周新出现/新分配的任务） */
+  /** 前周无快照（上周才出现：真新增 或 首次纳入快照，见 newTask） */
   added: boolean;
+  /** 真新增 = 任务创建于上周一及以后；false = 创建更早、仅因前周无快照而首次纳入（上线过渡期产物） */
+  newTask: boolean;
+}
+
+/** 单周快照元数据（D03 · 到点快照架构） */
+export interface SnapshotWeekMeta {
+  /** 周码 'YYYY-Www' */
+  week: string;
+  /** 该周快照为启动补偿补拍（source='backfill'，状态非周末真值）的项目名列表 */
+  backfilledProjects: string[];
 }
 
 /** 任务进度环比聚合（D03） */
 export interface TaskDeltaSummary {
   /** 前周周码 'YYYY-Www' */
   prevWeek: string;
-  /** 有变化的任务（推进/完成/新增/回退），按 delta 降序，最多 50 条 */
+  /** 有变化的任务（推进/完成/新增/纳入/回退），按 delta 降序，全量返回（前端滚动展示） */
   tasks: TaskDeltaItem[];
   /** 推进任务数（delta > 0） */
   advancedCount: number;
   /** 完成数 */
   completedCount: number;
-  /** 新增任务数 */
+  /** 真新增任务数（前周无快照且创建于上周一及以后） */
   addedCount: number;
+  /** 首次纳入快照数（前周无快照但任务创建早于上周一——快照上线过渡期产物） */
+  backfillCount: number;
   /** 净增百分点（Σ 正向 delta） */
   netPoints: number;
+  /** 快照元数据：两周各自的补拍基准项目（到点快照架构下的透明化提示） */
+  snapshotMeta: {
+    prevWeek: SnapshotWeekMeta;
+    lastWeek: SnapshotWeekMeta;
+  };
 }
 
 /** 里程碑双周对比（D03 · done_at 口径，无需快照） */
@@ -414,7 +431,7 @@ export interface WeeklyProgress {
   week: string;
   /** 周报动态列表（提交/更新倒序） */
   reports: WeeklyReportItem[];
-  /** 上周任务进展列表（updated_at 倒序；完成后置 done=true） */
+  /** 上周任务更新列表（updated_at 倒序；任何属性变更都会进入，完成后置 done=true） */
   tasks: TaskUpdatedItem[];
   /** 上周达成里程碑列表（done_at 倒序） */
   milestones: MilestoneAchievedItem[];

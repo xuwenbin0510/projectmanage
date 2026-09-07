@@ -3,7 +3,8 @@
  *
  * 挂载在全局总览（/metrics）图表区之后、项目明细表之前，突出**上周**（上一自然 ISO 周）的项目动态：
  *  ① 周报动态   —— 范围内项目上周（week=上周周码）的周报（含草稿），D02 起展开勾选任务进度明细（before→after）
- *  ② 上周任务进展 —— 上周 updated_at 落在上周区间内的叶子任务（进度更新 + 已完成均列，完成高亮；点击跳项目 WBS）
+ *  ② 上周任务更新情况 —— 上周 updated_at 落在上周区间内的叶子任务（**任何属性变更**都会刷新
+ *     updated_at：进度 / 状态 / 名称 / 责任人等，不限进度调整；完成高亮；点击跳项目 WBS）
  *  ③ 上周达成里程碑 —— 上周 done_at 落在区间内的里程碑（点击跳项目里程碑页）
  * D03 新增：任务进度环比区块（上周 vs 前周全量快照，推进/完成/新增/回退）+ 里程碑双周达成对比。
  * 顶部警示条：D02 上周未提交周报的进行中项目（周例会跟进补交）。
@@ -15,7 +16,7 @@
  * @prd D01 / D02 / D03
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -26,7 +27,9 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  MenuItem,
   Stack,
+  TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -39,11 +42,13 @@ import { useNavigate } from 'react-router-dom';
 import { SectionCard, StatusChip, EmptyState } from '@/components/common';
 import { ROUTES } from '@/config/routes';
 import { api } from '@/api/client';
+import { useToast } from '@/hooks';
 import { fmtDate, fmtDateTime, fmtShort, shiftWeek, weekCode, weekRange } from '@/utils/date';
 import type { Report } from '@/types/report';
 import type {
   MilestoneAchievedItem,
   TaskDeltaItem,
+  TaskDeltaSummary,
   TaskUpdatedItem,
   WeeklyProgress,
   WeeklyReportItem,
@@ -202,7 +207,7 @@ function ReportRow({ r, onOpen }: { r: WeeklyReportItem; onOpen: (r: WeeklyRepor
   );
 }
 
-/* ── 上周任务进展行 ─────────────────────────────────── */
+/* ── 上周任务更新情况行 ─────────────────────────────── */
 function TaskRow({ t }: { t: TaskUpdatedItem }): JSX.Element {
   const navigate = useNavigate();
   return (
@@ -333,7 +338,7 @@ function DeltaRow({ t }: { t: TaskDeltaItem }): JSX.Element {
             color: t.done ? 'success.main' : up ? 'primary.main' : down ? 'error.main' : 'text.secondary',
           }}
         >
-          {t.added ? '新增' : `${up ? '+' : ''}${t.delta}%`}
+          {t.added ? (t.newTask ? '新增' : '首次纳入') : `${up ? '+' : ''}${t.delta}%`}
         </Typography>
       </Stack>
     </Box>
@@ -478,14 +483,54 @@ function ReportDetailDialog({
   );
 }
 
+/* ── D03 补拍基准提示（到点快照架构） ───────────────── */
+function BackfillMetaHint({ meta }: { meta?: TaskDeltaSummary['snapshotMeta'] }): JSX.Element | null {
+  if (!meta) return null;
+  const parts: string[] = [];
+  (['prevWeek', 'lastWeek'] as const).forEach((k) => {
+    const m = meta[k];
+    if (m && m.backfilledProjects.length > 0) {
+      const shown = m.backfilledProjects.slice(0, 5).join('、');
+      const more = m.backfilledProjects.length > 5 ? ` 等 ${m.backfilledProjects.length} 个项目` : '';
+      parts.push(`${m.week} 基准为补拍（${shown}${more}）`);
+    }
+  });
+  if (parts.length === 0) return null;
+  return (
+    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+      补拍基准提示（服务停机跨过周一采集点，补偿快照为启动时刻状态、非周末真值）：{parts.join('；')}
+    </Typography>
+  );
+}
+
 /* ── 主组件 ─────────────────────────────────────────── */
 export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps): JSX.Element {
   const navigate = useNavigate();
+  const toast = useToast();
 
   /* D03.1 周报下钻：点击周报卡片 → 拉完整周报弹窗展示 */
   const [detailItem, setDetailItem] = useState<WeeklyReportItem | null>(null);
   const [detailReport, setDetailReport] = useState<Report | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  /* 按项目筛选（前端过滤：各条目均带 projectId/projectName，无需后端配合） */
+  const [projectFilter, setProjectFilter] = useState<string>('');
+
+  /* 可选项目 = 数据中出现过的项目并集（周报/任务更新/里程碑/环比/未提交），按名称排序 */
+  const projectOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    const put = (id: string | undefined, name: string | undefined): void => {
+      if (id && name && !map.has(id)) map.set(id, name);
+    };
+    (data?.reports ?? []).forEach((r) => put(r.projectId, r.projectName));
+    (data?.tasks ?? []).forEach((t) => put(t.projectId, t.projectName));
+    (data?.milestones ?? []).forEach((m) => put(m.projectId, m.projectName));
+    (data?.missing ?? []).forEach((m) => put(m.projectId, m.projectName));
+    (data?.delta?.tasks ?? []).forEach((t) => put(t.projectId, t.projectName));
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+  }, [data]);
+
   const openReportDetail = async (r: WeeklyReportItem): Promise<void> => {
     setDetailItem(r);
     setDetailReport(null);
@@ -494,8 +539,9 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
       const list = await api.listReports(r.projectId);
       const found = list.find((x) => x.id === r.id) ?? null;
       setDetailReport(found);
-    } catch {
+    } catch (e) {
       setDetailReport(null);
+      toast.error(e, '周报详情加载失败，请稍后重试');
     } finally {
       setDetailLoading(false);
     }
@@ -518,14 +564,61 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
     return `上周（${code} · ${fmtDate(start)} ~ ${fmtDate(end)}）`;
   })();
 
-  const reports = data?.reports ?? [];
-  const tasks = data?.tasks ?? [];
-  const milestones = data?.milestones ?? [];
+  /* 按项目过滤后的子面板数据（projectFilter = '' 表示全部） */
+  const inScope = (pid: string): boolean => !projectFilter || pid === projectFilter;
+  const reports = (data?.reports ?? []).filter((r) => inScope(r.projectId));
+  const tasks = (data?.tasks ?? []).filter((t) => inScope(t.projectId));
+  const milestones = (data?.milestones ?? []).filter((m) => inScope(m.projectId));
+  /* 未提交周报警示保持全局口径，不随项目筛选——合规跟进属于整体视角，
+     筛选到单项目时不应隐藏其他项目的缺口（否则督促补交的作用失效）；
+     选中项目恰在缺口名单中时高亮其 Chip（见下方渲染处） */
   const missing = data?.missing ?? [];
+  /* 环比：任务按项目过滤 + 汇总数字联动重算（snapshotMeta 为全局采集口径，保持原样）。
+     注意：这里必须用普通计算而非 useMemo——本组件在 loading 态有提前 return，
+     若在其后再挂 hook 会违反 hooks 顺序规则导致白屏（2026-09-07 实测教训）。 */
+  const delta = (() => {
+    const d = data?.delta;
+    if (!d) return undefined;
+    const ft = d.tasks.filter((t) => !projectFilter || t.projectId === projectFilter);
+    return {
+      ...d,
+      tasks: ft,
+      advancedCount: ft.filter((t) => t.delta > 0).length,
+      completedCount: ft.filter((t) => t.done).length,
+      addedCount: ft.filter((t) => t.added && t.newTask).length,
+      backfillCount: ft.filter((t) => t.added && !t.newTask).length,
+      netPoints: ft.reduce((s, t) => s + (t.delta > 0 ? t.delta : 0), 0),
+    };
+  })();
   const allEmpty = reports.length === 0 && tasks.length === 0 && milestones.length === 0;
 
   return (
-    <SectionCard title="上周工作进展" subtitle={weekLabel} sx={{ mb: 2 }}>
+    <SectionCard
+      title="上周工作进展"
+      subtitle={weekLabel}
+      sx={{ mb: 2 }}
+      /* 按项目筛选上移至标题行右侧 actions 槽位：与标题同基线、有分隔线锚定，不再孤悬内容区。
+         作用于周报动态/任务更新情况/里程碑/环比四个子面板（未提交周报警示保持全局口径） */
+      actions={
+        projectOptions.length > 1 ? (
+          <TextField
+            select
+            size="small"
+            label="按项目筛选"
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+            sx={{ minWidth: 240 }}
+          >
+            <MenuItem value="">全部项目</MenuItem>
+            {projectOptions.map((p) => (
+              <MenuItem key={p.id} value={p.id}>
+                {p.name}
+              </MenuItem>
+            ))}
+          </TextField>
+        ) : undefined
+      }
+    >
       {/* 第二批修正：去掉内层限宽，与页面 1600 容器全宽对齐（delta 列表 xl 2 列仍治空白） */}
       <Box>
       {/* D02：上周未提交周报的进行中项目警示（项目名可点击 → 项目周报页补交） */}
@@ -543,17 +636,29 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             <ReportProblemOutlinedIcon fontSize="small" sx={{ color: 'warning.main', mt: 0.25, flexShrink: 0 }} />
             <Box sx={{ minWidth: 0 }}>
               <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'warning.main' }}>
-                上周有 {missing.length} 个项目未提交周报
+                上周有 {missing.length} 个项目未提交周报{projectFilter ? '（全局名单，不随筛选）' : ''}
               </Typography>
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
-                {missing.slice(0, 8).map((m) => (
+                {(projectFilter
+                  ? [...missing].sort((a, b) => (b.projectId === projectFilter ? 1 : 0) - (a.projectId === projectFilter ? 1 : 0))
+                  : missing
+                )
+                  .slice(0, 8)
+                  .map((m) => (
                   <Chip
                     key={m.projectId}
                     size="small"
                     variant="outlined"
                     label={m.projectName}
                     onClick={() => navigate(ROUTES.projectReports(m.projectId))}
-                    sx={{ height: 22, fontSize: 12, cursor: 'pointer', borderColor: 'warning.main', '&:hover': { bgcolor: 'action.hover' } }}
+                    sx={{
+                      height: 22,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                      ...(projectFilter === m.projectId
+                        ? { bgcolor: 'warning.main', color: '#fff', borderColor: 'warning.main', '&:hover': { bgcolor: 'warning.dark' } }
+                        : { borderColor: 'warning.main', '&:hover': { bgcolor: 'action.hover' } }),
+                    }}
                   />
                 ))}
                 {missing.length > 8 && (
@@ -569,29 +674,34 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
           </Stack>
         </Box>
       )}
-      {/* D03：任务进度环比（上周 vs 前周全量快照，周报提交时采集） */}
-      {data?.delta && (
+      {/* D03：任务进度环比（上周 vs 前周全量快照，系统每周一 00:10 到点采集 + 启动补偿） */}
+      {delta && (
         <Box sx={{ mb: 2, p: 1.25, borderRadius: 1.5, border: '1px solid', borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
             <TrendingUpOutlinedIcon fontSize="small" sx={{ color: 'primary.main' }} />
             <Typography sx={{ fontSize: 14, fontWeight: 600 }}>任务进度环比</Typography>
             <Typography variant="caption" color="text.secondary">
-              {fmtDate(weekRange(data.delta.prevWeek).start)} ~ {fmtDate(weekRange(data.delta.prevWeek).end)} → 上周
+              {fmtDate(weekRange(delta.prevWeek).start)} ~ {fmtDate(weekRange(delta.prevWeek).end)} → 上周
             </Typography>
             <Box sx={{ flex: 1 }} />
             <Tooltip title="上周快照中进度较前周上升的任务数">
-              <Chip size="small" label={`推进 ${data.delta.advancedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'primary.main', color: '#fff' }} />
+              <Chip size="small" label={`推进 ${delta.advancedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'primary.main', color: '#fff' }} />
             </Tooltip>
             <Tooltip title="上周快照中已完成（进度 100%）的任务数">
-              <Chip size="small" label={`完成 ${data.delta.completedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'success.main', color: '#fff' }} />
+              <Chip size="small" label={`完成 ${delta.completedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'success.main', color: '#fff' }} />
             </Tooltip>
-            <Tooltip title="前周快照不存在、上周才出现的任务数">
-              <Chip size="small" label={`新增 ${data.delta.addedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'warning.main', color: '#fff' }} />
+            <Tooltip title="前周快照不存在、且任务创建于上周一及以后（真新增）的任务数">
+              <Chip size="small" label={`新增 ${delta.addedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'warning.main', color: '#fff' }} />
             </Tooltip>
+            {delta.backfillCount > 0 && (
+              <Tooltip title="前周无快照但任务创建早于上周一——首次纳入快照（快照功能上线过渡期产物，非真新增）">
+                <Chip size="small" label={`首次纳入 ${delta.backfillCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'text.disabled', color: '#fff' }} />
+              </Tooltip>
+            )}
             <Tooltip title={`所有推进任务的进度增量之和（百分点）：上周快照进度合计 − 前周快照进度合计`}>
-              <Chip size="small" label={`净增 ${data.delta.netPoints} 个百分点`} variant="outlined" sx={{ height: 22, fontWeight: 700 }} />
+              <Chip size="small" label={`净增 ${delta.netPoints} 个百分点`} variant="outlined" sx={{ height: 22, fontWeight: 700 }} />
             </Tooltip>
-            {data.milestoneCompare && (
+            {!projectFilter && data?.milestoneCompare && (
               <Tooltip title="里程碑达成数按完成日期（done_at）所在周统计">
                 <Chip
                   size="small"
@@ -602,37 +712,48 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
               </Tooltip>
             )}
           </Stack>
-          {data.delta.tasks.length === 0 ? (
+          {/* 到点快照架构：补拍基准透明化提示 */}
+          <BackfillMetaHint meta={delta.snapshotMeta} />
+          {delta.tasks.length === 0 ? (
             <Typography variant="body2" sx={{ color: 'text.disabled', py: 1.5, textAlign: 'center', fontSize: 13 }}>
-              暂无环比数据——快照自本周起积累：项目每周提交周报时自动记录全量任务进度，
-              需连续两周提交后展示「上周 vs 前周」的进展变化
+              {projectFilter
+                ? '该项目上周无进度变化（快照由系统每周一 00:10 自动采集，与周报提交无关）'
+                : '暂无环比数据——任务快照由系统每周一 00:10 自动对全部项目采集（与周报提交无关），连续两周数据齐备后展示「上周 vs 前周」的进展变化'}
             </Typography>
           ) : (
-            <Box
-              sx={{
-                display: 'grid',
-                gap: 1,
-                /* 第二批：xl 下 2 列（单条更紧凑，宽屏空白减半） */
-                gridTemplateColumns: { xs: '1fr', xl: 'repeat(2, 1fr)' },
-              }}
-            >
-              {data.delta.tasks.map((t) => (
-                <DeltaRow key={t.nodeId} t={t} />
-              ))}
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                共 {delta.tasks.length} 条 · 按增量降序 · 滚动查看全部
+              </Typography>
+              <Box
+                sx={{
+                  maxHeight: 480,
+                  overflowY: 'auto',
+                  display: 'grid',
+                  gap: 1,
+                  alignContent: 'start',
+                  /* 第二批：xl 下 2 列（单条更紧凑，宽屏空白减半） */
+                  gridTemplateColumns: { xs: '1fr', xl: 'repeat(2, 1fr)' },
+                }}
+              >
+                {delta.tasks.map((t) => (
+                  <DeltaRow key={t.nodeId} t={t} />
+                ))}
+              </Box>
             </Box>
           )}
         </Box>
       )}
       {allEmpty ? (
         <Typography variant="body2" sx={{ color: 'text.disabled', py: 2, textAlign: 'center' }}>
-          上周暂无周报提交、任务更新或里程碑达成记录
+          {projectFilter ? '该项目上周暂无周报提交、任务更新或里程碑达成记录' : '上周暂无周报提交、任务更新或里程碑达成记录'}
         </Typography>
       ) : (
         <Box
           sx={{
             display: 'grid',
             gap: 2.5,
-            /* 第三批：两栏布局（周报动态 + 上周任务进展 同行 / 上周达成里程碑 跨整行），消除三栏等高错位 */
+            /* 第三批：两栏布局（周报动态 + 上周任务更新情况 同行 / 上周达成里程碑 跨整行），消除三栏等高错位 */
             gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' },
           }}
         >
@@ -650,11 +771,11 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
 
           <Block
             icon={<PlaylistAddCheckOutlinedIcon fontSize="small" sx={{ color: 'primary.main' }} />}
-            title="上周任务进展"
+            title="上周任务更新情况"
             count={tasks.length}
-            emptyText="上周未勾选任务进展"
-            emptyDescription="周报里勾选的关键任务进度会自动汇总到这里，便于周例会快速回顾。"
-            caption="按任务最后更新时间（物理时间）落在上周统计"
+            emptyText="上周无任务更新记录"
+            emptyDescription="任务在上周的任何变更（进度、状态、责任人等）都会汇总到这里，便于周例会快速回顾。"
+            caption="任务任何属性变更都会刷新更新时间 · 按最后更新时间落在上周统计"
           >
             {tasks.map((t) => (
               <TaskRow key={t.id} t={t} />

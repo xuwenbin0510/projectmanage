@@ -99,7 +99,9 @@ export function AdminReviewTemplatesPage(): JSX.Element {
 
   const load = (): void => {
     setLoading(true);
-    Promise.all([api.listReviewTemplates(), api.listRoles()])
+    /* 角色目录用 meta/roles（仅登录可读）：admin/roles 会对 management 403，
+       且 Promise.all 一损俱损——403 曾导致整页模板列表加载不出 + 弹「无操作权限」（2026-09-07 实测） */
+    Promise.all([api.listReviewTemplates(), api.listSelectableRoles()])
       .then(([templates, roleList]) => {
         setRows(templates);
         setRoles(roleList);

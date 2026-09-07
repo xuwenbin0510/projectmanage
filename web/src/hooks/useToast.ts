@@ -19,7 +19,8 @@ export function useToast(): {
   const error = useCallback(
     (e: unknown, fallback = '操作失败') => {
       const msg = typeof e === 'string' ? e : messageOf(e) || fallback;
-      enqueueSnackbar(msg, { variant: 'error', autoHideDuration: 5000 });
+      /* 时长继承 SnackbarProvider 全局 3000ms——此前覆盖为 5000 导致错误提示「停留久」的观感 */
+      enqueueSnackbar(msg, { variant: 'error' });
     },
     [enqueueSnackbar],
   );

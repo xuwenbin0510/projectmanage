@@ -80,12 +80,13 @@ export function AdminTemplatesPage(): JSX.Element {
     load();
   }, [toast]);
 
-  /* 加载后台角色目录，用于团队约束列的中文渲染（动态，避免与 roles 表脱节） */
+  /* 加载职位目录用于团队约束列的中文渲染：meta/roles 仅登录可读（management 也可读，
+     admin/roles 会对非 admin 403 导致列名回退 roleKey 原文） */
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const rs = await api.listRoles();
+        const rs = await api.listSelectableRoles();
         if (!alive) return;
         const map: Record<string, string> = {};
         rs.forEach((r) => {

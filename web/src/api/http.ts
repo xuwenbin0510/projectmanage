@@ -495,6 +495,11 @@ export class HttpApiClient implements ApiClient {
     return get<Role[]>('/admin/roles');
   }
 
+  /** 职位目录（仅登录可读，供新建项目 / 管理成员等下拉选择；区别于 admin 专属的 listRoles） */
+  listSelectableRoles(): Promise<Role[]> {
+    return get<Role[]>('/meta/roles');
+  }
+
   createRole(payload: CreateRolePayload): Promise<Role> {
     return post<Role>('/admin/roles', payload);
   }

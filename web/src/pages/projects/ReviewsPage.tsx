@@ -56,7 +56,12 @@ export function ReviewsPage(): JSX.Element {
   }, [roles]);
 
   useEffect(() => {
-    api.listRoles().then(setRoles).catch(() => {});
+    // Bugfix 2026-09-07：listRoles 走 admin 专属接口，非管理员 403 被静默吞掉导致角色名映射缺失；
+    // 改用登录可读的角色目录，失败时 toast 呈现。
+    api
+      .listSelectableRoles()
+      .then(setRoles)
+      .catch((e: unknown) => toast.error(e, '角色目录加载失败，评审人角色名可能显示为编码'));
   }, []);
 
   const refresh = useCallback(async (): Promise<void> => {

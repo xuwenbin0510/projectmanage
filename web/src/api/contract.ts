@@ -435,6 +435,8 @@ export interface ApiClient {
 
   /* E1.5 职位目录管理（仅 admin） */
   listRoles(): Promise<Role[]>;
+  /** 职位目录（仅登录可读，供新建项目 / 管理成员等下拉选择；非 admin 专属） */
+  listSelectableRoles(): Promise<Role[]>;
   createRole(payload: CreateRolePayload): Promise<Role>;
   updateRole(roleKey: string, patch: UpdateRolePayload): Promise<Role>;
   deleteRole(roleKey: string): Promise<{ roleKey: string }>;

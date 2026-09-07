@@ -181,12 +181,13 @@ export function ProjectOverviewPage(): JSX.Element {
    *  组件挂载即加载，避免「重新进概览时 roleOptions 为空 → 卡片走硬编码兜底显示错误角色」。 */
   const loadRoleOptions = useCallback(async (): Promise<void> => {
     try {
-      const rs = await api.listRoles();
+      const rs = await api.listSelectableRoles();
       setRoleOptions(
         rs.filter((r) => r.enabled && r.scope === 'project').sort((a, b) => a.orderNo - b.orderNo),
       );
-    } catch {
+    } catch (e) {
       setRoleOptions([]);
+      toast.error(e, '角色列表加载失败，成员角色下拉不可用');
     }
   }, []);
 
@@ -198,8 +199,9 @@ export function ProjectOverviewPage(): JSX.Element {
     try {
       const list = await api.listUsers({ status: 'active' });
       setAllUsers(list);
-    } catch {
+    } catch (e) {
       setAllUsers([]);
+      toast.error(e, '成员候选列表加载失败，无法选择新成员');
     }
     await loadRoleOptions();
     setAddUserOpenId('');
@@ -382,8 +384,9 @@ export function ProjectOverviewPage(): JSX.Element {
           .filter((g): g is NonNullable<typeof g> => Boolean(g))
           .map((g) => ({ code: g.code, name: g.name, ownerRole: g.ownerRole, itemCount: (g.items ?? []).length })),
       );
-    } catch {
+    } catch (e) {
       setGateTemplates([]);
+      toast.warning('质量门模板加载失败，门模板下拉不可用');
     }
     setGateMode('template');
     setGateTplCode('');

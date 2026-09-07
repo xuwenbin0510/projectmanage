@@ -17,7 +17,7 @@ import { api } from '@/api/client';
 import type { DecisionPayload } from '@/api/contract';
 import type { Review } from '@/types/review';
 import type { Role } from '@/types/project';
-import { useAsync } from '@/hooks';
+import { useAsync, useToast } from '@/hooks';
 import { REVIEW_TYPE_LABEL } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
 import { fmtDateTime } from '@/utils/date';
@@ -31,6 +31,7 @@ type TabKey = 'todo' | 'mine' | 'all';
  */
 export function ApprovalsPage(): JSX.Element {
   const navigate = useNavigate();
+  const toast = useToast();
   const [tab, setTab] = useState<TabKey>('todo');
   const [target, setTarget] = useState<Review | null>(null);
   const [action, setAction] = useState<DecisionAction>('approve');
@@ -43,7 +44,12 @@ export function ApprovalsPage(): JSX.Element {
   }, [roles]);
 
   useEffect(() => {
-    api.listRoles().then(setRoles).catch(() => {});
+    // Bugfix 2026-09-07：listRoles 走 admin 专属接口，非管理员 403 被静默吞掉导致角色名映射缺失；
+    // 改用登录可读的角色目录，失败时 toast 呈现。
+    api
+      .listSelectableRoles()
+      .then(setRoles)
+      .catch((e: unknown) => toast.error(e, '角色目录加载失败，审批人角色名可能显示为编码'));
   }, []);
 
   const fetcher = useCallback(

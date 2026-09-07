@@ -181,7 +181,7 @@ export function ProjectCreatePage(): JSX.Element {
     let alive = true;
     (async () => {
       try {
-        const rs = await api.listRoles();
+        const rs = await api.listSelectableRoles();
         if (!alive) return;
         const opts = rs.filter((r) => r.enabled && r.scope === 'project').sort((a, b) => a.orderNo - b.orderNo);
         setRoleOptions(opts.map((r) => ({ roleKey: r.roleKey, name: r.name })));
@@ -227,7 +227,11 @@ export function ProjectCreatePage(): JSX.Element {
         setForm((f) => (f.type === res.suggested ? f : { ...f, type: res.suggested, overrideReason: '' }));
       })
       .catch(() => {
-        if (alive) setClassifyResult(classifyProject(classifyInput));
+        // 服务端智能分类不可用 → 本地规则引擎兜底（有意降级），但需让用户知晓
+        if (alive) {
+          setClassifyResult(classifyProject(classifyInput));
+          toast.warning('智能分类服务暂不可用，已按本地规则判定项目类别');
+        }
       });
     return () => {
       alive = false;
@@ -281,8 +285,11 @@ export function ProjectCreatePage(): JSX.Element {
         setBuiltPeriod({ start: planStart, end: planEnd });
         setTplBuiltFor(`${form.type}::${tpl.id}`);
       })
-      .catch(() => {
-        if (alive) setTplBuiltFor(key);
+      .catch((e) => {
+        if (alive) {
+          setTplBuiltFor(key);
+          toast.error(e, '里程碑模板加载失败，请检查模板配置或稍后重试');
+        }
       });
     return () => {
       alive = false;

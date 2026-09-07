@@ -428,8 +428,11 @@ export function WbsPage(): JSX.Element {
       .then((tpl) => {
         if (alive) setRules(resolveWbsRules(tpl));
       })
-      .catch(() => {
-        if (alive) setRules(DEFAULT_WBS_RULES);
+      .catch((e) => {
+        if (alive) {
+          setRules(DEFAULT_WBS_RULES);
+          toast.warning('WBS 模板加载失败，已使用默认层级规则');
+        }
       });
     return () => {
       alive = false;

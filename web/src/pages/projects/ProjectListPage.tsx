@@ -113,11 +113,13 @@ export function ProjectListPage(): JSX.Element {
     {
       key: 'name',
       label: '项目',
+      /* 项目列定宽（250）：此前无宽度，auto 布局下吸收全部剩余空间导致过宽留白 */
+      width: 250,
       render: (r) => (
         <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
           <HealthDot health={r.health} />
           <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
+            <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap title={r.name}>
               {r.name}
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -301,6 +303,7 @@ export function ProjectListPage(): JSX.Element {
           columns={columns}
           rows={list}
           rowKey={(r) => r.id}
+          tableLayout="fixed"
           loading={loading}
           emptyTitle="没有符合条件的项目"
           emptyDescription="调整筛选条件，或新建一个项目"

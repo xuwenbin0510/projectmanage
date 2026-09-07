@@ -3272,7 +3272,9 @@ export class MockApiClient implements ApiClient {
       delta: number;
       done: boolean;
       added: boolean;
+      newTask: boolean;
     }> = [];
+    const lastStartDate = weekRange(lastWeek).start.slice(0, 10); // 'YYYY-MM-DD'，真新增判定基准（上周一）
     for (const [objectId, ls] of lastSnap) {
       const ps = prevSnap.get(objectId);
       const added = !ps;
@@ -3280,6 +3282,8 @@ export class MockApiClient implements ApiClient {
       const delta = added ? 0 : ls.progress - prevProgress;
       if (!added && delta === 0) continue;
       const node = db.wbsNodes.find((n) => n.id === objectId);
+      const createdDate = (node?.createdAt ?? '').slice(0, 10);
+      const newTask = added && !!createdDate && createdDate >= lastStartDate;
       deltaTasks.push({
         nodeId: objectId,
         wbsCode: node?.wbsCode ?? '',
@@ -3291,16 +3295,22 @@ export class MockApiClient implements ApiClient {
         delta,
         done: ls.status === '完成' || ls.progress >= 100,
         added,
+        newTask,
       });
     }
     deltaTasks.sort((a, b) => b.delta - a.delta);
     const delta = {
       prevWeek,
-      tasks: deltaTasks.slice(0, 50),
+      tasks: deltaTasks, // 全量返回，与真实后端口径一致（前端滚动展示）
       advancedCount: deltaTasks.filter((t) => t.delta > 0).length,
       completedCount: deltaTasks.filter((t) => t.done).length,
-      addedCount: deltaTasks.filter((t) => t.added).length,
+      addedCount: deltaTasks.filter((t) => t.added && t.newTask).length,
+      backfillCount: deltaTasks.filter((t) => t.added && !t.newTask).length,
       netPoints: deltaTasks.reduce((s, t) => s + (t.delta > 0 ? t.delta : 0), 0),
+      snapshotMeta: {
+        prevWeek: { week: prevWeek, backfilledProjects: [] },
+        lastWeek: { week: lastWeek, backfilledProjects: [] },
+      },
     };
     const prevRange = weekRange(prevWeek);
     const prevDone = db.milestones.filter(
@@ -3998,6 +4008,16 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     currentUser(db);
     return deepClone(db.roles).sort((a, b) => a.orderNo - b.orderNo || a.roleKey.localeCompare(b.roleKey));
+  }
+
+  /** 职位目录（仅登录可读，供下拉选择；mock 返回已启用职位，与真实 /api/meta/roles 一致） */
+  async listSelectableRoles(): Promise<Role[]> {
+    await delay(60);
+    const db = getDb();
+    currentUser(db);
+    return deepClone(db.roles)
+      .filter((r: Role) => r.enabled)
+      .sort((a: Role, b: Role) => a.orderNo - b.orderNo || a.roleKey.localeCompare(b.roleKey));
   }
 
   async createRole(payload: CreateRolePayload): Promise<Role> {

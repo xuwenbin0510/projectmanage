@@ -54,6 +54,7 @@ import {
   DonutChart,
   GateDetailDrawer,
   HealthDonut,
+  MilestoneDueDrawer,
   OwnerLoadBarChart,
   OwnerLoadDrawer,
   ProgressDonut,
@@ -243,6 +244,15 @@ export function MetricsPage(): JSX.Element {
   /* B12：周报闭环率卡片下钻抽屉（数据来自 overview.reportClosureItems，无需额外请求） */
   const [closureOpen, setClosureOpen] = useState(false);
 
+  /* 里程碑到期分布面板下钻抽屉（数据来自 overview.milestones.items，无需额外请求；bucket 决定过滤档） */
+  const [msDrawer, setMsDrawer] = useState<{ open: boolean; bucket: 'overdue' | 'upcoming' | '' }>({
+    open: false,
+    bucket: '',
+  });
+  const openMilestoneDrawer = (key: string): void => {
+    setMsDrawer({ open: true, bucket: key === 'overdue' ? 'overdue' : key === 'upcoming' ? 'upcoming' : '' });
+  };
+
   /* B12：任务时间轴「查看全部」→ 复用 DistributionTaskDrawer（dueWindow 维度下钻） */
   const openTimelineAll = (dueWindow: 'overdue' | 'dueSoon' | 'cycle', title: string): void => {
     setDistDrawer({
@@ -385,6 +395,12 @@ export function MetricsPage(): JSX.Element {
   const deliverableSegments: DonutSegment[] = [
     { id: 'delivered', label: '已交付', value: data?.deliverables?.delivered ?? 0, color: palette.health.green },
     { id: 'pending', label: '待交付', value: data?.deliverables?.pending ?? 0, color: palette.health.yellow },
+  ];
+
+  /* 里程碑到期（近30天）两档：已过期 / 未来30天（与顶部 StatCard 同源 data.milestones，此处图形化） */
+  const milestoneRows: CategoryBarRow[] = [
+    { key: 'overdue', label: '已过期', value: data?.milestones?.overdue ?? 0, color: palette.health.red },
+    { key: 'upcoming', label: '未来 30 天到期', value: data?.milestones?.upcoming ?? 0, color: palette.health.yellow },
   ];
 
   const scopeLabel = canSeeAll
@@ -675,7 +691,7 @@ export function MetricsPage(): JSX.Element {
             sx={{
               display: 'grid',
               gap: 2.5,
-              gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(3, 1fr)' },
+              gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(4, 1fr)' },
             }}
           >
             {/* ① 任务进度环（B12 新增，对齐工作台「我的任务」进度环） */}
@@ -799,11 +815,21 @@ export function MetricsPage(): JSX.Element {
               emptyDescription="范围内项目尚未登记交付物"
               onSegmentClick={(seg) => openDeliverables(seg.id)}
             />
+            {/* ⑩ 里程碑到期分布（近30天窗口，与顶部「近30天到期里程碑」StatCard 同源；点档下探明细抽屉） */}
+            <CategoryBarChart
+              title="里程碑到期分布"
+              subtitle={`近 30 天窗口共 ${data?.milestones?.total ?? 0} 个未完成`}
+              rows={milestoneRows}
+              loading={loading}
+              emptyTitle="近期没有到期的里程碑"
+              emptyDescription="交付节奏正常"
+              onDrill={openMilestoneDrawer}
+            />
           </Box>
         </SectionCard>
       </Box>
 
-      {/* ══ D01 · 上周工作进展面板（周报动态 / 任务进展 / 达成里程碑，周例会场景） ══ */}
+      {/* ══ D01 · 上周工作进展面板（周报动态 / 任务更新情况 / 达成里程碑，周例会场景） ══ */}
       <Box ref={weeklyRef}>
         <WeeklyProgressPanel data={data?.weeklyProgress} loading={loading} />
       </Box>
@@ -834,6 +860,13 @@ export function MetricsPage(): JSX.Element {
         open={closureOpen}
         items={data?.reportClosureItems ?? []}
         onClose={() => setClosureOpen(false)}
+      />
+      {/* 里程碑到期分布点档下探抽屉（overview.milestones.items 本地过滤，无需请求） */}
+      <MilestoneDueDrawer
+        open={msDrawer.open}
+        bucket={msDrawer.bucket}
+        items={data?.milestones?.items ?? []}
+        onClose={() => setMsDrawer((s) => ({ ...s, open: false }))}
       />
     </Box>
   );

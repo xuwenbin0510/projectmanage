@@ -48,28 +48,35 @@ function GateEditor({
   onClose: () => void;
   onSave: (g: GateForm) => void;
 }): JSX.Element {
+  const toast = useToast();
   const [form, setForm] = useState<GateForm>({ code: '', name: '', ownerRole: 'tl', items: [{ content: '', ownerRole: 'tl' }] });
   /** 动态职位目录（项目视角 + 公司视角，全部启用角色），替代写死的角色常量 */
   const [roleOptions, setRoleOptions] = useState<Array<{ roleKey: string; name: string; scope: string }>>([]);
   const scopeLabel: Record<string, string> = { project: '项目', global: '公司' };
 
+  /* 职位目录懒加载：仅在弹窗打开时请求，且用仅登录可读的 meta/roles
+     （admin/roles 仅 admin 可用，management 打开模板页会 403 误弹两次「无操作权限」——2026-09-07 实测） */
   useEffect(() => {
+    if (!open) return;
     let alive = true;
     (async () => {
       try {
-        const rs = await api.listRoles();
+        const rs = await api.listSelectableRoles();
         if (!alive) return;
         setRoleOptions(
           rs.filter((r) => r.enabled).sort((a, b) => (a.scope === b.scope ? a.orderNo - b.orderNo : a.scope === 'global' ? -1 : 1)).map((r) => ({ roleKey: r.roleKey, name: r.name, scope: r.scope })),
         );
-      } catch {
-        if (alive) setRoleOptions([]);
+      } catch (e) {
+        if (alive) {
+          setRoleOptions([]);
+          toast.error(e, '角色列表加载失败，负责人角色下拉不可用');
+        }
       }
     })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [open, toast]);
 
   /* 每次打开时从外部 gate 初始化（新增 = 空表单；门编码按规则自动预填 QG{n}） */
   useEffect(() => {
@@ -240,23 +247,28 @@ export function TemplateEditorDialog({ open, template, onClose, onSaved }: Templ
   /** 动态职位目录（项目内视野 + 启用），替代写死的 PROJECT_ROLES，与后台「职位管理」实时同步 */
   const [roleOptions, setRoleOptions] = useState<Array<{ roleKey: string; name: string }>>([]);
 
+  /* 职位目录懒加载：仅在抽屉打开时请求，meta/roles 仅登录可读（同 GateEditor 说明） */
   useEffect(() => {
+    if (!open) return;
     let alive = true;
     (async () => {
       try {
-        const rs = await api.listRoles();
+        const rs = await api.listSelectableRoles();
         if (!alive) return;
         setRoleOptions(
           rs.filter((r) => r.enabled && r.scope === 'project').sort((a, b) => a.orderNo - b.orderNo).map((r) => ({ roleKey: r.roleKey, name: r.name })),
         );
-      } catch {
-        if (alive) setRoleOptions([]);
+      } catch (e) {
+        if (alive) {
+          setRoleOptions([]);
+          toast.error(e, '角色列表加载失败，团队角色下拉不可用');
+        }
       }
     })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [open, toast]);
 
   /* 打开时从 template 初始化 */
   const initFrom = (t: LifecycleTemplate | null): void => {
