@@ -1072,6 +1072,42 @@ export class MockApiClient implements ApiClient {
       diff.push({ field: String(k), label, before: String(p[k] ?? ''), after: String(v ?? '') });
       p[k] = v;
     };
+    /* 计划周期校验（与后端 project.service 同源）：格式由 date input 保证，这里校验 start≤end
+       + 与里程碑/任务日期双向一致性（项目周期 = 项目日期唯一真源） */
+    if (payload.planStart !== undefined || payload.planEnd !== undefined) {
+      const nextStart = payload.planStart ?? p.planStart ?? '';
+      const nextEnd = payload.planEnd ?? p.planEnd ?? '';
+      if (nextStart && nextEnd && nextStart > nextEnd) {
+        throw new ApiError(ErrorCode.E_VALIDATION, `计划开始日期 ${nextStart} 不能晚于计划结束日期 ${nextEnd}`);
+      }
+      if (nextEnd) {
+        const conflicts: string[] = [];
+        db.milestones.forEach((m) => {
+          if (m.projectId === id && m.currentDate > nextEnd) conflicts.push(`里程碑 ${m.code} ${m.name}（${m.currentDate}）`);
+        });
+        db.wbsNodes.forEach((n) => {
+          if (n.projectId === id && n.dueDate && n.dueDate > nextEnd) conflicts.push(`任务 ${n.wbsCode} ${n.name}（${n.dueDate}）`);
+        });
+        if (conflicts.length) {
+          throw new ApiError(
+            ErrorCode.E_VALIDATION,
+            `计划结束日期 ${nextEnd} 早于以下 ${conflicts.length} 项的计划日期，请先调整这些日期或放宽项目周期：` +
+              conflicts.slice(0, 5).join('；') + (conflicts.length > 5 ? '等' : ''),
+          );
+        }
+      }
+      if (nextStart) {
+        const early = db.milestones
+          .filter((m) => m.projectId === id && m.currentDate < nextStart)
+          .map((m) => `里程碑 ${m.code} ${m.name}（${m.currentDate}）`);
+        if (early.length) {
+          throw new ApiError(
+            ErrorCode.E_VALIDATION,
+            `计划开始日期 ${nextStart} 晚于以下里程碑的计划日期，请先调整：` + early.slice(0, 5).join('；') + (early.length > 5 ? '等' : ''),
+          );
+        }
+      }
+    }
     apply('name', '项目名称', payload.name);
     apply('customer', '客户', payload.customer);
     apply('contractAmount', '合同额', payload.contractAmount);
@@ -1441,8 +1477,15 @@ export class MockApiClient implements ApiClient {
     assertWritable(db, ms.projectId);
     const me = assertCan(db, 'milestone.edit', ms.projectId);
 
-    /* ① 改期（单向规则） */
+    /* ① 改期（单向规则 + 项目周期真源约束） */
     if (payload.currentDate && payload.currentDate !== ms.currentDate) {
+      const proj = db.projects.find((x) => x.id === ms.projectId);
+      if (proj?.planEnd && payload.currentDate > proj.planEnd) {
+        throw new ApiError(
+          ErrorCode.E_VALIDATION,
+          `里程碑日期 ${payload.currentDate} 不能晚于项目计划截止 ${proj.planEnd}，请先在「编辑项目信息」中调整计划周期`,
+        );
+      }
       if (milestoneDelayNeedsChange(ms, payload.currentDate)) {
         throw new ApiError(ErrorCode.E_MS_NEED_CHANGE, '里程碑日期延后须走变更申请', {
           changeDraft: {
@@ -2632,6 +2675,17 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     assertWritable(db, payload.projectId);
     const me = assertCan(db, 'change.create', payload.projectId);
+    /* milestone_date：目标日期不得晚于项目计划截止（与后端 change.service 同源约束） */
+    if (payload.changeType === 'milestone_date') {
+      const toDate = String((payload.payload as { toDate?: string } | undefined)?.toDate ?? '');
+      const proj = db.projects.find((x) => x.id === payload.projectId);
+      if (toDate && proj?.planEnd && toDate > proj.planEnd) {
+        throw new ApiError(
+          ErrorCode.E_VALIDATION,
+          `里程碑目标日期 ${toDate} 不能晚于项目计划截止 ${proj.planEnd}，请先在「编辑项目信息」中调整计划周期`,
+        );
+      }
+    }
     const routing = routeOfChange({
       changeType: payload.changeType,
       effortDays: payload.effortDays,
@@ -2738,6 +2792,14 @@ export class MockApiClient implements ApiClient {
       const ms = db.milestones.find((m) => m.id === change.targetId);
       const toDate = String(change.payload.toDate ?? '');
       if (ms && toDate) {
+        /* 防御复查：批准到实施之间项目计划周期可能已被收缩（与后端 applyChange 同源） */
+        const proj = db.projects.find((x) => x.id === change.projectId);
+        if (proj?.planEnd && toDate > proj.planEnd) {
+          throw new ApiError(
+            ErrorCode.E_VALIDATION,
+            `里程碑目标日期 ${toDate} 已超出项目当前计划截止 ${proj.planEnd}（实施期间项目周期被调整），请重新发起变更`,
+          );
+        }
         const before = ms.currentDate;
         ms.currentDate = toDate;
         ms.delayDays = diffDays(ms.baselineDate, toDate);

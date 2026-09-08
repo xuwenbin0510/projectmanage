@@ -701,7 +701,14 @@ export function MilestonesPage(): JSX.Element {
           label="新的当前计划日期"
           value={reschedule?.date ?? null}
           format={DATE_FMT}
-          slotProps={{ textField: { size: 'small', fullWidth: true } }}
+          maxDate={project?.planEnd ? dayjs(project.planEnd) : undefined}
+          slotProps={{
+            textField: {
+              size: 'small',
+              fullWidth: true,
+              helperText: project?.planEnd ? `不可晚于项目计划截止 ${project.planEnd}` : undefined,
+            },
+          }}
           onChange={(v) => setReschedule((r) => (r ? { ...r, date: v } : r))}
         />
         {rescheduleDelta !== null && rescheduleDelta > 0 && (
@@ -739,7 +746,14 @@ export function MilestonesPage(): JSX.Element {
           label="计划日期（同时作为基线）"
           value={createForm.date ? dayjs(createForm.date) : null}
           format={DATE_FMT}
-          slotProps={{ textField: { size: 'small', fullWidth: true } }}
+          maxDate={project?.planEnd ? dayjs(project.planEnd) : undefined}
+          slotProps={{
+            textField: {
+              size: 'small',
+              fullWidth: true,
+              helperText: project?.planEnd ? `不可晚于项目计划截止 ${project.planEnd}` : undefined,
+            },
+          }}
           onChange={(v) => setCreateForm((f) => ({ ...f, date: v && v.isValid() ? v.format(DATE_FMT) : '' }))}
         />
         <TextField
@@ -853,7 +867,15 @@ export function MilestonesPage(): JSX.Element {
           label="当前计划日期"
           value={edit?.date ? dayjs(edit.date) : null}
           format={DATE_FMT}
-          slotProps={{ textField: { size: 'small', fullWidth: true, disabled: submitting } }}
+          maxDate={project?.planEnd ? dayjs(project.planEnd) : undefined}
+          slotProps={{
+            textField: {
+              size: 'small',
+              fullWidth: true,
+              disabled: submitting,
+              helperText: project?.planEnd ? `不可晚于项目计划截止 ${project.planEnd}` : undefined,
+            },
+          }}
           onChange={(v) => setEdit((s) => (s ? { ...s, date: v && v.isValid() ? v.format(DATE_FMT) : '' } : s))}
         />
         {edit && (

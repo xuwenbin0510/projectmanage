@@ -155,6 +155,19 @@ function createChange(db, req, projectId, payload) {
     throw new AppError(ErrorCode.E_VALIDATION, '变更类型非法，允许值：' + enums.CHANGE_TYPES.join(' / '));
   }
 
+  /* milestone_date：目标日期不得晚于项目计划截止（与 updateMilestone 同源约束，applyChange 另有防御复查） */
+  if (changeType === 'milestone_date') {
+    const cp = p.payload || {};
+    const toDate = mappers.toStr(cp.toDate);
+    const projRow = db.prepare('SELECT plan_end FROM projects WHERE id = ?').get(String(projectId));
+    const planEnd = mappers.toStr(projRow && projRow.plan_end).slice(0, 10);
+    if (toDate && planEnd && toDate > planEnd) {
+      throw new AppError(ErrorCode.E_VALIDATION,
+        '里程碑目标日期 ' + toDate + ' 不能晚于项目计划截止 ' + planEnd + '，请先在「编辑项目信息」中调整计划周期',
+        { toDate: toDate, planEnd: planEnd });
+    }
+  }
+
   const id = genId('CHG');
   const code = 'CHG-' + String(id).replace(/^CHG-/, '').slice(-6).toUpperCase();
   const openId = mappers.toStr(req.user && (req.user.open_id !== undefined ? req.user.open_id : req.user.openId));
@@ -303,6 +316,14 @@ function applyChange(db, req, id) {
       const ms = db.prepare('SELECT * FROM milestones WHERE id = ?').get(String(row.target_id || ''));
       const toDate = mappers.toStr(payload.toDate);
       if (ms && toDate) {
+        /* 防御复查：批准到实施之间项目计划周期可能已被收缩 */
+        const projRow = db.prepare('SELECT plan_end FROM projects WHERE id = ?').get(projectId);
+        const planEnd = mappers.toStr(projRow && projRow.plan_end);
+        if (planEnd && toDate > planEnd) {
+          throw new AppError(ErrorCode.E_VALIDATION,
+            '里程碑目标日期 ' + toDate + ' 已超出项目当前计划截止 ' + planEnd + '（实施期间项目周期被调整），请重新发起变更',
+            { toDate: toDate, planEnd: planEnd });
+        }
         const before = mappers.toStr(ms.planned_date);
         db.prepare('UPDATE milestones SET planned_date = ?, last_change_id = ?, updated_at = ? WHERE id = ?')
           .run(toDate, String(row.id), dates.nowIso(), String(ms.id));

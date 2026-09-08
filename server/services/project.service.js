@@ -160,6 +160,64 @@ function updateProjectBasic(db, req, id, payload) {
     fields.push('goal = ?');
     vals.push(JSON.stringify(goal));
   }
+  /* 计划周期：格式 + start≤end + 与里程碑/任务日期双向一致性（项目周期 = 项目日期唯一真源，
+     里程碑/任务不得悬空在周期外；里程碑侧对称校验见 milestone.service updateMilestone） */
+  if (b.planStart !== undefined || b.planEnd !== undefined) {
+    /* 存量数据 plan_start/plan_end 可能是 ISO 时间戳（飞书导入遗留），比较/提示统一归一到 YYYY-MM-DD */
+    const nextStart = (b.planStart !== undefined ? String(b.planStart ?? '') : mappers.toStr(p.plan_start)).slice(0, 10);
+    const nextEnd = (b.planEnd !== undefined ? String(b.planEnd ?? '') : mappers.toStr(p.plan_end)).slice(0, 10);
+    if (nextStart && !dates.isDate(nextStart)) {
+      throw new AppError(ErrorCode.E_VALIDATION, '计划开始日期非法，需为 YYYY-MM-DD', { fields: { planStart: '日期非法' } });
+    }
+    if (nextEnd && !dates.isDate(nextEnd)) {
+      throw new AppError(ErrorCode.E_VALIDATION, '计划结束日期非法，需为 YYYY-MM-DD', { fields: { planEnd: '日期非法' } });
+    }
+    if (nextStart && nextEnd && nextStart > nextEnd) {
+      throw new AppError(ErrorCode.E_VALIDATION, '计划开始日期 ' + nextStart + ' 不能晚于计划结束日期 ' + nextEnd, {
+        fields: { planStart: '晚于结束日期' },
+      });
+    }
+
+    const msRows = db
+      .prepare("SELECT code, name, planned_date FROM milestones WHERE project_id = ? AND planned_date != ''")
+      .all(String(id));
+    const taskRows = db
+      .prepare("SELECT wbs_code, name, due_date FROM wbs_nodes WHERE project_id = ? AND due_date != ''")
+      .all(String(id));
+
+    if (nextEnd) {
+      /* 收缩方向硬拦截：新截止不得早于任何里程碑/任务计划日期；冲突清单随错误返回 */
+      const conflicts = [];
+      msRows.forEach(function (r) {
+        if (r.planned_date > nextEnd) conflicts.push('里程碑 ' + r.code + ' ' + r.name + '（' + r.planned_date + '）');
+      });
+      taskRows.forEach(function (r) {
+        if (r.due_date > nextEnd) conflicts.push('任务 ' + r.wbs_code + ' ' + r.name + '（' + r.due_date + '）');
+      });
+      if (conflicts.length) {
+        throw new AppError(
+          ErrorCode.E_VALIDATION,
+          '计划结束日期 ' + nextEnd + ' 早于以下 ' + conflicts.length + ' 项的计划日期，请先调整这些日期或放宽项目周期：' +
+            conflicts.slice(0, 5).join('；') + (conflicts.length > 5 ? '等' : ''),
+          { conflicts: conflicts },
+        );
+      }
+    }
+    if (nextStart) {
+      /* 开始方向：里程碑不得早于项目开始 */
+      const early = msRows
+        .filter(function (r) { return r.planned_date < nextStart; })
+        .map(function (r) { return '里程碑 ' + r.code + ' ' + r.name + '（' + r.planned_date + '）'; });
+      if (early.length) {
+        throw new AppError(
+          ErrorCode.E_VALIDATION,
+          '计划开始日期 ' + nextStart + ' 晚于以下里程碑的计划日期，请先调整：' + early.slice(0, 5).join('；') + (early.length > 5 ? '等' : ''),
+          { conflicts: early },
+        );
+      }
+    }
+  }
+
   if (b.planStart !== undefined) {
     fields.push('plan_start = ?');
     vals.push(String(b.planStart ?? ''));

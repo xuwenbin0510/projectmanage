@@ -113,6 +113,8 @@ export function ProjectOverviewPage(): JSX.Element {
     contractAmount: 0,
     background: '',
     goalText: '',
+    planStart: '',
+    planEnd: '',
   });
   const [editTemplateOptions, setEditTemplateOptions] = useState<LifecycleTemplate[]>([]);
   const loadEditTemplateOptions = useCallback(
@@ -137,12 +139,19 @@ export function ProjectOverviewPage(): JSX.Element {
       contractAmount: project.contractAmount ?? 0,
       background: project.background ?? '',
       goalText: (project.goal ?? []).join('\n'),
+      planStart: (project.planStart ?? '').slice(0, 10),
+      planEnd: (project.planEnd ?? '').slice(0, 10),
     });
     void loadEditTemplateOptions(project.type ?? 'A');
     setEditOpen(true);
   };
   const submitEditProject = async (): Promise<void> => {
     if (!project) return;
+    /* 前端预校验（后端另有硬校验：格式 + 与里程碑/任务日期一致性，冲突清单随错误返回） */
+    if (editForm.planStart && editForm.planEnd && editForm.planStart > editForm.planEnd) {
+      toast.error(new Error('计划开始日期不能晚于计划结束日期'));
+      return;
+    }
     setEditSaving(true);
     try {
       const goal = editForm.goalText
@@ -158,6 +167,8 @@ export function ProjectOverviewPage(): JSX.Element {
         contractAmount: Number(editForm.contractAmount) || 0,
         background: editForm.background,
         goal,
+        planStart: editForm.planStart,
+        planEnd: editForm.planEnd,
       });
       await fetchDetail(project.id);
       toast.success('项目信息已更新');
@@ -1341,6 +1352,28 @@ export function ProjectOverviewPage(): JSX.Element {
             value={editForm.name}
             onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
           />
+          <Stack direction="row" spacing={1.5}>
+            <TextField
+              label="计划开始"
+              type="date"
+              size="small"
+              fullWidth
+              value={editForm.planStart}
+              InputLabelProps={{ shrink: true }}
+              onChange={(e) => setEditForm((f) => ({ ...f, planStart: e.target.value }))}
+              helperText="里程碑计划日期不得早于开始日期"
+            />
+            <TextField
+              label="计划截止"
+              type="date"
+              size="small"
+              fullWidth
+              value={editForm.planEnd}
+              InputLabelProps={{ shrink: true }}
+              onChange={(e) => setEditForm((f) => ({ ...f, planEnd: e.target.value }))}
+              helperText="收缩截止时不得早于任何里程碑/任务日期"
+            />
+          </Stack>
           <TextField
             select
             label="项目类型"

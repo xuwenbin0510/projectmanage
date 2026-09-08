@@ -395,6 +395,15 @@ function updateMilestone(db, req, id, payload) {
       if (!dates.isDate(toDate)) {
         throw new AppError(ErrorCode.E_VALIDATION, '里程碑日期非法，需为 YYYY-MM-DD', { fields: { currentDate: '日期非法' } });
       }
+      /* 计划周期真源约束：里程碑日期不得晚于项目计划截止（改项目周期时 project.service 有对称校验；
+         想延里程碑超过项目截止 → 唯一路径是先在项目信息中放宽计划周期） */
+      const projRow = loadProjectRow(db, projectId);
+      const planEnd = mappers.toStr(projRow && projRow.plan_end).slice(0, 10);
+      if (planEnd && toDate > planEnd) {
+        throw new AppError(ErrorCode.E_VALIDATION,
+          '里程碑日期 ' + toDate + ' 不能晚于项目计划截止 ' + planEnd + '，请先在「编辑项目信息」中调整计划周期',
+          { fields: { currentDate: '超出项目计划截止' }, planEnd: planEnd });
+      }
       /* 延后（diffDays(current, to) > 0）必须走变更单 */
       if (wbs.milestoneDelayNeedsChange(ms, toDate)) {
         throw new AppError(ErrorCode.E_MS_NEED_CHANGE, '里程碑日期延后须走变更申请', {
