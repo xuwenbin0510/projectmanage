@@ -141,7 +141,7 @@ function WbsRowDroppable({
       {isOver && pos && <WbsDropLine pos={pos} />}
       <Stack
         direction="row"
-        spacing={1}
+        spacing={{ xs: 0.5, lg: 1 }}
         alignItems="center"
         sx={{
           py: 0.5,
@@ -184,6 +184,37 @@ function WbsDragHandle({ id, disabled }: { id: string; disabled: boolean }) {
     >
       <DragIndicatorIcon fontSize="small" />
     </Box>
+  );
+}
+
+/**
+ * 任务名（单行截断）：仅当文本实际被截断（scrollWidth > clientWidth）时才弹 Tooltip
+ * 显示完整名称；未截断时不出提示，避免每行悬停都打扰。
+ * 用 ResizeObserver + 挂载时预检测截断状态——不能在 onMouseEnter 里惰性测量：
+ * disableHoverListener 在鼠标进入后才翻转时，Tooltip 已错过 enter 事件不会弹出。
+ */
+function TruncatedName({ name }: { name: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [truncated, setTruncated] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [name]);
+  return (
+    <Tooltip title={name} arrow disableHoverListener={!truncated}>
+      <Typography
+        ref={ref}
+        sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto' }}
+        noWrap
+      >
+        {name}
+      </Typography>
+    </Tooltip>
   );
 }
 
@@ -792,13 +823,15 @@ export function WbsPage(): JSX.Element {
                   <PriorityChip priority={node.priority} sx={{ flexShrink: 0 }} />
                   <StatusChip status={node.status} variant="soft" sx={{ justifyContent: 'center', flexShrink: 0 }} />
                   {boundMs && (
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      icon={<FlagOutlinedIcon sx={{ fontSize: 13 }} />}
-                      label={`${boundMs.code} ${boundMs.name}`}
-                      sx={{ height: 20, flexShrink: 0 }}
-                    />
+                    <Tooltip title={`${boundMs.code} ${boundMs.name}`} arrow>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        icon={<FlagOutlinedIcon sx={{ fontSize: 13 }} />}
+                        label={boundMs.code}
+                        sx={{ height: 20, flexShrink: 0 }}
+                      />
+                    </Tooltip>
                   )}
                   {!node.startDate && !node.dueDate ? (
                     <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
@@ -896,9 +929,7 @@ export function WbsPage(): JSX.Element {
                   {node.wbsCode}
                 </Typography>
                 <Chip size="small" variant="outlined" label={WBS_NODE_TYPE_LABEL[node.nodeType]} sx={{ height: 20, flexShrink: 0 }} />
-                <Typography sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto' }} noWrap>
-                  {node.name}
-                </Typography>
+                <TruncatedName name={node.name} />
                 {/* 优先级徽标（B14）：复用全局 PriorityChip（P0 红/P1 橙/P2 蓝/P3 灰），与工作台抽屉同款 */}
                 <PriorityChip priority={node.priority} sx={{ flexShrink: 0 }} />
                 {/* R4-P0-5：节点行状态标识（全节点可见，父/叶同规则） */}
@@ -908,37 +939,48 @@ export function WbsPage(): JSX.Element {
                   sx={{ width: 52, justifyContent: 'center', flexShrink: 0 }}
                 />
                 {boundMs && (
-                  <Chip
-                    size="small"
-                    variant="outlined"
-                    icon={<FlagOutlinedIcon sx={{ fontSize: 13 }} />}
-                    label={`${boundMs.code} ${boundMs.name}`}
-                    sx={{ height: 20, flexShrink: 0 }}
-                  />
+                  <Tooltip title={`${boundMs.code} ${boundMs.name}`} arrow>
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      icon={<FlagOutlinedIcon sx={{ fontSize: 13 }} />}
+                      label={boundMs.code}
+                      sx={{ height: 20, flexShrink: 0 }}
+                    />
+                  </Tooltip>
                 )}
-                {/* R3-3 / B16：行内计划起止区间，去掉「开始/截止」字样省空间；逾期红 / 临期黄仅作用于截止 */}
+                {/* R3-3 / B16：行内计划起止区间，去掉「开始/截止」字样省空间；逾期红 / 临期黄仅作用于截止
+                    窄视口（<lg，如飞书客户端）只留截止日期，把空间让给任务名（完整区间编辑弹窗可查） */}
                 {!node.startDate && !node.dueDate ? (
                   <Typography variant="caption" sx={{ color: 'text.secondary', flexShrink: 0 }}>
                     —
                   </Typography>
                 ) : (
                   <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignItems: 'baseline' }}>
-                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    <Typography
+                      variant="caption"
+                      sx={{ color: 'text.secondary', display: { xs: 'none', lg: 'inline' } }}
+                    >
                       {fmtDate(node.startDate) || '—'}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                      →
                     </Typography>
                     <Typography
                       variant="caption"
-                      sx={{
-                        color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
-                        fontWeight: overdue || dueSoon ? 600 : 400,
-                      }}
+                      sx={{ color: 'text.secondary', display: { xs: 'none', lg: 'inline' } }}
                     >
-                      {fmtDate(node.dueDate) || '—'}
-                      {overdue ? ' · 逾期' : dueSoon ? ' · 临期' : ''}
+                      →
                     </Typography>
+                    <Tooltip title={node.startDate ? `${node.startDate} → ${node.dueDate}` : undefined} arrow>
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: overdue ? tokens.status.danger : dueSoon ? tokens.status.warning : 'text.secondary',
+                          fontWeight: overdue || dueSoon ? 600 : 400,
+                        }}
+                      >
+                        {fmtDate(node.dueDate) || '—'}
+                        {overdue ? ' · 逾期' : dueSoon ? ' · 临期' : ''}
+                      </Typography>
+                    </Tooltip>
                   </Stack>
                 )}
                 {/* R3-5：日志聚合徽标（n=0 弱化样式，仍可点击查看空态） */}
@@ -990,21 +1032,30 @@ export function WbsPage(): JSX.Element {
                     <WarningAmberIcon sx={{ fontSize: 16, color: toneColor.warning }} />
                   </Tooltip>
                 )}
-                {/* R4-P0-5：进度条全节点渲染（父节点=子树叶子加权汇总，D1）+ 悬停百分比/状态 + 状态色调 */}
+                {/* R4-P0-5：进度条全节点渲染（父节点=子树叶子加权汇总，D1）+ 悬停百分比/状态 + 状态色调
+                    窄视口（<md，如飞书客户端窄窗）隐藏，把空间让给任务名；进度值编辑弹窗/悬停百分比可查 */}
                 <Tooltip title={`${node.name} ${progress}%（${node.status}）`} arrow>
-                  <Box sx={{ width: 120, flexShrink: 0 }}>
+                  <Box sx={{ width: { xs: 72, xl: 120 }, flexShrink: 0, display: { xs: 'none', md: 'block' } }}>
                     <ProgressBar value={progress} height={5} showLabel={false} tone={progressToneOf(node.status)} />
                   </Box>
                 </Tooltip>
                 {/* B9（R5）：全节点「估 x.x · 实 x.x 人日」只读（前端零聚合，直接用出参
-                    estimateDays/effortHours/effortChildCount；父=Σ 子由服务端 decorateEffort 保证） */}
+                    estimateDays/effortHours/effortChildCount；父=Σ 子由服务端 decorateEffort 保证）
+                    窄视口（<lg）隐藏：飞书客户端宽度下任务名被挤没，此列信息编辑弹窗可查 */}
                 <Tooltip
                   title={isLeaf ? '估算 vs 累计实际工时（人日）' : `实为 Σ ${node.effortChildCount} 个子任务（由工作日志累计）`}
                   arrow
                 >
                   <Typography
                     variant="caption"
-                    sx={{ color: 'text.secondary', width: 116, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}
+                    sx={{
+                      color: 'text.secondary',
+                      width: 116,
+                      flexShrink: 0,
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap',
+                      display: { xs: 'none', lg: 'inline-block' },
+                    }}
                   >
                     估 {fmtDays(node.estimateDays)} · 实 {fmtDays(node.effortHours)}
                   </Typography>
