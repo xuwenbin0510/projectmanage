@@ -31,6 +31,7 @@ import {
   FormDialog,
   LoadingState,
   PermissionButton,
+  PriorityChip,
   ProgressBar,
   SectionCard,
   StatusChip,
@@ -54,7 +55,7 @@ import {
   PRIORITY_OPTIONS,
   DEFAULT_PRIORITY,
 } from '@/config/enums';
-import { tokens, toneColor, progressToneOf } from '@/theme/tokens';
+import { tokens, toneColor, toneOf, progressToneOf } from '@/theme/tokens';
 import { flattenTree, rollupProgress } from '@/utils/wbs';
 import { fmtDays } from '@/utils/format';
 import { dayjs, fmtDate, DATE_FMT, isOverdue, today, diffDays } from '@/utils/date';
@@ -467,6 +468,26 @@ export function WbsPage(): JSX.Element {
 
   // 视图切换：树形 / 甘特图（feat/connect-b10 后续）
   const [view, setView] = useState<'tree' | 'gantt'>('tree');
+
+  /* 优先级筛选（前端过滤，沿用上周进展面板范式）：空 = 全部。
+   * 命中节点保留其祖先链（树结构不破坏）；仅作用于展示（树形 + 甘特），编辑/拖拽仍走原始 tree */
+  const [priorityFilter, setPriorityFilter] = useState<Priority[]>([]);
+  const filteredTree = useMemo(() => {
+    if (priorityFilter.length === 0) return tree;
+    const match = (n: WbsTreeNode): boolean => priorityFilter.includes(n.priority);
+    const walk = (list: WbsTreeNode[]): WbsTreeNode[] =>
+      list
+        .map((n) => {
+          const children = walk(n.children);
+          if (match(n) || children.length > 0) return { ...n, children };
+          return null;
+        })
+        .filter((n): n is WbsTreeNode => n !== null);
+    return walk(tree);
+  }, [tree, priorityFilter]);
+  const filteredCount = useMemo(() => flattenTree(filteredTree).length, [filteredTree]);
+  const togglePriorityFilter = (p: Priority): void =>
+    setPriorityFilter((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]));
   const handleReschedule = (id: string, startDate: string, dueDate: string): void => {
     void updateNode(id, { startDate, dueDate });
   };
@@ -498,17 +519,19 @@ export function WbsPage(): JSX.Element {
   );
 
   /**
-   * 当前编辑节点的负责人是否属于本项目成员。
+   * 表单当前选中的负责人是否属于本项目成员。
    * 以 users.id（稳定身份键）为准比对，open_id 仅在其缺失时兜底——
    * open_id 会因飞书应用隔离 / 重新导入而变化，直接用它比对会在换 userid 后失配，
    * 导致明明是项目成员却被误报「非项目成员」。
+   * 2026-09-09 修复：改按「表单当前值」判定而非树上旧数据（editingNode）——
+   * 编辑无责任人节点时旧值恒空、恒判 false，导致选中任何成员都被误报
+   * 「非项目成员」（helperText 警告 + 兜底 MenuItem 顶掉正常回显）。
+   * 空值（未指派）不算违规；历史残留的非成员值打开编辑时仍会正确警示。
    */
   const ownerIsMember = useMemo(() => {
-    if (!editingNode) return true; // 新建态：值必然取自下拉，恒在成员内
-    const uid = editingNode.ownerUserId;
-    if (uid != null) return memberOptions.some((m) => m.userId === uid);
-    return memberOptions.some((m) => m.value === editingNode.owner);
-  }, [editingNode, memberOptions]);
+    if (!form.owner) return true; // 未指派：无需警示
+    return memberOptions.some((m) => m.value === form.owner);
+  }, [form.owner, memberOptions]);
 
   /** 当前表单「上级节点」对应的节点；空串 = 根层 */
   const formParent = useMemo(
@@ -764,8 +787,9 @@ export function WbsPage(): JSX.Element {
                     </Stack>
                   )}
                 </Stack>
-                {/* 行2：状态 + 里程碑 + 起止 + 日志 + 附件 + 写日志 + 进度 + 估/实 + 负责人（自动换行） */}
+                {/* 行2：优先级 + 状态 + 里程碑 + 起止 + 日志 + 附件 + 写日志 + 进度 + 估/实 + 负责人（自动换行） */}
                 <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" sx={{ minWidth: 0, width: '100%', pl: 4 }}>
+                  <PriorityChip priority={node.priority} sx={{ flexShrink: 0 }} />
                   <StatusChip status={node.status} variant="soft" sx={{ justifyContent: 'center', flexShrink: 0 }} />
                   {boundMs && (
                     <Chip
@@ -875,6 +899,8 @@ export function WbsPage(): JSX.Element {
                 <Typography sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto' }} noWrap>
                   {node.name}
                 </Typography>
+                {/* 优先级徽标（B14）：复用全局 PriorityChip（P0 红/P1 橙/P2 蓝/P3 灰），与工作台抽屉同款 */}
+                <PriorityChip priority={node.priority} sx={{ flexShrink: 0 }} />
                 {/* R4-P0-5：节点行状态标识（全节点可见，父/叶同规则） */}
                 <StatusChip
                   status={node.status}
@@ -1044,11 +1070,49 @@ export function WbsPage(): JSX.Element {
         >
           甘特图
         </Button>
+
+        <Box sx={{ flex: 1 }} />
+        {/* 优先级筛选：多选，命中节点保留祖先链；色随全局 tone（P0 红/P1 橙/P2 蓝/P3 灰） */}
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            优先级
+          </Typography>
+          {PRIORITY_OPTIONS.map((o) => {
+            const active = priorityFilter.includes(o.value);
+            const c = toneColor[toneOf(o.value)];
+            return (
+              <Chip
+                key={o.value}
+                size="small"
+                label={o.value}
+                onClick={() => togglePriorityFilter(o.value)}
+                sx={{
+                  height: 24,
+                  cursor: 'pointer',
+                  bgcolor: active ? c : 'transparent',
+                  color: active ? '#fff' : 'text.secondary',
+                  borderColor: active ? c : 'divider',
+                  '&:hover': { bgcolor: active ? c : 'action.hover' },
+                }}
+                variant={active ? 'filled' : 'outlined'}
+              />
+            );
+          })}
+          {priorityFilter.length > 0 && (
+            <Button size="small" sx={{ minWidth: 0, px: 1 }} onClick={() => setPriorityFilter([])}>
+              清除
+            </Button>
+          )}
+        </Stack>
       </Stack>
 
       <SectionCard
         title="工作分解结构（WBS）"
-        subtitle={`共 ${nodes.length} 个节点 · 展开/折叠点击节点左侧箭头`}
+        subtitle={
+          priorityFilter.length > 0
+            ? `筛出 ${filteredCount} 个节点（含父链） · 共 ${nodes.length} 个 · 展开/折叠点击节点左侧箭头`
+            : `共 ${nodes.length} 个节点 · 展开/折叠点击节点左侧箭头`
+        }
         actions={
           <Stack direction="row" spacing={1}>
             <Button
@@ -1080,18 +1144,23 @@ export function WbsPage(): JSX.Element {
             title="暂无任务"
             description="该项目暂无 WBS 节点，可点击「新建任务」补建（新项目会按模板自动生成骨架）"
           />
+        ) : filteredTree.length === 0 ? (
+          <EmptyState
+            title="无匹配优先级的任务"
+            description="当前优先级筛选没有命中任何节点，可点击上方「清除」重置"
+          />
         ) : view === 'tree' ? (
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
             <Box sx={{ px: 1, py: 1 }}>
               <SimpleTreeView defaultExpandedItems={expanded} sx={{ flexGrow: 1 }}>
-                {tree.map((n) => renderNode(n))}
+                {filteredTree.map((n) => renderNode(n))}
               </SimpleTreeView>
             </Box>
           </DndContext>
         ) : (
           <GanttChart
             nodes={nodes}
-            tree={tree}
+            tree={filteredTree}
             editable={editable}
             onReschedule={handleReschedule}
             onReorder={handleReorder}
