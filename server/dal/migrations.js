@@ -1737,6 +1737,26 @@ function migrationV27(db) {
   console.log('[migrations] v27 progress_snapshots 加 source 列（report/scheduled/backfill，D03 到点快照）');
 }
 
+/* ── 迁移 v28：审批模板逐节点指定审批人（B10 阶段二增强） ── */
+
+/**
+ * v28 = `review_templates` 增加 `assignees` 列（JSON 数组，与 chain 等长；
+ * 元素为 open_id 或 NULL，NULL = 该节点按角色自动绑定）。
+ *
+ * 存量行该列 NULL（v14 种子 INSERT 未含该列）→ 读路径按「全 null」处理，
+ * 即全部走角色自动绑定，向后完全兼容。
+ *
+ * 幂等：`hasColumn` 守卫（沿用 v4/v5/v9/v11/v27 追加列范式），重复执行安全。
+ *
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrationV28(db, now) { // eslint-disable-line no-unused-vars
+  if (!tableExists(db, 'review_templates')) return;
+  if (hasColumn(db, 'review_templates', 'assignees')) return;
+  db.exec('ALTER TABLE review_templates ADD COLUMN assignees TEXT');
+  console.log('[migrations] v28 review_templates 加 assignees 列（逐节点指定审批人）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1771,6 +1791,7 @@ const MIGRATIONS = [
   { version: 25, name: 'connect-v25-admin-config-actions', up: migrationV25 },
   { version: 26, name: 'connect-v26-openid-realign', up: migrationV26 },
   { version: 27, name: 'connect-v27-snapshot-source', up: migrationV27 },
+  { version: 28, name: 'connect-v28-review-template-assignees', up: migrationV28 },
 ];
 
 /**

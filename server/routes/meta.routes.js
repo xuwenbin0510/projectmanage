@@ -12,10 +12,11 @@
 const express = require('express');
 
 const db = require('../../db');
-const { ok, asyncHandler } = require('../lib/envelope');
+const { ok, asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
 const { requireAuth } = require('../middleware/auth');
 const { REVIEW_TEMPLATES, DEFAULT_WIP_LIMIT } = require('../config/enums');
 const projectService = require('../services/project.service');
+const roleCatalog = require('../services/roleCatalog');
 
 const router = express.Router();
 
@@ -146,6 +147,54 @@ router.get(
         }),
       ),
     );
+  }),
+);
+
+/**
+ * GET /api/meta/role-candidates?role=<key>&projectId=<可选>
+ * 返回某审批角色的合法候选人 [{openId, name}]，供后台「逐节点指定审批人」下拉取数。
+ *
+ * 候选池算法与 buildSteps 同款：
+ *  - 全局角色（scope=global）：用户 `users.global_role` 或 `user_roles.role_key` 命中该角色，
+ *    且 status='active'（收录进候选人 = 引擎真正能绑定的人）。
+ *  - 项目角色（scope=project）：仅在提供 projectId 时，返回该项目内 `project_role` 命中该角色的成员；
+ *    不提供 projectId（如全局模板编辑器）则返回空（项目角色候选人依赖具体项目，模板层面无法定死）。
+ *  - customer_rep 等虚拟角色（不在 roles 表）：走 project 分支，需 projectId，否则返回空。
+ */
+router.get(
+  '/meta/role-candidates',
+  requireAuth,
+  asyncHandler(async function getRoleCandidates(req, res) {
+    const role = String(req.query.role || '');
+    const projectId = String(req.query.projectId || '');
+    if (!role) {
+      throw new AppError(ErrorCode.E_VALIDATION, '缺少 role 参数', { field: 'role' });
+    }
+
+    let candidates = [];
+    if (roleCatalog.isGlobalRole(role)) {
+      const rows = db
+        .prepare(
+          'SELECT u.open_id AS openId, u.name AS name FROM users u '
+          + "WHERE u.status = 'active' AND (u.global_role = ? "
+          + 'OR u.open_id IN (SELECT user_open_id FROM user_roles WHERE role_key = ?)) '
+          + 'ORDER BY u.id ASC',
+        )
+        .all(role, role);
+      candidates = rows;
+    } else if (projectId) {
+      const rows = db
+        .prepare(
+          'SELECT u.open_id AS openId, u.name AS name FROM project_members pm '
+          + 'JOIN users u ON u.open_id = pm.user_open_id '
+          + "WHERE pm.project_id = ? AND pm.project_role = ? AND u.status = 'active' "
+          + 'ORDER BY pm.assigned_at ASC, pm.id ASC',
+        )
+        .all(projectId, role);
+      candidates = rows;
+    }
+
+    res.json(ok(candidates));
   }),
 );
 

@@ -199,18 +199,50 @@ function getReview(db, id) {
  * @returns {Array<object>} ReviewStep[]（API 形态）
  */
 /**
+ * 将模板存储的 assignees（JSON 文本 / 数组 / null）规范化为与 chain 等长的数组。
+ * 每个元素为 open_id 字符串或 null（null = 该节点按角色自动绑定）。
+ * 长度不足补 null，超出截断；非数组（如历史 NULL）视为全 null。
+ * @param {*} rawAssignees
+ * @param {string|null} rawChain JSON 数组文本，用于确定长度
+ * @returns {(string|null)[]}
+ */
+function normalizeAssignees(rawAssignees, rawChain) {
+  let arr = [];
+  try {
+    const parsed = typeof rawAssignees === 'string' ? JSON.parse(rawAssignees || '[]') : rawAssignees;
+    if (Array.isArray(parsed)) arr = parsed;
+  } catch (e) {
+    arr = [];
+  }
+  let len = 0;
+  try {
+    const chain = JSON.parse(rawChain || '[]');
+    if (Array.isArray(chain)) len = chain.length;
+  } catch (e) {
+    len = 0;
+  }
+  const out = [];
+  for (let i = 0; i < len; i += 1) {
+    const v = arr[i];
+    out.push(v == null ? null : mappers.toStr(String(v)));
+  }
+  return out;
+}
+
+/**
  * 审批模板 DB 优先读取（管理后台阶段二：审批流程可配置）。
  *
  * 查 `review_templates` 表 active=1 的记录；无记录返回 null，由调用方回落旧配置
  * （config.APPROVAL_TEMPLATES / enums.REVIEW_TEMPLATES），保证老库零行为变化。
+ * 读出的 `assignees` 规范化到与 `chain` 等长（NULL/缺失 → 全 null = 全按角色自动）。
  * @param {object} db
  * @param {string} key
- * @returns {{key:string,scope:string,label:string,mode:string,chain:string[]}|null}
+ * @returns {{key:string,scope:string,label:string,mode:string,chain:string[],assignees:(string|null)[]}|null}
  */
 function getReviewTemplate(db, key) {
   try {
     const row = db
-      .prepare('SELECT key, scope, label, mode, chain FROM review_templates WHERE key = ? AND active = 1')
+      .prepare('SELECT key, scope, label, mode, chain, assignees FROM review_templates WHERE key = ? AND active = 1')
       .get(String(key));
     if (!row) return null;
     return {
@@ -219,6 +251,7 @@ function getReviewTemplate(db, key) {
       label: row.label,
       mode: row.mode,
       chain: JSON.parse(row.chain || '[]'),
+      assignees: normalizeAssignees(row.assignees, row.chain),
     };
   } catch (e) {
     return null; // 表不存在（极端情况：迁移未执行）→ 回落旧配置
@@ -335,6 +368,7 @@ function createReview(db, payload, me) {
   let mode;
   let templateKey;
   let tplLabel;
+  let tplAssignees; // 模板级逐节点固定审批人（与 chain 等长，null=按角色自动）
   if (reviewType === 'project') {
     const type = mappers.toStr(project.type, 'B');
     const dbTpl = getReviewTemplate(db, 'project:' + type) || getReviewTemplate(db, 'project:_default');
@@ -343,6 +377,7 @@ function createReview(db, payload, me) {
       mode = dbTpl.mode;
       templateKey = dbTpl.key;
       tplLabel = dbTpl.label;
+      tplAssignees = dbTpl.assignees;
     } else {
       chain =
         (config.APPROVAL_TEMPLATES && config.APPROVAL_TEMPLATES[type]) ||
@@ -351,14 +386,19 @@ function createReview(db, payload, me) {
       mode = 'serial';
       templateKey = 'project:' + type;
       tplLabel = '立项审批';
+      tplAssignees = null;
     }
   } else {
-    const dbTpl = getReviewTemplate(db, reviewType);
+    const type = mappers.toStr(project.type, 'B');
+    // ccb 按项目类别分档回落：ccb:A/B/C/D → ccb（D2 定档）；其余场景不分档
+    let dbTpl = reviewType === 'ccb' ? getReviewTemplate(db, 'ccb:' + type) : null;
+    if (!dbTpl) dbTpl = getReviewTemplate(db, reviewType);
     if (dbTpl) {
       chain = dbTpl.chain;
       mode = dbTpl.mode;
       templateKey = dbTpl.key;
       tplLabel = dbTpl.label;
+      tplAssignees = dbTpl.assignees;
     } else {
       const tpl = enums.REVIEW_TEMPLATES[reviewType];
       if (!tpl) {
@@ -370,6 +410,7 @@ function createReview(db, payload, me) {
       mode = tpl.mode;
       templateKey = tpl.key;
       tplLabel = tpl.label;
+      tplAssignees = null;
     }
   }
 
@@ -380,7 +421,9 @@ function createReview(db, payload, me) {
   // 设计修正：以 users.id 作为稳定身份键落库
   const actorUserId = me && me.id != null ? Number(me.id) : mappers.resolveUserId(db, openId);
 
-  const steps = buildSteps(db, id, projectId, chain, p.assignees);
+  // 显式传入的 assignees 优先级最高；否则回落模板级固定审批人；都没有则全按角色自动
+  const effectiveAssignees = p.assignees !== undefined ? p.assignees : (tplAssignees || []);
+  const steps = buildSteps(db, id, projectId, chain, effectiveAssignees);
   if (mode === 'parallel_veto') {
     steps.forEach(function (s) { s.status = 'current'; });
   }

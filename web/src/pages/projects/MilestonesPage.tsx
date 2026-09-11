@@ -26,7 +26,7 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { useNavigate, useParams } from 'react-router-dom';
 
-import { ConfirmDialog, DataTable, FormDialog, SectionCard, StatusChip, ProgressBar } from '@/components/common';
+import { ConfirmDialog, DataTable, FormDialog, SectionCard, StatusChip, ProgressBar, TruncatedName } from '@/components/common';
 import type { Column } from '@/components/common';
 import { api } from '@/api/client';
 import { milestoneStartFrom } from '@/api/mock/rules';
@@ -338,21 +338,32 @@ export function MilestonesPage(): JSX.Element {
       ? reschedule.date.diff(dayjs(reschedule.ms.currentDate), 'day')
       : null;
 
-  /* 移动端（<600px）只保留「里程碑 / 计划日期 / 状态 / 达成 / 操作」，
-   * 目标·偏差·关联任务·文档 折到 sm 以上再显示；桌面（≥600px）列集与列宽完全不变。 */
+  /* 移动端（<600px）只保留「里程碑 / 计划日期 / 状态 / 达成 / 操作」；
+   * 目标·关联任务 折到 sm 以上显示，偏差·文档 折到 lg（≥1200px）以上显示。
+   * 说明：1099~1199px 是飞书客户端窗口常见宽度，9 列在此放不下，
+   * 故把信息密度最低的「偏差」「文档」收起到 lg（两列均可从日期/状态与文档页反查）。 */
   const columns: Array<Column<MilestoneWithGate>> = [
     {
       key: 'name',
       label: '里程碑',
+      /* 显式宽度是这张表的定海神针：此前该列无 width，在 table-layout:fixed 下
+       * 成为唯一「弹性列」——宽屏独吞全部余量（1680px 实测 394px，挤压其他列），
+       * 窄屏第一个被压成 0px（1120px 实测）。设 width 后余量按比例分摊给所有列。
+       * md 取 180（而非 140）：单元格左右各有 16px 内边距，140 只剩 108px 正文，
+       * 实测 1120px 下 6 行截断 5 行、1440px 截断 4 行；180 让正文达到 148px，
+       * 两档截断均归零，而「目标/达成标准」让出 40px 后总宽不变（详见该列注释）。
+       * xl（≥1536px）放到 240 承接大屏余量。 */
+      width: { xs: 120, md: 180, xl: 240 },
+      /* 该列有硬上限宽度，长名称必然截断——截断时悬停出完整「编码 + 名称」，
+       * 未截断则不打扰（复用全局 TruncatedName，与 WBS 任务名同款行为）。 */
       render: (m) => (
         <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
-            {m.code} {m.name}
-          </Typography>
+          <TruncatedName name={`${m.code} ${m.name}`} sx={{ fontSize: 14, fontWeight: 600 }} />
           {m.lastChangeId && (
-            <Typography variant="caption" color="text.secondary">
-              最近由变更单 {m.lastChangeId} 调整
-            </Typography>
+            <TruncatedName
+              name={`最近由变更单 ${m.lastChangeId} 调整`}
+              sx={{ fontSize: 12, color: 'text.secondary' }}
+            />
           )}
         </Box>
       ),
@@ -360,7 +371,10 @@ export function MilestonesPage(): JSX.Element {
     {
       key: 'target',
       label: '目标 / 达成标准',
-      width: 200,
+      /* 200 → 160：把 40px 让给「里程碑」列（后者是行标识，截断代价更高）。
+       * 本列正文为 2 行截断 + Tooltip 兜底，信息不丢；总固定宽保持 974px，
+       * 故窄屏横向滚动量不变（实测 1120px 仍为 120px）。 */
+      width: 160,
       hideBelow: 'sm',
       render: (m) =>
         m.target ? (
@@ -448,7 +462,8 @@ export function MilestonesPage(): JSX.Element {
       key: 'delay',
       label: '偏差',
       width: 96,
-      hideBelow: 'sm',
+      /* 收敛到 lg：窄于 1200px 时隐藏（信息密度最低，延期天数可从日期与状态反推） */
+      hideBelow: 'lg',
       render: (m) => {
         if (m.delayDays === 0) return <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>准时</Typography>;
         const late = m.delayDays > 0;
@@ -561,7 +576,8 @@ export function MilestonesPage(): JSX.Element {
       key: 'docs',
       label: '文档',
       width: 90,
-      hideBelow: 'sm',
+      /* 收敛到 lg：窄于 1200px 时隐藏（仍可从文档页按里程碑筛选反查） */
+      hideBelow: 'lg',
       render: (m) => {
         const n = docCountByMs[m.id] ?? 0;
         return (

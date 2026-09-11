@@ -24,6 +24,7 @@ import type {
   UpdateReviewTemplatePayload,
   CreateTemplatePayload,
   UpdateTemplatePayload,
+  RoleCandidate,
 } from '@/types/project';
 import type { WbsNode, WbsNodeType, TaskStatus, Priority, BoardConfig, BoardView } from '@/types/wbs';
 import type { Report } from '@/types/report';
@@ -472,6 +473,8 @@ export interface ApiClient {
   updateReviewTemplate(key: string, patch: UpdateReviewTemplatePayload): Promise<ReviewTemplateConfig>;
   toggleReviewTemplateActive(key: string, active: boolean): Promise<ReviewTemplateConfig>;
   deleteReviewTemplate(key: string): Promise<{ key: string }>;
+  /** 审批角色候选人（GET /api/meta/role-candidates）：backend 角色候选池，供模板逐节点指定审批人下拉取数 */
+  getRoleCandidates(role: string, projectId?: string): Promise<RoleCandidate[]>;
 
   /* 风险登记册（本期新增功能域） */
   listRisks(projectId: string): Promise<Risk[]>;

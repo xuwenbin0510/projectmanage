@@ -29,7 +29,7 @@ import RuleOutlinedIcon from '@mui/icons-material/RuleOutlined';
 import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard } from '@/components/common';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
-import type { ReviewTemplateConfig, ReviewTemplateScope, CreateReviewTemplatePayload, UpdateReviewTemplatePayload } from '@/types/project';
+import type { ReviewTemplateConfig, ReviewTemplateScope, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, RoleCandidate } from '@/types/project';
 import type { ReviewMode } from '@/types/review';
 import type { Role } from '@/types/project';
 import { api } from '@/api/client';
@@ -54,10 +54,17 @@ interface TplForm {
   label: string;
   mode: ReviewMode;
   chain: string[];
+  /** 逐节点固定审批人：与 chain 等长，元素为 open_id 或 null（null = 按角色自动绑定） */
+  assignees: (string | null)[];
   description: string;
 }
 
-const EMPTY_FORM: TplForm = { key: '', scope: 'business', label: '', mode: 'serial', chain: ['pm', 'tl'], description: '' };
+const EMPTY_FORM: TplForm = { key: '', scope: 'business', label: '', mode: 'serial', chain: ['pm', 'tl'], assignees: [null, null], description: '' };
+
+/** 将模板携带的 assignees 规范化为与 chain 等长的数组（不足补 null） */
+function normalizeToChain(assignees: (string | null)[] | undefined, chain: string[]): (string | null)[] {
+  return chain.map((_, i) => (assignees && assignees[i] != null ? assignees[i] : null));
+}
 
 /**
  * 管理后台 · 审批配置（阶段二：审批流程可配置）
@@ -121,13 +128,21 @@ export function AdminReviewTemplatesPage(): JSX.Element {
 
   const openCreate = (): void => {
     setEditing(null);
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM });
     setOpen(true);
   };
 
   const openEdit = (t: ReviewTemplateConfig): void => {
     setEditing(t);
-    setForm({ key: t.key, scope: t.scope, label: t.label, mode: t.mode, chain: [...t.chain], description: t.description });
+    setForm({
+      key: t.key,
+      scope: t.scope,
+      label: t.label,
+      mode: t.mode,
+      chain: [...t.chain],
+      assignees: normalizeToChain(t.assignees, t.chain),
+      description: t.description,
+    });
     setOpen(true);
   };
 
@@ -163,6 +178,7 @@ export function AdminReviewTemplatesPage(): JSX.Element {
           scope: form.scope,
           mode: form.mode,
           chain: form.chain,
+          assignees: form.assignees,
           description: form.description,
         };
         const updated = await api.updateReviewTemplate(editing.key, patch);
@@ -175,6 +191,7 @@ export function AdminReviewTemplatesPage(): JSX.Element {
           label: form.label.trim(),
           mode: form.mode,
           chain: form.chain,
+          assignees: form.assignees,
           description: form.description,
         };
         const created = await api.createReviewTemplate(payload);
@@ -189,13 +206,42 @@ export function AdminReviewTemplatesPage(): JSX.Element {
     }
   };
 
+  const addNode = (roleKey: string): void => {
+    setForm((f) => ({ ...f, chain: [...f.chain, roleKey], assignees: [...f.assignees, null] }));
+  };
+  const removeNode = (idx: number): void => {
+    setForm((f) => ({
+      ...f,
+      chain: f.chain.filter((_, j) => j !== idx),
+      assignees: f.assignees.filter((_, j) => j !== idx),
+    }));
+  };
+  const changeNodeRole = (idx: number, role: string): void => {
+    // 角色变化 → 该节点审批人重置为 null（防止旧人不匹配新角色）
+    setForm((f) => {
+      const chain = [...f.chain];
+      chain[idx] = role;
+      const assignees = [...f.assignees];
+      assignees[idx] = null;
+      return { ...f, chain, assignees };
+    });
+  };
+  const setApprover = (idx: number, openId: string | null): void => {
+    setForm((f) => {
+      const assignees = [...f.assignees];
+      assignees[idx] = openId;
+      return { ...f, assignees };
+    });
+  };
   const moveRole = (idx: number, dir: -1 | 1): void => {
     setForm((f) => {
       const next = [...f.chain];
       const target = idx + dir;
       if (target < 0 || target >= next.length) return f;
       [next[idx], next[target]] = [next[target], next[idx]];
-      return { ...f, chain: next };
+      const assignees = [...f.assignees];
+      [assignees[idx], assignees[target]] = [assignees[target], assignees[idx]];
+      return { ...f, chain: next, assignees };
     });
   };
 
@@ -377,25 +423,27 @@ export function AdminReviewTemplatesPage(): JSX.Element {
             />
             <Box>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
-                审批链（按顺序串行；点击下方角色添加）
+                审批链（按顺序排列；每个节点选择「按角色自动」或由具体人审批）
               </Typography>
-              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
-                {form.chain.length === 0 && (
-                  <Typography variant="caption" color="text.secondary">
-                    审批链为空，请从下方添加角色
-                  </Typography>
-                )}
-                {form.chain.map((r, i) => (
-                  <Chip
-                    key={`${r}-${i}`}
-                    label={`${i + 1}. ${roleNameMap[r] ?? r}`}
-                    size="small"
-                    onDelete={() => setForm((f) => ({ ...f, chain: f.chain.filter((_, j) => j !== i) }))}
-                    deleteIcon={
-                      <IconButton size="small" sx={{ mr: -0.5 }}>
-                        <DeleteOutlineIcon sx={{ fontSize: 14 }} />
-                      </IconButton>
-                    }
+              {form.chain.length === 0 && (
+                <Typography variant="caption" color="text.secondary">
+                  审批链为空，请从下方添加角色
+                </Typography>
+              )}
+              <Stack spacing={1} sx={{ mb: 1 }}>
+                {form.chain.map((role, i) => (
+                  <ChainNodeEditor
+                    key={`${role}-${i}`}
+                    index={i}
+                    role={role}
+                    approver={form.assignees[i] ?? null}
+                    roleOptions={roleOptions}
+                    isFirst={i === 0}
+                    isLast={i === form.chain.length - 1}
+                    onChangeRole={(r) => changeNodeRole(i, r)}
+                    onChangeApprover={(a) => setApprover(i, a)}
+                    onDelete={() => removeNode(i)}
+                    onMove={(dir) => moveRole(i, dir)}
                   />
                 ))}
               </Stack>
@@ -408,37 +456,11 @@ export function AdminReviewTemplatesPage(): JSX.Element {
                       label={`+ ${r.name}`}
                       size="small"
                       variant="outlined"
-                      onClick={() => setForm((f) => ({ ...f, chain: [...f.chain, r.roleKey] }))}
+                      onClick={() => addNode(r.roleKey)}
                       icon={<AddIcon sx={{ fontSize: 13 }} />}
                       sx={{ cursor: 'pointer' }}
                     />
                   ))}
-              </Stack>
-              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 1 }}>
-                <Typography variant="caption" color="text.secondary">
-                  调整顺序：
-                </Typography>
-                {form.chain.map((r, i) => (
-                  <Stack key={`${r}-mv-${i}`} direction="row" spacing={0.25} alignItems="center">
-                    <Tooltip title="上移">
-                      <span>
-                        <IconButton size="small" disabled={i === 0} onClick={() => moveRole(i, -1)}>
-                          <ArrowUpwardIcon sx={{ fontSize: 15 }} />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                    <Typography variant="caption" sx={{ minWidth: 16, textAlign: 'center' }}>
-                      {i + 1}
-                    </Typography>
-                    <Tooltip title="下移">
-                      <span>
-                        <IconButton size="small" disabled={i === form.chain.length - 1} onClick={() => moveRole(i, 1)}>
-                          <ArrowDownwardIcon sx={{ fontSize: 15 }} />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  </Stack>
-                ))}
               </Stack>
             </Box>
             <TextField
@@ -466,6 +488,85 @@ export function AdminReviewTemplatesPage(): JSX.Element {
           </Button>
         </DialogActions>
       </Dialog>
+    </Stack>
+  );
+}
+
+/** 审批链单个节点：角色下拉 + 审批人下拉（按角色自动 / 指定到具体人） */
+interface ChainNodeEditorProps {
+  index: number;
+  role: string;
+  approver: string | null;
+  roleOptions: Role[];
+  isFirst: boolean;
+  isLast: boolean;
+  onChangeRole: (role: string) => void;
+  onChangeApprover: (openId: string | null) => void;
+  onDelete: () => void;
+  onMove: (dir: -1 | 1) => void;
+}
+
+function ChainNodeEditor(props: ChainNodeEditorProps): JSX.Element {
+  const { role, approver, roleOptions, index, isFirst, isLast } = props;
+  const [candidates, setCandidates] = useState<RoleCandidate[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getRoleCandidates(role)
+      .then((list) => { if (alive) setCandidates(list); })
+      .catch(() => { if (alive) setCandidates([]); });
+    return () => { alive = false; };
+  }, [role]);
+
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+      <Typography variant="caption" sx={{ minWidth: 18, color: 'text.secondary' }}>{index + 1}.</Typography>
+      <TextField
+        select
+        size="small"
+        value={role}
+        onChange={(e) => props.onChangeRole(e.target.value)}
+        sx={{ minWidth: 150 }}
+      >
+        {roleOptions.map((r) => (
+          <MenuItem key={r.roleKey} value={r.roleKey}>
+            {r.name}
+          </MenuItem>
+        ))}
+      </TextField>
+      <TextField
+        select
+        size="small"
+        label="审批人"
+        value={approver ?? ''}
+        onChange={(e) => props.onChangeApprover(e.target.value ? e.target.value : null)}
+        sx={{ minWidth: 180, flex: 1 }}
+      >
+        <MenuItem value="">按角色自动</MenuItem>
+        {candidates.map((c) => (
+          <MenuItem key={c.openId} value={c.openId}>
+            {c.name}
+          </MenuItem>
+        ))}
+      </TextField>
+      <Tooltip title="上移">
+        <span>
+          <IconButton size="small" disabled={isFirst} onClick={() => props.onMove(-1)}>
+            <ArrowUpwardIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="下移">
+        <span>
+          <IconButton size="small" disabled={isLast} onClick={() => props.onMove(1)}>
+            <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <IconButton size="small" onClick={props.onDelete} sx={{ color: 'text.secondary' }}>
+        <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+      </IconButton>
     </Stack>
   );
 }

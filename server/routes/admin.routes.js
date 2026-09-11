@@ -520,17 +520,64 @@ const ALLOWED_CHAIN_ROLES = new Set([
 ]);
 
 /**
+ * 将模板 assignees（数组 / 类数组）规范化为与 chain 等长的数组，
+ * 每个元素为 open_id 字符串或 null（null = 该节点按角色自动绑定）。
+ * 长度不足补 null，超出截断；非数组 → 全 null。
+ * @param {*} input
+ * @param {string[]} chain
+ * @returns {(string|null)[]}
+ */
+function normalizeAssigneesArray(input, chain) {
+  const len = Array.isArray(chain) ? chain.length : 0;
+  const out = new Array(len).fill(null);
+  if (Array.isArray(input)) {
+    for (let i = 0; i < len; i += 1) {
+      const v = input[i];
+      out[i] = v == null || v === '' ? null : String(v);
+    }
+  }
+  return out;
+}
+
+/**
+ * 校验某 open_id 是否为某角色的合法候选人（与 buildSteps 同款口径）：
+ *  - 必须是有效且启用的用户（status != 'disabled'）；
+ *  - 全局角色（scope=global）：还必须持有该角色（users.global_role 或 user_roles.role_key）；
+ *  - 项目角色（scope=project）：候选人依赖具体项目、模板层面无法定死，仅要求有效激活用户。
+ * @param {string} role
+ * @param {string} openId
+ * @returns {boolean}
+ */
+function isValidAssignee(role, openId) {
+  if (!openId) return false;
+  const u = db.prepare('SELECT status FROM users WHERE open_id = ?').get(openId);
+  if (!u || u.status === 'disabled') return false;
+  if (roleCatalog.isGlobalRole(role)) {
+    const holder = db
+      .prepare(
+        'SELECT 1 FROM users WHERE open_id = ? AND global_role = ? '
+        + 'UNION SELECT 1 FROM user_roles WHERE user_open_id = ? AND role_key = ?',
+      )
+      .get(openId, role, openId, role);
+    return !!holder;
+  }
+  return true;
+}
+
+/**
  * review_templates 行 → API 对象（chain JSON → 数组、active 0/1 → boolean）。
  * @param {object} row
  * @returns {object}
  */
 function toApiReviewTemplate(row) {
+  const chain = JSON.parse(row.chain || '[]');
   return {
     key: row.key,
     scope: row.scope,
     label: row.label,
     mode: row.mode,
-    chain: JSON.parse(row.chain || '[]'),
+    chain: chain,
+    assignees: normalizeAssigneesArray(JSON.parse(row.assignees || '[]'), chain),
     description: row.description,
     active: Number(row.active) === 1,
     createdAt: row.created_at,
@@ -604,11 +651,30 @@ router.post(
       });
     }
 
+    /* assignees 白名单 + 规范化 + 候选人校验（规则 a/b；规则 c 仅更新链时适用） */
+    let assignees = [];
+    if (body.assignees !== undefined) {
+      if (!Array.isArray(body.assignees)) {
+        throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+          fields: [{ field: 'assignees', message: 'assignees 必须是数组' }],
+        });
+      }
+      assignees = normalizeAssigneesArray(body.assignees, chain);
+      for (let i = 0; i < chain.length; i += 1) {
+        const v = assignees[i];
+        if (v && !isValidAssignee(chain[i], v)) {
+          throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+            fields: [{ field: 'assignees', message: '第 ' + (i + 1) + ' 步审批人不是「' + chain[i] + '」角色的合法候选人' }],
+          });
+        }
+      }
+    }
+
     const now = nowIso();
     db.prepare(
-      'INSERT INTO review_templates (key, scope, label, mode, chain, description, active, created_at, updated_at) '
-      + 'VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)',
-    ).run(key, scope, label, mode, JSON.stringify(chain), String(body.description || '').slice(0, 200), now, now);
+      'INSERT INTO review_templates (key, scope, label, mode, chain, assignees, description, active, created_at, updated_at) '
+      + 'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)',
+    ).run(key, scope, label, mode, JSON.stringify(chain), JSON.stringify(assignees), String(body.description || '').slice(0, 200), now, now);
 
     res.json(ok(toApiReviewTemplate(db.prepare('SELECT * FROM review_templates WHERE key = ?').get(key)), '审批模板已创建'));
   }),
@@ -626,6 +692,9 @@ router.put(
     const body = req.body || {};
     const target = db.prepare('SELECT * FROM review_templates WHERE key = ?').get(key);
     if (!target) throw new AppError(ErrorCode.E_NOT_FOUND, '审批模板不存在', { key: key });
+
+    const currentChain = JSON.parse((target && target.chain) || '[]');
+    const currentAssignees = normalizeAssigneesArray(JSON.parse((target && target.assignees) || '[]'), currentChain);
 
     const sets = [];
     const args = [];
@@ -660,6 +729,7 @@ router.put(
       sets.push('mode = ?');
       args.push(mode);
     }
+    let newChain = null;
     if (body.chain !== undefined) {
       const chain = Array.isArray(body.chain) ? body.chain.map(String) : [];
       if (!chain.length) {
@@ -673,12 +743,42 @@ router.put(
           fields: [{ field: 'chain', message: '审批链含非法角色：' + bad.join(', ') }],
         });
       }
+      newChain = chain;
       sets.push('chain = ?');
       args.push(JSON.stringify(chain));
     }
     if (body.description !== undefined) {
       sets.push('description = ?');
       args.push(String(body.description).slice(0, 200));
+    }
+
+    /* assignees 白名单 + 规范化 + 候选人校验（规则 a/b/c）
+     *  - a：规范化为与 chain 等长（body.chain 未传则用原链长度）；
+     *  - b：每位非 null 审批人必须是该角色合法候选人，否则 E_VALIDATION；
+     *  - c：若 chain 第 i 位角色发生变化且未随附 assignees，则该位强制置 null（防旧人误留）。 */
+    if (body.assignees !== undefined || body.chain !== undefined) {
+      const effectiveChain = newChain || currentChain;
+      let assignees;
+      if (body.assignees !== undefined) {
+        assignees = normalizeAssigneesArray(body.assignees, effectiveChain);
+      } else {
+        assignees = normalizeAssigneesArray(currentAssignees, effectiveChain);
+        if (body.chain !== undefined) {
+          for (let i = 0; i < effectiveChain.length; i += 1) {
+            if (currentChain[i] !== effectiveChain[i]) assignees[i] = null;
+          }
+        }
+      }
+      for (let i = 0; i < effectiveChain.length; i += 1) {
+        const v = assignees[i];
+        if (v && !isValidAssignee(effectiveChain[i], v)) {
+          throw new AppError(ErrorCode.E_VALIDATION, undefined, {
+            fields: [{ field: 'assignees', message: '第 ' + (i + 1) + ' 步审批人不是「' + effectiveChain[i] + '」角色的合法候选人' }],
+          });
+        }
+      }
+      sets.push('assignees = ?');
+      args.push(JSON.stringify(assignees));
     }
 
     if (!sets.length) {

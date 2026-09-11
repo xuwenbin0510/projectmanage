@@ -23,6 +23,7 @@ import type {
   QualityGate,
   GateChecklistItem,
   CloseBlocker,
+  RoleCandidate,
 } from '@/types/project';
 import type { WbsNode, TaskStatus, BoardConfig, BoardView, BoardColumn } from '@/types/wbs';
 import { BOARD_COLUMNS } from '@/types/wbs';
@@ -4375,6 +4376,9 @@ export class MockApiClient implements ApiClient {
       label: payload.label.trim(),
       mode: payload.mode,
       chain: payload.chain.map(String),
+      assignees: Array.isArray(payload.assignees)
+        ? payload.assignees.map((x) => (x == null ? null : String(x)))
+        : [],
       description: String(payload.description || '').slice(0, 200),
       active: true,
       createdAt: now,
@@ -4392,6 +4396,10 @@ export class MockApiClient implements ApiClient {
     const me = assertCan(db, 'user.manage');
     const tpl = db.reviewTemplates.find((t) => t.key === key) ?? nf();
     const next: ReviewTemplateConfig = { ...tpl };
+    if (patchBody.assignees !== undefined) {
+      const arr = Array.isArray(patchBody.assignees) ? patchBody.assignees : [];
+      next.assignees = next.chain.map((_, i) => (arr[i] == null ? null : String(arr[i])));
+    }
     if (patchBody.label !== undefined) {
       const label = String(patchBody.label).trim();
       if (!label) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
@@ -4442,6 +4450,39 @@ export class MockApiClient implements ApiClient {
     audit(db, me, 'review_template', key, 'delete', '', `删除审批模板「${key}」`, []);
     saveDb();
     return { key };
+  }
+
+  /**
+   * 审批角色候选人（GET /api/meta/role-candidates 的 mock 实现）。
+   * 解析口径与后端 buildSteps / meta.routes 同构：
+   *  - 全局角色：持有该 role_key 的 active 用户（主职位或额外职位）
+   *  - 项目角色：指定 projectId 下、project_role 命中的 active 项目成员
+   */
+  async getRoleCandidates(role: string, projectId?: string): Promise<RoleCandidate[]> {
+    await delay(30);
+    const db = getDb();
+    if (!role) return [];
+    const seen = new Set<string>();
+    const result: RoleCandidate[] = [];
+    const pushUser = (u?: User): void => {
+      if (!u || u.status !== 'active') return;
+      if (seen.has(u.openId)) return;
+      seen.add(u.openId);
+      result.push({ openId: u.openId, name: u.name });
+    };
+    if (isGlobalRole(role)) {
+      db.users.forEach((u) => {
+        if (globalRoleSet(u).includes(role as GlobalRole)) pushUser(u);
+      });
+    } else if (projectId) {
+      db.members
+        .filter((m) => m.projectId === projectId && m.projectRole === role)
+        .forEach((m) => {
+          const u = db.users.find((x) => x.openId === m.userOpenId);
+          pushUser(u);
+        });
+    }
+    return result;
   }
 
   /* ── 风险登记册（本期新增功能域） ──────────────── */

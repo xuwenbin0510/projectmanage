@@ -9,6 +9,7 @@ export { EmptyState, LoadingState, ErrorState } from './States';
 export { SectionCard } from './SectionCard';
 export { DataTable } from './DataTable';
 export type { Column } from './DataTable';
+export { TruncatedName } from './TruncatedName';
 export { ConfirmDialog, FormDialog } from './Dialogs';
 export { PermissionButton } from './PermissionButton';
 export { StatCard, ProgressBar, UserAvatar, FieldRow } from './Widgets';

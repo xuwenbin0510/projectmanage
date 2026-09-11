@@ -153,6 +153,8 @@ export interface ReviewTemplateConfig {
   label: string;
   mode: ReviewMode;
   chain: string[];
+  /** 逐节点固定审批人：与 chain 等长，元素为 open_id 或 null（null = 按角色自动绑定） */
+  assignees?: (string | null)[];
   description: string;
   active: boolean;
   createdAt: string;
@@ -166,6 +168,8 @@ export interface CreateReviewTemplatePayload {
   label: string;
   mode: ReviewMode;
   chain: string[];
+  /** 逐节点固定审批人（可选，默认全 null = 全按角色自动） */
+  assignees?: (string | null)[];
   description?: string;
 }
 
@@ -175,7 +179,15 @@ export interface UpdateReviewTemplatePayload {
   scope?: ReviewTemplateScope;
   mode?: ReviewMode;
   chain?: string[];
+  /** 逐节点固定审批人（与 chain 等长；传 null = 该节点按角色自动） */
+  assignees?: (string | null)[];
   description?: string;
+}
+
+/** 审批角色候选人（GET /api/meta/role-candidates 返回项） */
+export interface RoleCandidate {
+  openId: string;
+  name: string;
 }
 
 /** 分类判定输入（P0-01） */

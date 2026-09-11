@@ -22,6 +22,7 @@ import type {
   ReviewTemplateConfig,
   CreateReviewTemplatePayload,
   UpdateReviewTemplatePayload,
+  RoleCandidate,
   CreateTemplatePayload,
   UpdateTemplatePayload,
 } from '@/types/project';
@@ -581,6 +582,12 @@ export class HttpApiClient implements ApiClient {
   }
   deleteReviewTemplate(key: string): Promise<{ key: string }> {
     return del<{ key: string }>(`/admin/review-templates/${encodeURIComponent(key)}`);
+  }
+  getRoleCandidates(role: string, projectId?: string): Promise<RoleCandidate[]> {
+    const qs = projectId
+      ? `?role=${encodeURIComponent(role)}&projectId=${encodeURIComponent(projectId)}`
+      : `?role=${encodeURIComponent(role)}`;
+    return get<RoleCandidate[]>(`/meta/role-candidates${qs}`);
   }
 
   /* 风险登记册（本期新增功能域） */

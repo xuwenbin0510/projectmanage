@@ -35,6 +35,7 @@ import {
   ProgressBar,
   SectionCard,
   StatusChip,
+  TruncatedName,
   UserAvatar,
 } from '@/components/common';
 import { ReportFormModal } from '@/components/report/ReportFormModal';
@@ -184,37 +185,6 @@ function WbsDragHandle({ id, disabled }: { id: string; disabled: boolean }) {
     >
       <DragIndicatorIcon fontSize="small" />
     </Box>
-  );
-}
-
-/**
- * 任务名（单行截断）：仅当文本实际被截断（scrollWidth > clientWidth）时才弹 Tooltip
- * 显示完整名称；未截断时不出提示，避免每行悬停都打扰。
- * 用 ResizeObserver + 挂载时预检测截断状态——不能在 onMouseEnter 里惰性测量：
- * disableHoverListener 在鼠标进入后才翻转时，Tooltip 已错过 enter 事件不会弹出。
- */
-function TruncatedName({ name }: { name: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const [truncated, setTruncated] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 1);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [name]);
-  return (
-    <Tooltip title={name} arrow disableHoverListener={!truncated}>
-      <Typography
-        ref={ref}
-        sx={{ fontSize: 14, fontWeight: 500, minWidth: 0, flex: '1 1 auto' }}
-        noWrap
-      >
-        {name}
-      </Typography>
-    </Tooltip>
   );
 }
 
@@ -929,7 +899,7 @@ export function WbsPage(): JSX.Element {
                   {node.wbsCode}
                 </Typography>
                 <Chip size="small" variant="outlined" label={WBS_NODE_TYPE_LABEL[node.nodeType]} sx={{ height: 20, flexShrink: 0 }} />
-                <TruncatedName name={node.name} />
+                <TruncatedName name={node.name} sx={{ fontSize: 14, fontWeight: 500, flex: '1 1 auto' }} />
                 {/* 优先级徽标（B14）：复用全局 PriorityChip（P0 红/P1 橙/P2 蓝/P3 灰），与工作台抽屉同款 */}
                 <PriorityChip priority={node.priority} sx={{ flexShrink: 0 }} />
                 {/* R4-P0-5：节点行状态标识（全节点可见，父/叶同规则） */}

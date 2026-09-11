@@ -267,6 +267,71 @@ async function main() {
   assertEq(rvCust && rvCust.steps[2].assigneeOpenId, MGMT, 'step2 management 全局绑定');
   assertEq(rvCust && rvCust.steps[3].assigneeOpenId, MEMBER2, 'step3 customer_rep 经 assignees 覆盖');
 
+  /* ── S4b：模板级 assignees 自动套用（ccb 模板）→ 新评审自动套用 ── */
+  console.log('\n── S4b 模板级 assignees 自动套用（ccb 模板）──');
+  const tpls = okData(await call('GET', '/api/admin/review-templates'), 'GET 模板列表');
+  const ccbTpl = (tpls || []).find((t) => t.key === 'ccb');
+  const ccbOrig = ccbTpl ? ccbTpl.assignees : undefined;
+  // 固定 ccb 第 2 步(po) 为 PO，其余按角色自动
+  await okData(
+    await call('PUT', '/api/admin/review-templates/ccb', { assignees: [null, null, PO, null] }),
+    'ccb 模板写入 assignees（po 固定 PO）',
+  );
+  const pS4b = await createProject('S4b-tpl ' + Date.now(), 'B', {
+    members: [{ userOpenId: ADMIN, role: 'pm' }, { userOpenId: TL, role: 'tl' }, { userOpenId: PO, role: 'po' }],
+  });
+  const pS4bId = pS4b && pS4b.id;
+  const rvTpl = okData(
+    await call('POST', '/api/reviews', { projectId: pS4bId, reviewType: 'ccb', title: 'ccb 模板级 assignees' }),
+    '发起 ccb 评审（不传 inline assignees）',
+  );
+  assertEq(rvTpl && rvTpl.steps[0].assigneeOpenId, ADMIN, 'ccb 模板 step0(pm) 仍按角色绑定 = ADMIN');
+  assertEq(rvTpl && rvTpl.steps[2].assigneeOpenId, PO, 'ccb 模板 step2(po) 被模板 assignees 覆盖为 PO');
+  // 还原 ccb 模板
+  await okData(
+    await call('PUT', '/api/admin/review-templates/ccb', { assignees: ccbOrig || [null, null, null, null] }),
+    '还原 ccb 模板 assignees',
+  );
+
+  /* ── S4c：ccb:<type> 分档回落（ccb:A → ccb）── */
+  console.log('\n── S4c ccb:<type> 分档回落 ──');
+  await okData(
+    await call('POST', '/api/admin/review-templates', {
+      key: 'ccb:A', scope: 'business', label: 'A类CCB', mode: 'serial',
+      chain: ['pm', 'pmo', 'management'], assignees: [null, null, MGMT], description: '',
+    }),
+    '创建 ccb:A 模板（management 固定 MGMT）',
+  );
+  const pS4c = await createProject('S4c-ccbA ' + Date.now(), 'A', {
+    members: [{ userOpenId: ADMIN, role: 'pm' }, { userOpenId: TL, role: 'tl' }, { userOpenId: PMO, role: 'pmo' }],
+  });
+  const pS4cId = pS4c && pS4c.id;
+  const rvCcbA = okData(
+    await call('POST', '/api/reviews', { projectId: pS4cId, reviewType: 'ccb', title: 'ccb:A 回落' }),
+    'A 类项目发起 ccb 评审',
+  );
+  assertEq(rvCcbA && rvCcbA.templateKey, 'ccb:A', 'A 类项目 → templateKey ccb:A（回落链生效）');
+  assertEq(rvCcbA && rvCcbA.steps.length, 3, 'ccb:A 链 3 步', rvCcbA && rvCcbA.steps.map((s) => s.role));
+  assertEq(rvCcbA && rvCcbA.steps[2].assigneeOpenId, MGMT, 'ccb:A step2(management) 被模板 assignees 固定为 MGMT');
+  // 走完审批后清理模板（删除接口要求无进行中评审）
+  await loginAs(ADMIN);
+  await okData(await call('POST', '/api/reviews/' + rvCcbA.id + '/approve', { comment: 'pm 通过' }), 'ccb:A step0 通过');
+  await loginAs(PMO);
+  await okData(await call('POST', '/api/reviews/' + rvCcbA.id + '/approve', { comment: 'pmo 通过' }), 'ccb:A step1 通过');
+  await loginAs(MGMT);
+  await okData(await call('POST', '/api/reviews/' + rvCcbA.id + '/approve', { comment: 'mgmt 通过' }), 'ccb:A step2 通过');
+  await loginAs(ADMIN);
+  await okData(await call('DELETE', '/api/admin/review-templates/ccb:A'), '删除 ccb:A 模板（清理）');
+
+  /* ── S4d：role-candidates 端点 ── */
+  console.log('\n── S4d GET /api/meta/role-candidates ──');
+  const rcMgmt = okData(await call('GET', '/api/meta/role-candidates?role=management'), 'role-candidates?role=management');
+  assert(Array.isArray(rcMgmt), '返回数组');
+  assert(rcMgmt.some((c) => c.openId === MGMT), 'management 候选人含 MGMT');
+  assert(rcMgmt.every((c) => c.openId && c.name), '每项含 openId / name（无 snake_case）');
+  const rcPm = okData(await call('GET', '/api/meta/role-candidates?role=pm&projectId=' + pS4bId), 'role-candidates?role=pm&projectId');
+  assert(rcPm.some((c) => c.openId === ADMIN), 'pm 在该项目内候选人含 ADMIN(pm)');
+
   /* ── S5：transition 全合法边扫 ──────────────────── */
   console.log('\n── S5 transition 全合法边 ──');
   await loginAs(ADMIN);
