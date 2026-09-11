@@ -30,8 +30,7 @@ import { AdminTabs } from './AdminTabs';
 import { TemplateEditorDialog } from '@/components/admin/TemplateEditorDialog';
 import type { LifecycleTemplate, ProjectType, CreateTemplatePayload } from '@/types/project';
 import { api } from '@/api/client';
-import { useToast } from '@/hooks';
-import { PROJECT_TYPE_LABEL } from '@/config/enums';
+import { useToast, useProjectTypes } from '@/hooks';
 
 /** 新增模板弹窗表单 */
 interface CreateForm {
@@ -46,6 +45,8 @@ const EMPTY_CREATE: CreateForm = { projectType: 'A', name: '' };
  */
 export function AdminTemplatesPage(): JSX.Element {
   const toast = useToast();
+  /* 类型下拉 / 「适用分类」列走运行时目录（新增类型即时可选，标签不再 undefined） */
+  const { types, labelOf } = useProjectTypes();
   const [rows, setRows] = useState<LifecycleTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   /** 动态职位中文名（单一真相源 = 后台 roles 表，替代写死的 PROJECT_ROLE_LABEL） */
@@ -171,7 +172,7 @@ export function AdminTemplatesPage(): JSX.Element {
       key: 'type',
       label: '适用分类',
       width: 96,
-      render: (t) => <Chip size="small" variant="outlined" label={PROJECT_TYPE_LABEL[t.projectType as ProjectType]} />,
+      render: (t) => <Chip size="small" variant="outlined" label={labelOf(t.projectType)} />,
     },
     { key: 'version', label: '版本', width: 56, align: 'center', hideBelow: 'md', render: (t) => <Typography variant="caption">v{t.version}</Typography> },
     {
@@ -260,10 +261,18 @@ export function AdminTemplatesPage(): JSX.Element {
       <AdminTabs />
       <PageHeader
         title="内置模板"
-        subtitle="A / B / C / D 四类项目各自的生命周期定义：里程碑（含质量门）与交付物；停用后建项向导改用其他启用模板"
+        subtitle="各项目类型各自的生命周期定义：里程碑（含质量门）与交付物；停用后建项向导改用其他启用模板"
         actions={
           <PermissionButton action="admin:user:role" fallback="disable">
-            <Button variant="contained" size="small" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => {
+                setCreateForm({ projectType: types[0]?.code ?? '', name: '' });
+                setCreateOpen(true);
+              }}
+            >
               新增模板
             </Button>
           </PermissionButton>
@@ -326,10 +335,12 @@ export function AdminTemplatesPage(): JSX.Element {
               value={createForm.projectType}
               onChange={(e) => setCreateForm((f) => ({ ...f, projectType: e.target.value as ProjectType }))}
             >
-              <MenuItem value="A">A 类（交付型）</MenuItem>
-              <MenuItem value="B">B 类（产品型）</MenuItem>
-              <MenuItem value="C">C 类（基建型）</MenuItem>
-              <MenuItem value="D">D 类（通用轻量型）</MenuItem>
+              {types.map((t) => (
+                <MenuItem key={t.code} value={t.code}>
+                  {t.name}
+                  {t.enabled ? '' : '（已停用）'}
+                </MenuItem>
+              ))}
             </TextField>
             <TextField
               label="模板名称（必填）"

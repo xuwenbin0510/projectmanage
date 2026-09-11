@@ -1,22 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
-  AlertTitle,
   Box,
   Button,
-  Checkbox,
   Chip,
   Divider,
+  FormControl,
   FormControlLabel,
+  FormHelperText,
   IconButton,
   MenuItem,
+  Radio,
+  RadioGroup,
   Stack,
   Step,
   StepLabel,
   Stepper,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -28,19 +28,13 @@ import { z } from 'zod';
 import { FieldRow, PageHeader, SectionCard, UserAvatar } from '@/components/common';
 import { api } from '@/api/client';
 import type { CreateProjectPayload } from '@/api/contract';
-import type { ClassifyInput, ClassifyResult, LifecycleTemplate, ProjectRole, ProjectType, TemplateTeamRule, User } from '@/types/project';
-import {
-  PROJECT_TYPES,
-  PROJECT_TYPE_LABEL,
-  PROJECT_TYPE_SHORT,
-} from '@/config/enums';
+import type { LifecycleTemplate, ProjectRole, ProjectType, TemplateTeamRule, User } from '@/types/project';
 import { ROUTES } from '@/config/routes';
-import { useAsync, useToast } from '@/hooks';
+import { useAsync, useProjectTypes, useToast } from '@/hooks';
 import { dayjs, today, diffDays, DATE_FMT, fitMilestoneDatesEx } from '@/utils/date';
 import type { FitMilestoneDatesResult } from '@/utils/date';
 import { fmtAmount } from '@/utils/format';
 import { tokens } from '@/theme/tokens';
-import { classifyProject } from '@/api/mock/rules';
 
 /* ── 表单模型 ─────────────────────────────────────── */
 
@@ -73,18 +67,14 @@ interface CreateForm {
   goalText: string;
   planStart: string;
   planEnd: string;
-  hasHardware: boolean;
-  hasAcceptance: boolean;
-  isSelfIteration: boolean;
-  isInfrastructure: boolean;
+  /** 项目类型（单选，数据源 = 启用中类型列表；唯一真相源 = 后端 project_types 表） */
   type: ProjectType;
-  overrideReason: string;
   members: MemberDraft[];
   /** 里程碑规划草稿（由模板带出，用户可改 / 可新增） */
   milestones: MilestoneDraft[];
 }
 
-const STEPS = ['基本信息', '分类判定', '里程碑规划', '团队组建', '确认提交'] as const;
+const STEPS = ['基本信息', '里程碑规划', '团队组建', '确认提交'] as const;
 
 /** 按团队约束规则检查成员；不满足返回错误文案，满足返回 null（与后端 assertMemberCardinality 同口径） */
 function checkTeamRules(members: MemberDraft[], rules: TemplateTeamRule[], roleNameMap: Record<string, string>): string | null {
@@ -124,12 +114,8 @@ const EMPTY_FORM: CreateForm = {
   goalText: '',
   planStart: today(),
   planEnd: today(),
-  hasHardware: false,
-  hasAcceptance: false,
-  isSelfIteration: true,
-  isInfrastructure: false,
+  /* 缺省类型；类型目录加载后由 effect 收敛为「第一条启用类型」 */
   type: 'B',
-  overrideReason: '',
   members: [],
   milestones: [],
 };
@@ -146,6 +132,8 @@ const EMPTY_FORM: CreateForm = {
 export function ProjectCreatePage(): JSX.Element {
   const navigate = useNavigate();
   const toast = useToast();
+  /* 项目类型目录（表驱动）：启用中列表为单选数据源，labelOf 解析标签 */
+  const { enabledTypes, labelOf } = useProjectTypes();
 
   const [step, setStep] = useState<number>(0);
   const [form, setForm] = useState<CreateForm>({ ...EMPTY_FORM });
@@ -161,15 +149,6 @@ export function ProjectCreatePage(): JSX.Element {
   /** 最近一次里程碑日期压缩结果（含压缩比 / 堆叠标志，供透明化提示 P1-M11/M12） */
   const [fitInfo, setFitInfo] = useState<FitMilestoneDatesResult | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
-  const [classifyResult, setClassifyResult] = useState<ClassifyResult>(() =>
-    classifyProject({
-      contractAmount: 0,
-      hasHardware: false,
-      hasAcceptance: false,
-      isSelfIteration: true,
-      isInfrastructure: false,
-    }),
-  );
 
   const { data: users } = useAsync<User[]>(() => api.listUsers({ status: 'active' }), []);
   const userList: User[] = users ?? [];
@@ -199,45 +178,16 @@ export function ProjectCreatePage(): JSX.Element {
     };
   }, []);
 
-  const classifyInput: ClassifyInput = useMemo(
-    () => ({
-      contractAmount: form.contractAmount,
-      hasHardware: form.hasHardware,
-      hasAcceptance: form.hasAcceptance,
-      isSelfIteration: form.isSelfIteration,
-      isInfrastructure: form.isInfrastructure,
-    }),
-    [
-      form.contractAmount,
-      form.hasHardware,
-      form.hasAcceptance,
-      form.isSelfIteration,
-      form.isInfrastructure,
-    ],
-  );
-
-  /** 分类输入变化 → 实时请求判定建议，并把 type 同步到建议值（用户手动覆盖后保留覆盖） */
+  /**
+   * 类型目录加载后收敛选中值：默认取第一条启用类型；
+   * 若当前选中类型已停用 / 不存在，则回落到第一条启用类型（避免提交非法 type）。
+   */
   useEffect(() => {
-    let alive = true;
-    api
-      .classify(classifyInput)
-      .then((res) => {
-        if (!alive) return;
-        setClassifyResult(res);
-        setForm((f) => (f.type === res.suggested ? f : { ...f, type: res.suggested, overrideReason: '' }));
-      })
-      .catch(() => {
-        // 服务端智能分类不可用 → 本地规则引擎兜底（有意降级），但需让用户知晓
-        if (alive) {
-          setClassifyResult(classifyProject(classifyInput));
-          toast.warning('智能分类服务暂不可用，已按本地规则判定项目类别');
-        }
-      });
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classifyInput]);
+    if (enabledTypes.length === 0) return;
+    setForm((f) =>
+      enabledTypes.some((t) => t.code === f.type) ? f : { ...f, type: enabledTypes[0].code },
+    );
+  }, [enabledTypes]);
 
   /* ── 里程碑规划草稿：进入里程碑步骤时按「分类 + 显式选中的模板」带出（用户反馈① + 方案A） ──
    * 仅在「分类或模板」变化（tplBuiltFor !== `${type}::${templateId}`）时重建，避免覆盖用户编辑。
@@ -245,7 +195,7 @@ export function ProjectCreatePage(): JSX.Element {
    * 日期 = planStart + 模板偏移；用户在向导中可改名称 / 日期、可新增。
    */
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 1) return; // 里程碑规划步（4 步制下索引为 1）
     const key = `${form.type}::${selectedTemplateId}`;
     if (tplBuiltFor === key) return; // 分类 / 模板未变（含仅周期变化）→ 不重建，保留用户编辑
     const { planStart, planEnd } = form;
@@ -307,7 +257,6 @@ export function ProjectCreatePage(): JSX.Element {
   const pmMember = form.members.find((m) => m.role === 'pm');
   const tlCount = form.members.filter((m) => m.role === 'tl').length;
   const pmCount = form.members.filter((m) => m.role === 'pm').length;
-  const isOverride = form.type !== classifyResult.suggested;
   /** 方案A：当前选中的模板对象（下拉展示用） */
   const selectedTpl = templateOptions.find((t) => t.id === selectedTemplateId) ?? null;
   /** 团队约束：模板 definition.team 优先，缺省回落系统默认（PM/TL 各恰 1；B 类另需 PO 恰 1） */
@@ -329,7 +278,7 @@ export function ProjectCreatePage(): JSX.Element {
 
   /**
    * 纯函数收集校验错误（只 return，不 setState）。
-   * `target` = 即将进入的步骤索引；guard 累积式：0 基本 / 1 分类 / 2 里程碑 / 3 团队 / 4 确认。
+   * `target` = 即将进入的步骤索引；guard 累积式：0 基本 / 1 里程碑 / 2 团队 / 3 确认。
    * 提交时需要同步读取错误来决定回跳步骤，因此不能依赖异步的 errors state。
    */
   const collectErrors = (target: number): Record<string, string> => {
@@ -353,13 +302,13 @@ export function ProjectCreatePage(): JSX.Element {
       if (form.planStart && form.planEnd && dayjs(form.planEnd).isBefore(dayjs(form.planStart), 'day')) {
         next.planEnd = '计划结束日期不能早于开始日期';
       }
+      /* 类型必选：目录已加载但当前选中项不在启用列表（如被停用）时拦截 */
+      if (enabledTypes.length > 0 && !enabledTypes.some((t) => t.code === form.type)) {
+        next.type = '请选择项目类型';
+      }
     }
 
-    if (target >= 2 && isOverride && !form.overrideReason.trim()) {
-      next.overrideReason = '覆盖系统分类建议时必须填写理由（会写入审计日志）';
-    }
-
-    if (target >= 3) {
+    if (target >= 2) {
       // 里程碑规划：每个里程碑名称与计划日期必填（用户反馈①）
       form.milestones.forEach((m, i) => {
         if (!m.name.trim()) next[`milestone-${i}`] = '名称必填';
@@ -370,7 +319,7 @@ export function ProjectCreatePage(): JSX.Element {
       }
     }
 
-    if (target >= 4) {
+    if (target >= 3) {
       // 复合键防御：同一人可担任多个角色，但「同一人 + 同一角色」不能重复
       const keys = form.members.map((m) => `${m.userId ?? m.userOpenId}::${m.role}`);
       if (new Set(keys).size !== keys.length) next.members = '同一成员的同一角色不能重复添加';
@@ -439,10 +388,11 @@ export function ProjectCreatePage(): JSX.Element {
   /* ── 提交 ────────────────────────────────────── */
 
   const handleSubmit = async (): Promise<void> => {
-    const nextErrors = collectErrors(4);
+    /* 4 步制：0 基本 / 1 里程碑 / 2 团队 / 3 确认 */
+    const nextErrors = collectErrors(3);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
-      setStep(nextErrors.members ? 3 : nextErrors.milestones ? 2 : nextErrors.overrideReason ? 1 : 0);
+      setStep(nextErrors.members ? 2 : nextErrors.milestones ? 1 : 0);
       return;
     }
     const payload: CreateProjectPayload = {
@@ -455,9 +405,7 @@ export function ProjectCreatePage(): JSX.Element {
       planStart: form.planStart,
       planEnd: form.planEnd,
       pm: pmMember?.userId != null ? String(pmMember.userId) : (pmMember?.userOpenId ?? ''),
-      classifyInput,
-      classifySuggested: classifyResult.suggested,
-      classifyOverrideReason: isOverride ? form.overrideReason.trim() : '',
+      /* 分类字段已整链移除：项目类型由 type 单值承载 */
       templateId: selectedTemplateId || undefined,
       /* 身份键铁律：建项目成员传 userId（users.id），后端按系统身份键落 member_user_id */
       members: form.members.map((m) => ({ userId: m.userId, role: m.role })),
@@ -486,6 +434,42 @@ export function ProjectCreatePage(): JSX.Element {
 
   const renderBasic = (): JSX.Element => (
     <Stack spacing={2.25}>
+      {/* 项目类型（单选）：数据源 = 启用中类型列表；决定生命周期模板与默认里程碑 */}
+      <FormControl component="fieldset" error={Boolean(errors.type)}>
+        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+          项目类型（单选）
+        </Typography>
+        {enabledTypes.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            类型目录加载中…若长时间为空，请检查「项目类型」后台配置
+          </Typography>
+        ) : (
+          <RadioGroup value={form.type} onChange={(e) => patch({ type: e.target.value })}>
+            <Stack spacing={0.25}>
+              {enabledTypes.map((t) => (
+                <FormControlLabel
+                  key={t.code}
+                  value={t.code}
+                  control={<Radio size="small" />}
+                  label={
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {t.name}
+                      </Typography>
+                      {t.example && (
+                        <Typography variant="caption" color="text.secondary">
+                          {t.example}
+                        </Typography>
+                      )}
+                    </Box>
+                  }
+                />
+              ))}
+            </Stack>
+          </RadioGroup>
+        )}
+        <FormHelperText>{errors.type ?? '决定生命周期模板与默认里程碑；类型可在管理后台按需配置'}</FormHelperText>
+      </FormControl>
       <TextField
         label="项目名称"
         required
@@ -511,7 +495,7 @@ export function ProjectCreatePage(): JSX.Element {
           onChange={(e) => patch({ contractAmount: Number(e.target.value) || 0 })}
           inputProps={{ min: 0, step: 1 }}
           error={Boolean(errors.contractAmount)}
-          helperText={errors.contractAmount ?? '大额但特征不明时建议 A 类，自研迭代优先'}
+          helperText={errors.contractAmount ?? '项目合同金额（万元）；内部项目可留空'}
           fullWidth
         />
       </Stack>
@@ -551,98 +535,6 @@ export function ProjectCreatePage(): JSX.Element {
         minRows={3}
         fullWidth
       />
-    </Stack>
-  );
-
-  const renderClassify = (): JSX.Element => (
-    <Stack spacing={2.5}>
-      <Box>
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          项目特征（系统据此判定分类）
-        </Typography>
-        <Stack spacing={0.25}>
-          <FormControlLabel
-            control={
-              <Checkbox checked={form.hasHardware} onChange={(e) => patch({ hasHardware: e.target.checked })} />
-            }
-            label="包含硬件交付（设备采购 / 集成部署）"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox checked={form.hasAcceptance} onChange={(e) => patch({ hasAcceptance: e.target.checked })} />
-            }
-            label="需要客户正式验收"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={form.isSelfIteration}
-                onChange={(e) => patch({ isSelfIteration: e.target.checked })}
-              />
-            }
-            label="自研产品持续迭代"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={form.isInfrastructure}
-                onChange={(e) => patch({ isInfrastructure: e.target.checked })}
-              />
-            }
-            label="基础设施建设（机房 / 网络 / 平台底座）"
-          />
-        </Stack>
-        <Typography variant="caption" color="text.secondary">
-          合同额 {fmtAmount(form.contractAmount)}（取自上一步，修改请返回基本信息）
-        </Typography>
-      </Box>
-
-      <Alert severity={isOverride ? 'warning' : 'info'} variant="outlined">
-        <AlertTitle sx={{ mb: 0.5 }}>
-          系统建议：{PROJECT_TYPE_LABEL[classifyResult.suggested]}
-        </AlertTitle>
-        <Stack component="ul" spacing={0.25} sx={{ pl: 2.25, my: 0.5 }}>
-          {classifyResult.reasons.map((r, i) => (
-            <Typography component="li" key={`${r}-${i}`} variant="body2">
-              {r}
-            </Typography>
-          ))}
-        </Stack>
-      </Alert>
-
-      <Box>
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          最终分类（决定生命周期模板与默认里程碑）
-        </Typography>
-        <ToggleButtonGroup
-          exclusive
-          size="small"
-          value={form.type}
-          onChange={(_, v: ProjectType | null) => {
-            if (v) patch({ type: v, overrideReason: v === classifyResult.suggested ? '' : form.overrideReason });
-          }}
-        >
-          {PROJECT_TYPES.map((t) => (
-            <ToggleButton key={t} value={t} sx={{ px: 2 }}>
-              {PROJECT_TYPE_LABEL[t]}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-      </Box>
-
-      {isOverride && (
-        <TextField
-          label="覆盖理由（必填，写入审计日志）"
-          required
-          value={form.overrideReason}
-          onChange={(e) => patch({ overrideReason: e.target.value })}
-          error={Boolean(errors.overrideReason)}
-          helperText={errors.overrideReason ?? `已由「${PROJECT_TYPE_SHORT[classifyResult.suggested]}」改为「${PROJECT_TYPE_SHORT[form.type]}」`}
-          multiline
-          minRows={2}
-          fullWidth
-        />
-      )}
     </Stack>
   );
 
@@ -733,13 +625,9 @@ export function ProjectCreatePage(): JSX.Element {
   const renderConfirm = (): JSX.Element => (
     <Stack spacing={1.75}>
       <FieldRow label="项目名称">{form.name}</FieldRow>
-      <FieldRow label="项目分类">
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Chip size="small" label={PROJECT_TYPE_LABEL[form.type]} />
-          {isOverride && <Chip size="small" color="warning" variant="outlined" label="已覆盖系统建议" />}
-        </Stack>
+      <FieldRow label="项目类型">
+        <Chip size="small" label={labelOf(form.type)} />
       </FieldRow>
-      {isOverride && <FieldRow label="覆盖理由">{form.overrideReason}</FieldRow>}
       <FieldRow label="客户">{form.customer || '内部项目'}</FieldRow>
       <FieldRow label="合同额">{fmtAmount(form.contractAmount)}</FieldRow>
       <FieldRow label="计划周期">
@@ -765,7 +653,7 @@ export function ProjectCreatePage(): JSX.Element {
       </FieldRow>
       <Divider />
       <Alert severity="info" variant="outlined">
-        提交后系统按所选模板（{PROJECT_TYPE_SHORT[form.type]} 类）生成里程碑（向导中已规划，可在此后继续增删改）；
+        提交后系统按所选模板（项目类型：{labelOf(form.type)}）生成里程碑（向导中已规划，可在此后继续增删改）；
         项目初始状态为「草稿」，需在概览页发起立项审批。
       </Alert>
     </Stack>
@@ -773,7 +661,7 @@ export function ProjectCreatePage(): JSX.Element {
 
   /* ── 计划周期变更检测 + 重算（P0-M5，不静默覆盖用户已手改的日期） ── */
   const periodDirty =
-    step === 2 &&
+    step === 1 &&
     form.milestones.length > 0 &&
     Boolean(builtPeriod.start) &&
     (form.planStart !== builtPeriod.start || form.planEnd !== builtPeriod.end);
@@ -918,7 +806,6 @@ export function ProjectCreatePage(): JSX.Element {
 
   const STEP_RENDER: Array<() => JSX.Element> = [
     renderBasic,
-    renderClassify,
     renderMilestones,
     renderMembers,
     renderConfirm,
@@ -929,7 +816,7 @@ export function ProjectCreatePage(): JSX.Element {
       <PageHeader
         title="新建项目"
         crumbs={[{ label: '项目', to: ROUTES.projects }, { label: '新建' }]}
-        subtitle="分类决定生命周期：A 类交付型 / B 类产品型 / C 类基建型 / D 类通用轻量型"
+        subtitle="项目类型决定生命周期模板与默认里程碑；类型可在管理后台「项目类型」中配置"
       />
 
       <SectionCard>

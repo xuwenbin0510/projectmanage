@@ -43,9 +43,8 @@ import {
   TaskTimeRow,
 } from '@/components/dashboard';
 import { api } from '@/api/client';
-import { useAsync } from '@/hooks';
+import { useAsync, useProjectTypes } from '@/hooks';
 import { ROUTES } from '@/config/routes';
-import { PROJECT_TYPE_SHORT } from '@/config/enums';
 import type { ProgressSegment } from '@/types/dashboard';
 import type { Priority, WbsNode } from '@/types/wbs';
 import { buildDashboard, sortByPriority } from '@/utils/dashboardAgg';
@@ -132,6 +131,9 @@ export function WorkbenchPage(): JSX.Element {
 
   const fetcher = useCallback(() => api.getWorkbench(), []);
   const { data, loading, error, run } = useAsync(fetcher, []);
+
+  /* 类型短标签走运行时目录（stop 新类型渲染为空）——必须置于所有 early return 之前 */
+  const { shortOf } = useProjectTypes();
 
   /* B11：仪表盘聚合。必须在任何早退之前调用，保证 Hooks 顺序稳定 */
   const dashboard = useMemo(() => buildDashboard(data), [data]);
@@ -532,7 +534,7 @@ export function WorkbenchPage(): JSX.Element {
                       <Typography sx={{ fontSize: 14, fontWeight: 600 }} noWrap>
                         {p.name}
                       </Typography>
-                      <Chip size="small" label={PROJECT_TYPE_SHORT[p.type]} variant="outlined" sx={{ height: 20 }} />
+                      <Chip size="small" label={shortOf(p.type)} variant="outlined" sx={{ height: 20 }} />
                     </Stack>
                     <StatusChip status={p.status} />
                   </Stack>

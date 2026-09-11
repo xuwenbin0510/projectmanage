@@ -1,6 +1,4 @@
 import type {
-  ClassifyInput,
-  ClassifyResult,
   ProjectType,
   Project,
   Milestone,
@@ -19,7 +17,6 @@ import type { ReportPayload } from '../contract';
 import type { ReportValidation } from '@/types/report';
 import {
   CCB_EFFORT_THRESHOLD,
-  CLASSIFY_AMOUNT_THRESHOLD,
   REVIEW_TEMPLATES,
   GRANULARITY_LIMIT,
   DEFAULT_WBS_RULES,
@@ -32,88 +29,11 @@ import { isLeafNode, leafNodesOf, weightedProgress } from '@/utils/wbs';
  * 纯业务规则（Mock 引擎与页面预校验共用，服务端为准）
  * ═══════════════════════════════════════════════════ */
 
-/**
- * 项目分类判定规则
- * @prd P0-01（修订：本质特征优先，合同额由硬规则降级为参考信号）
- *
- * 优先级链（自上而下，命中即返回）：
- *   1. C 类 —— 勾选「基础设施建设」：最高优先硬规则
- *   2. A 类 —— 勾选「包含硬件交付」或「需要客户正式验收」：交付本质，优先于自研
- *   3. B 类 —— 勾选「自研产品持续迭代」：产品本质，优先于合同金额
- *   4. 金额参考 —— 四项本质特征全未勾选且合同额 ≥ 阈值：建议 A 类（非硬规则）
- *   5. 默认 —— B 类（产品型）
- *
- * ⚠️ reasons 在 ProjectCreatePage 的分类建议区被直接用作 React key，
- *    任一执行路径内不得出现重复字符串（当前实现已保证）。
+/*
+ * 项目分类判定规则（`classifyProject`）已随「项目类型后台可配置」整链移除 ——
+ * 项目类型改由用户在建项向导「基本信息」步显式单选（唯一真相源 = `project_types` 表）。
+ * 若需回溯旧判定口径，见 git 历史与本文件在本次重构前的版本。
  */
-export function classifyProject(input: ClassifyInput): ClassifyResult {
-  const reasons: string[] = [];
-  const amount = input.contractAmount;
-  const bigAmount = amount >= CLASSIFY_AMOUNT_THRESHOLD;
-  /** 交付本质特征：硬件交付 或 客户验收 */
-  const hasDelivery = input.hasHardware || input.hasAcceptance;
-
-  /* ── 1. C 类：基建型（最高优先硬规则） ───────────── */
-  if (input.isInfrastructure) {
-    reasons.push('勾选「基础设施建设」→ 判定为 C 类（基建型）');
-    if (hasDelivery || input.isSelfIteration) {
-      reasons.push('虽同时勾选了其他特征，但「基础设施建设」为最高优先硬规则，仍判定为 C 类');
-    }
-    if (bigAmount) {
-      reasons.push(
-        `合同额 ${amount} 万元 ≥ ${CLASSIFY_AMOUNT_THRESHOLD} 万，仅作参考信号，不改变 C 类判定`,
-      );
-    }
-    return { suggested: 'C', reasons };
-  }
-
-  /* ── 2. A 类：交付型（硬件 / 客户验收，优先级高于自研） ─── */
-  if (hasDelivery) {
-    if (input.hasHardware) reasons.push('勾选「包含硬件交付」→ 指向 A 类（交付型）');
-    if (input.hasAcceptance) reasons.push('勾选「需要客户正式验收」→ 指向 A 类（交付型）');
-    if (input.isSelfIteration) {
-      reasons.push(
-        '同时勾选「自研产品持续迭代」，但交付特征（硬件交付 / 客户验收）体现项目本质，优先级更高 → A 类优先',
-      );
-    }
-    reasons.push(
-      bigAmount
-        ? `合同额 ${amount} 万元 ≥ ${CLASSIFY_AMOUNT_THRESHOLD} 万，与 A 类判定一致（金额仅为参考信号）`
-        : `合同额 ${amount} 万元 < ${CLASSIFY_AMOUNT_THRESHOLD} 万，但交付特征为硬规则 → 仍判定为 A 类（交付型）`,
-    );
-    return { suggested: 'A', reasons };
-  }
-
-  /* ── 3. B 类：产品型（自研迭代，优先于合同金额） ───── */
-  if (input.isSelfIteration) {
-    reasons.push('勾选「自研产品持续迭代」→ 判定为 B 类（产品型）');
-    reasons.push('未勾选「包含硬件交付」「需要客户正式验收」「基础设施建设」，无交付 / 基建本质特征');
-    if (bigAmount) {
-      reasons.push(
-        `提示：合同额 ${amount} 万元 ≥ ${CLASSIFY_AMOUNT_THRESHOLD} 万，但已按「自研产品持续迭代」判为 B 类（产品型）；` +
-          '若该项目实际包含交付或客户验收环节，请确认分类，必要时手动改为 A 类并填写覆盖理由',
-      );
-    }
-    return { suggested: 'B', reasons };
-  }
-
-  /* ── 4. 金额参考信号：无任何本质特征 + 大额 → 建议 A ─── */
-  if (bigAmount) {
-    reasons.push('未勾选硬件交付 / 客户验收 / 自研迭代 / 基础设施建设，无明确本质特征');
-    reasons.push(
-      `合同额 ${amount} 万元 ≥ ${CLASSIFY_AMOUNT_THRESHOLD} 万 → 建议按 A 类（交付型）管理`,
-    );
-    reasons.push('金额为参考信号而非硬性规则；若为纯自研或内部项目，可手动改为 B 类并填写覆盖理由');
-    return { suggested: 'A', reasons };
-  }
-
-  /* ── 5. 默认：B 类（产品型） ─────────────────────── */
-  reasons.push('未勾选硬件交付 / 客户验收 / 自研迭代 / 基础设施建设，无明确本质特征');
-  reasons.push(
-    `合同额 ${amount} 万元 < ${CLASSIFY_AMOUNT_THRESHOLD} 万，未触发大额参考信号 → 默认 B 类（产品型）`,
-  );
-  return { suggested: 'B', reasons };
-}
 
 /**
  * 变更路由判定

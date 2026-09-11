@@ -74,21 +74,11 @@ export const CHAIN_ROLE_LABEL: Record<string, string> = {
 
 /* ── 项目 ─────────────────────────────────────────── */
 
-export const PROJECT_TYPE_LABEL: Record<ProjectType, string> = {
-  A: 'A 类（交付型）',
-  B: 'B 类（产品型）',
-  C: 'C 类（基建型）',
-  D: 'D 类（通用轻量型）',
-};
-
-export const PROJECT_TYPE_SHORT: Record<ProjectType, string> = {
-  A: 'A类',
-  B: 'B类',
-  C: 'C类',
-  D: 'D类',
-};
-
-export const PROJECT_TYPES: ProjectType[] = ['A', 'B', 'C', 'D'];
+/*
+ * 项目类型标签已改为**运行时表驱动**（原 `PROJECT_TYPE_LABEL / PROJECT_TYPE_SHORT / PROJECT_TYPES`
+ * 常量已删除，避免与后端 `project_types` 表漂移）。
+ * 全站一律经 `useProjectTypes()`（数据源 `GET /api/meta/project-types`）取 `name` / `enabledTypes`。
+ */
 
 export const PROJECT_STATUSES: ProjectStatus[] = [
   '草稿',
@@ -367,8 +357,9 @@ export const CHANGE_STATUSES: ChangeStatus[] = ['草稿', '审批中', '已批�
 /** 变更路由判定阈值：≥3 人日走 CCB */
 export const CCB_EFFORT_THRESHOLD = 3;
 
-/** 项目分类金额参考阈值（万元）：无本质特征且 ≥ 该值时建议 A 类 */
-export const CLASSIFY_AMOUNT_THRESHOLD = 100;
+/*
+ * `CLASSIFY_AMOUNT_THRESHOLD` 已随分类器（`classifyProject`）一并移除。
+ */
 
 /* ── 审计 ─────────────────────────────────────────── */
 

@@ -16,10 +16,9 @@ const rules = require('../lib/rules');
 const wbs = require('../lib/wbs');
 const ids = require('../lib/ids');
 const mappers = require('../lib/mappers');
-const enums = require('../config/enums');
 const rbac = require('../config/permissions');
 const roleCatalog = require('./roleCatalog');
-const classifyService = require('./classify.service');
+const projectTypeService = require('./projectType.service');
 const milestoneService = require('./milestone.service');
 const documentService = require('./document.service');
 const riskService = require('./risk.service');
@@ -112,8 +111,9 @@ function updateProjectBasic(db, req, id, payload) {
     vals.push(String(b.name ?? '').trim());
   }
   if (b.type !== undefined) {
-    if (enums.PROJECT_TYPES.indexOf(b.type) < 0) {
-      throw new AppError(ErrorCode.E_VALIDATION, '项目类型不合法', { type: b.type });
+    /* 类型校验改为查 project_types 表（唯一真相源）；停用类型的历史项目仍可改回其原有类型 */
+    if (!projectTypeService.getType(db, b.type)) {
+      throw new AppError(ErrorCode.E_VALIDATION, '项目类型不存在', { type: b.type });
     }
     fields.push('type = ?');
     vals.push(String(b.type));
@@ -613,12 +613,19 @@ function listMyProjectItems(db, me) {
  * @param {object} payload CreateProjectPayload
  * @throws {AppError} E_VALIDATION
  */
-function assertCreatePayload(payload) {
+function assertCreatePayload(db, payload) {
   const fields = [];
   const p = payload && typeof payload === 'object' ? payload : {};
 
   if (!String(p.name || '').trim()) fields.push({ field: 'name', message: '项目名称不能为空' });
-  if (enums.PROJECT_TYPES.indexOf(p.type) < 0) fields.push({ field: 'type', message: '项目类型必须为 A / B / C / D 之一' });
+  /* a. 类型必须存在于 project_types 且 enabled=1（不存在 / 停用均 → E_TYPE_DISABLED，§5.B） */
+  const typeRow = projectTypeService.getType(db, p.type);
+  if (!typeRow) {
+    throw new AppError(ErrorCode.E_TYPE_DISABLED, '所选项目类型不存在，请重新选择', { type: p.type });
+  }
+  if (!typeRow.enabled) {
+    throw new AppError(ErrorCode.E_TYPE_DISABLED, '所选项目类型已停用，不可用于新建项目', { type: p.type });
+  }
   if (!dates.isDate(p.planStart)) fields.push({ field: 'planStart', message: '计划开始日期格式须为 YYYY-MM-DD' });
   if (!dates.isDate(p.planEnd)) fields.push({ field: 'planEnd', message: '计划结束日期格式须为 YYYY-MM-DD' });
   if (dates.isDate(p.planStart) && dates.isDate(p.planEnd) && dates.diffDays(p.planStart, p.planEnd) < 0) {
@@ -721,7 +728,7 @@ function requireActiveTemplateRow(db, type) {
  * @returns {object|null} LifecycleTemplate | null
  */
 function getLifecycleTemplate(db, type) {
-  if (enums.PROJECT_TYPES.indexOf(type) < 0) return null;
+  /* 类型守卫已移除：任意标识均可查（唯一真相源 = project_types / lifecycle_templates 表） */
   const row = db
     .prepare('SELECT * FROM lifecycle_templates WHERE project_type = ? AND is_active = 1 ORDER BY version DESC LIMIT 1')
     .get(String(type));
@@ -736,7 +743,7 @@ function getLifecycleTemplate(db, type) {
  * @returns {Array<object>} LifecycleTemplate[]
  */
 function listActiveTemplateOptions(db, type) {
-  if (enums.PROJECT_TYPES.indexOf(type) < 0) return [];
+  /* 类型守卫已移除：任意标识均可查 */
   return db
     .prepare(
       'SELECT * FROM lifecycle_templates WHERE project_type = ? AND is_active = 1 ORDER BY version DESC',
@@ -837,13 +844,12 @@ function resolveMemberIdentity(db, m) {
 }
 
 function createProject(db, payload, me) {
-  assertCreatePayload(payload);
+  assertCreatePayload(db, payload);
 
   const type = payload.type;
-  const suggested = enums.PROJECT_TYPES.indexOf(payload.classifySuggested) >= 0
-    ? payload.classifySuggested
-    : type;
-  classifyService.assertOverrideReason(type, suggested, payload.classifyOverrideReason);
+
+  /* b. OQ-1 readiness 闸门（§5.B）：未配置生命周期模板 / 立项审批流 → 阻止建项并提示，不落任何数据 */
+  projectTypeService.assertTypeReadyForCreate(db, type);
 
   /* 方案A（阶段三补）：向导显式选模板 → 优先用 payload.templateId；
      校验归属分类 + 必须启用；不传时回落「分类下唯一生效模板」（旧行为） */
@@ -937,9 +943,10 @@ function createProject(db, payload, me) {
       code: code,
       name: String(payload.name).trim(),
       type: type,
-      classify_input: JSON.stringify(classifyService.normalizeInput(payload.classifyInput)),
-      classify_suggested: suggested,
-      classify_override_reason: String(payload.classifyOverrideReason || ''),
+      /* 分类器已整链移除（T01/T02）：classify_* 列保留以兼容历史读取，新建一律写空默认值 */
+      classify_input: null,
+      classify_suggested: '',
+      classify_override_reason: '',
       customer: String(payload.customer || ''),
       contract_amount: Number(payload.contractAmount) || 0,
       background: String(payload.background || ''),

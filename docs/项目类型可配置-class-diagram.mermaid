@@ -1,0 +1,94 @@
+%% 项目类型后台可配置 · 类图（数据模型 + 服务）
+%% 生成：架构师（software-architect） 2026-09-11
+%% ProjectType 为新增实体（唯一真相源 = DB project_types 表）。
+%% 与 projects.type / lifecycle_templates.project_type / review_templates.key 均为「逻辑外键」约定，不加 DB FOREIGN KEY。
+
+classDiagram
+    direction LR
+
+    class ProjectType {
+        +string code
+        +string name
+        +string example
+        +boolean enabled
+        +number orderNo
+        +string createdAt
+        +string updatedAt
+    }
+
+    class LifecycleTemplate {
+        +string id
+        +string projectType
+        +number version
+        +string name
+        +object definition
+        +boolean isActive
+        +string createdAt
+    }
+
+    class ReviewTemplate {
+        +string key
+        +string scope
+        +string label
+        +string mode
+        +stringList chain
+        +stringList assignees
+        +boolean active
+    }
+
+    class Project {
+        +string id
+        +string code
+        +string type
+        +string status
+        +string templateId
+        +object classifyInput
+        +string classifySuggested
+        +string classifyOverrideReason
+    }
+
+    class ProjectTypeService {
+        +getType(db, code) ProjectType
+        +listTypes(db, opts) ProjectTypeList
+        +listEnabled(db) ProjectTypeList
+        +nextTypeCode(db) string
+        +assertTypeReadyForCreate(db, code) void
+        +createType(db, payload, me) ProjectType
+        +updateType(db, code, patch, me) ProjectType
+        +cloneType(db, code, sourceCode, me) void
+    }
+
+    class ProjectService {
+        +assertCreatePayload(payload) void
+        +createProject(db, payload, me) Project
+        +updateProjectBasic(db, req, id, payload) Project
+        +getLifecycleTemplate(db, type) LifecycleTemplate
+        +listActiveTemplateOptions(db, type) LifecycleTemplateList
+    }
+
+    class ReviewService {
+        +createReview(db, payload, me) Review
+        +getReviewTemplate(db, key) TemplateRef
+    }
+
+    class ErrorCode {
+        <<enumeration>>
+        E_TYPE_NOT_CONFIGURED
+        E_TYPE_DISABLED
+        E_VALIDATION
+        E_NOT_FOUND
+    }
+
+    ProjectType "1" --> "*" Project : projects.type = code
+    ProjectType "1" --> "*" LifecycleTemplate : project_type = code (active=当前生效)
+    ProjectType "1" --> "*" ReviewTemplate : key = project:code / ccb:code
+    Project "1" --> "0..1" LifecycleTemplate : template_id
+
+    ProjectTypeService ..> ProjectType : read/write
+    ProjectTypeService ..> LifecycleTemplate : validate/clone
+    ProjectTypeService ..> ReviewTemplate : validate/clone
+    ProjectTypeService ..> ErrorCode : throw
+    ProjectService ..> ProjectTypeService : assertTypeReadyForCreate
+    ProjectService ..> LifecycleTemplate : select active
+    ProjectService ..> Project : transaction
+    ReviewService ..> ReviewTemplate : project:code then _default

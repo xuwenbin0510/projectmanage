@@ -1,0 +1,85 @@
+%% 项目类型后台可配置 · 时序图
+%% 生成：架构师（software-architect） 2026-09-11
+%% 场景：建项时「选类型 → 解析生命周期模板 + 审批流」，含 OQ-1 readiness 闸门与错误分支。
+
+sequenceDiagram
+    autonumber
+    actor U as 项目经理
+    participant FE as ProjectCreatePage
+    participant API as api/http
+    participant PJ as projects.routes
+    participant PS as project.service
+    participant PTS as projectType.service
+    participant RS as review.service
+    participant DB as SQLite
+
+    Note over FE,DB: A. 加载建项表单
+    FE->>API: listProjectTypes()
+    API->>DB: SELECT * FROM project_types ORDER BY order_no
+    DB-->>API: ProjectType[]（含停用）
+    API-->>FE: 全部类型
+    FE->>FE: 过滤 enabled → 类型下拉（名称 + 例子）
+
+    U->>FE: 单选「项目类型 = <code>」
+    FE->>API: listTemplateOptions(code)
+    API->>DB: lifecycle_templates WHERE project_type=code AND is_active=1 (version DESC)
+    DB-->>API: LifecycleTemplate[]
+    API-->>FE: 该类型启用模板（下拉/默认最新）
+
+    Note over FE,DB: B. 提交建项（readiness 闸门 = OQ-1）
+    U->>FE: 填写基本信息 / 里程碑 / 团队 → 提交
+    FE->>API: createProject(payload{ type, members, milestones, templateId? })
+    API->>PJ: POST /api/projects
+    PJ->>PS: createProject(db, payload, me)
+
+    PS->>PTS: assertCreatePayload + getType(code)
+    PTS->>DB: SELECT * FROM project_types WHERE code=?
+    alt 类型不存在或已停用
+        PTS-->>PS: throw E_TYPE_DISABLED
+        PS-->>PJ: 400
+        PJ-->>FE: { code:E_TYPE_DISABLED, message }
+        FE-->>U: 提示：该类型已停用，不可建项
+    else 类型可用
+        PS->>PTS: assertTypeReadyForCreate(code)
+        PTS->>DB: 有 active 生命周期模板？
+        PTS->>DB: 有 active 'project:<code>' 立项流？
+        alt 缺生命周期模板或立项流
+            PTS-->>PS: throw E_TYPE_NOT_CONFIGURED { missing:[...] }
+            PS-->>PJ: 409
+            PJ-->>FE: { code:E_TYPE_NOT_CONFIGURED, missing }
+            FE-->>U: 提示：请先在后台为该类型配置模板/审批流
+        else 就绪
+            PS->>DB: 选生效模板（payload.templateId 校验归属+启用，否则 version DESC 最新）
+            PS->>PS: assertMemberCardinality(members, tpl)
+            PS->>DB: BEGIN
+            PS->>DB: INSERT projects(type=code, template_id, ...)
+            PS->>DB: INSERT project_members
+            PS->>DB: INSERT milestones(+ quality_gates + gate_checklist_items)
+            PS->>DB: INSERT wbs_nodes（按 tpl.skeleton=per-milestone）
+            PS->>DB: COMMIT
+            PS->>DB: deriveTemplateDocs（事务外，失败不阻塞）
+            PS-->>PJ: Project
+            PJ-->>FE: { code:OK, data:Project }
+            FE-->>U: 跳转项目概览
+        end
+    end
+
+    Note over FE,DB: C. 发起立项审批（解析审批流）
+    U->>FE: 概览页「发起立项审批」
+    FE->>API: createReview({ reviewType:'project', refType:'project' })
+    API->>RS: createReview(db, payload, me)
+    RS->>DB: SELECT * FROM review_templates WHERE key='project:<code>' AND active=1
+    alt 命中 project:<code>
+        DB-->>RS: TemplateRef{ chain, mode, assignees }
+    else 未命中
+        RS->>DB: SELECT ... WHERE key='project:_default' AND active=1
+        DB-->>RS: 默认立项流（在途/历史兜底，不静默取其他类型）
+    end
+    RS->>DB: buildSteps（template assignees > 项目成员 > 全局角色 > 兜底）
+    RS->>DB: INSERT reviews / review_steps / review_approvals
+    RS-->>FE: Review（进入审批中心）
+
+    Note over FE,DB: D. 变更审批（key 跟随类型）
+    FE->>RS: createReview({ reviewType:'ccb' })
+    RS->>DB: key='ccb:<code>' → 回落 'ccb'
+    DB-->>RS: 变更审批链

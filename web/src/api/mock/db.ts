@@ -3,6 +3,7 @@ import type {
   Project,
   ProjectMember,
   LifecycleTemplate,
+  ProjectTypeEntity,
   QualityGate,
   GateChecklistItem,
   Milestone,
@@ -80,6 +81,21 @@ export const DEFAULT_ROLES: Role[] = [
 ];
 
 /**
+ * 项目类型默认 seed（表驱动 · 与后端 v29 迁移的初始 4 类**逐字对齐**）。
+ *
+ * ⚠️ 结构与真实后端 `GET /api/meta/project-types` 出参**完全一致**
+ * （`code / name / example / enabled / orderNo`），保证 mock 模式不漂移（设计 R4）。
+ * 口径：内置 `A/B/C/D` 保持既有「标识→模板」语义不变（A=交付型→载荷产品类、
+ * B=产品型→软件产品类、C=基建型→基建类、D=通用轻量→通用类）。
+ */
+export const DEFAULT_PROJECT_TYPES: ProjectTypeEntity[] = [
+  { code: 'A', name: '载荷产品类', example: '计算 / 网络 / 存储', enabled: true, orderNo: 1 },
+  { code: 'B', name: '软件产品类', example: '平台 / 应用', enabled: true, orderNo: 2 },
+  { code: 'C', name: '基建类', example: '卫星 / 地面站 / 激光', enabled: true, orderNo: 3 },
+  { code: 'D', name: '通用类', example: '行政 / 人力 / 其他', enabled: true, orderNo: 4 },
+];
+
+/**
  * 内存 Mock 数据库（S1 静态原型唯一数据源）
  * @prd 全局
  * - 支持读写，写入后持久化到 sessionStorage，刷新不丢
@@ -105,6 +121,8 @@ export interface MockDb {
   reviewTemplates: ReviewTemplateConfig[];
   /** E1.5：职位目录（管理后台可配置，默认 seed 与后端一致） */
   roles: Role[];
+  /** 项目类型目录（表驱动 · 唯一真相源；默认 seed 与后端 v29 一致，后台可增改） */
+  projectTypes: ProjectTypeEntity[];
   /** D03：全量任务快照（周报提交时采集，供任务进度环比） */
   progressSnapshots: ProgressSnapshotMock[];
   /** 当前登录用户 openId（devlogin 写入） */
@@ -185,6 +203,10 @@ function load(): MockDb | null {
     /* E1.5：旧缓存无 roles → 兜底注入默认职位目录 */
     if (!Array.isArray(parsed.roles)) {
       parsed.roles = DEFAULT_ROLES.map((r) => ({ ...r }));
+    }
+    /* 项目类型：旧缓存无 projectTypes → 兜底注入默认目录，避免运行时 undefined */
+    if (!Array.isArray(parsed.projectTypes) || parsed.projectTypes.length === 0) {
+      parsed.projectTypes = DEFAULT_PROJECT_TYPES.map((t) => ({ ...t }));
     }
     /* B19：旧缓存无权限矩阵 → 兜底注入默认规则 + 动作元数据 */
     if (!Array.isArray(parsed.permissionRules)) {

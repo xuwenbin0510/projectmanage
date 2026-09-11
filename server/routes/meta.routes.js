@@ -16,6 +16,7 @@ const { ok, asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
 const { requireAuth } = require('../middleware/auth');
 const { REVIEW_TEMPLATES, DEFAULT_WIP_LIMIT } = require('../config/enums');
 const projectService = require('../services/project.service');
+const projectTypeService = require('../services/projectType.service');
 const roleCatalog = require('../services/roleCatalog');
 
 const router = express.Router();
@@ -147,6 +148,20 @@ router.get(
         }),
       ),
     );
+  }),
+);
+
+/**
+ * GET /api/meta/project-types —— 项目类型目录（仅 requireAuth：建项页非管理员也要读）。
+ *
+ * 返回**全部**类型（含已停用，`enabled:false`）：页面按 `enabled` 过滤建项下拉，
+ * 按 `code` 解析标签（停用类型的历史项目标签仍可解析，OQ-2）。唯一真相源 = `project_types` 表。
+ */
+router.get(
+  '/meta/project-types',
+  requireAuth,
+  asyncHandler(async function getMetaProjectTypes(req, res) {
+    res.json(ok(projectTypeService.listTypes(db)));
   }),
 );
 

@@ -15,8 +15,7 @@ import type {
   ProjectRole,
   ProjectStatus,
   ProjectType,
-  ClassifyInput,
-  ClassifyResult,
+  ProjectTypeEntity,
   LifecycleTemplate,
   Milestone,
   MilestoneWithGate,
@@ -55,6 +54,8 @@ import type {
   ProjectQuery,
   CreateProjectPayload,
   UpdateProjectPayload,
+  CreateProjectTypePayload,
+  UpdateProjectTypePayload,
   GateDecisionPayload,
   MilestoneCreatePayload,
   MilestoneUpdatePayload,
@@ -80,7 +81,6 @@ import type { MockDb } from './db';
 import { defaultPermissionRules } from './db';
 import { delay } from './delay';
 import {
-  classifyProject,
   routeOfChange,
   gateReady,
   milestoneDelayNeedsChange,
@@ -804,13 +804,119 @@ export class MockApiClient implements ApiClient {
     );
   }
 
-  /* ── 项目 ─────────────────────────────────────── */
+  /* ── 项目类型元数据（表驱动 · 唯一真相源 projectTypes） ────── */
 
-  /** @prd P0-01 分类判定 */
-  async classify(input: ClassifyInput): Promise<ClassifyResult> {
-    await delay(80);
-    return classifyProject(input);
+  /** 全部项目类型（含已停用，按 orderNo 升序）：与真实后端 `/meta/project-types` 同构 */
+  async listProjectTypes(): Promise<ProjectTypeEntity[]> {
+    await delay(40);
+    const db = getDb();
+    currentUser(db);
+    return deepClone([...db.projectTypes].sort((a, b) => a.orderNo - b.orderNo));
   }
+
+  /**
+   * 新增项目类型（仅 admin:template）。
+   * - `code` 由服务端生成：扫描现有 `^T(\d+)$` 取最大 N，下一个 = N+1（内置 A/B/C/D 不匹配，天然不冲突）
+   * - `cloneFrom` 提供时：克隆 ①生命周期模板 ②审批流 `project:<src>` / `ccb:<src>`
+   */
+  async createProjectType(payload: CreateProjectTypePayload): Promise<ProjectTypeEntity> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'admin:template');
+
+    const name = String(payload.name ?? '').trim();
+    if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '类型名称必填', undefined, 400);
+    const example = String(payload.example ?? '').trim();
+
+    /* 标识生成：T + 自增整数（稳定 + 创建后不变；永不重算） */
+    const maxSeq = db.projectTypes.reduce((max, t) => {
+      const m = /^T(\d+)$/.exec(t.code);
+      return m ? Math.max(max, parseInt(m[1], 10)) : max;
+    }, 0);
+    let code = `T${maxSeq + 1}`;
+    let guard = 0;
+    while (db.projectTypes.some((t) => t.code === code) && guard < 10000) {
+      guard += 1;
+      code = `T${maxSeq + 1 + guard}`;
+    }
+    const orderNo = db.projectTypes.reduce((max, t) => Math.max(max, t.orderNo), 0) + 1;
+    const now = nowIso();
+
+    const entity: ProjectTypeEntity = { code, name, example, enabled: true, orderNo, createdAt: now, updatedAt: now };
+    db.projectTypes.push(entity);
+
+    /* 克隆语义（R9 / PRD §5.3）：仅克隆模板与审批流，不迁移任何项目引用 */
+    const cloneFrom = payload.cloneFrom && payload.cloneFrom !== '__blank__' ? payload.cloneFrom : '';
+    if (cloneFrom) {
+      const srcTpl =
+        db.templates.find((t) => t.projectType === cloneFrom && t.isActive) ??
+        db.templates.find((t) => t.projectType === cloneFrom);
+      if (srcTpl) {
+        db.templates.push({
+          ...deepClone(srcTpl),
+          id: genId('TMP'),
+          projectType: code,
+          version: 1,
+          name: `${name}生命周期`,
+          isActive: true,
+          createdAt: now,
+        });
+      }
+      const srcProject = db.reviewTemplates.find((t) => t.key === `project:${cloneFrom}`);
+      if (srcProject) {
+        db.reviewTemplates.push({
+          ...deepClone(srcProject),
+          key: `project:${code}`,
+          label: `${name}立项审批`,
+          scope: 'project',
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      const srcCcb = db.reviewTemplates.find((t) => t.key === `ccb:${cloneFrom}`);
+      if (srcCcb) {
+        db.reviewTemplates.push({
+          ...deepClone(srcCcb),
+          key: `ccb:${code}`,
+          label: `${name}变更评审`,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    audit(db, me, 'template', code, 'create', '', `新增项目类型「${name}」（${code}）`);
+    saveDb();
+    return deepClone(entity);
+  }
+
+  /** 更新项目类型（仅 admin:template，部分更新；code 不可改） */
+  async updateProjectType(code: string, patch: UpdateProjectTypePayload): Promise<ProjectTypeEntity> {
+    await delay();
+    const db = getDb();
+    const me = assertCan(db, 'admin:template');
+    const entity = db.projectTypes.find((t) => t.code === code) ?? nf();
+
+    if (patch.name !== undefined) {
+      const name = String(patch.name).trim();
+      if (!name) throw new ApiError(ErrorCode.E_VALIDATION, '类型名称必填', undefined, 400);
+      entity.name = name;
+    }
+    if (patch.example !== undefined) entity.example = String(patch.example).trim();
+    if (patch.orderNo !== undefined) {
+      const orderNo = Number(patch.orderNo);
+      if (!Number.isFinite(orderNo)) throw new ApiError(ErrorCode.E_VALIDATION, '排序必须为数字', undefined, 400);
+      entity.orderNo = orderNo;
+    }
+    if (patch.enabled !== undefined) entity.enabled = !!patch.enabled;
+    entity.updatedAt = nowIso();
+
+    audit(db, me, 'template', code, 'update', '', `更新项目类型「${entity.name}」`);
+    saveDb();
+    return deepClone(entity);
+  }
+
+  /* ── 项目 ─────────────────────────────────────── */
 
   /** @prd P0-04 项目列表（筛选 + 分页） */
   async listProjects(query: ProjectQuery): Promise<Paged<ProjectListItem>> {
@@ -855,8 +961,13 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     const me = assertCan(db, 'project.create');
 
-    if (payload.type !== payload.classifySuggested && !payload.classifyOverrideReason.trim()) {
-      throw new ApiError(ErrorCode.E_CLASSIFY_REASON_REQUIRED);
+    /* 类型校验改查表（与后端 assertCreatePayload 同口径）：必须存在且启用 */
+    const typeEntity = db.projectTypes.find((t) => t.code === payload.type);
+    if (!typeEntity) {
+      throw new ApiError(ErrorCode.E_VALIDATION, `项目类型「${payload.type}」不存在`, undefined, 400);
+    }
+    if (!typeEntity.enabled) {
+      throw new ApiError(ErrorCode.E_TYPE_DISABLED, undefined, undefined, 400);
     }
 
     const tpl =
@@ -901,9 +1012,16 @@ export class MockApiClient implements ApiClient {
       code,
       name: payload.name,
       type: payload.type,
-      classifyInput: payload.classifyInput,
-      classifySuggested: payload.classifySuggested,
-      classifyOverrideReason: payload.classifyOverrideReason,
+      /* 分类器已移除：classify_* 为只读遗留列，写空 / 默认值（语义真值 = type） */
+      classifyInput: {
+        contractAmount: payload.contractAmount,
+        hasHardware: false,
+        hasAcceptance: false,
+        isSelfIteration: false,
+        isInfrastructure: false,
+      },
+      classifySuggested: payload.type,
+      classifyOverrideReason: '',
       customer: payload.customer,
       contractAmount: payload.contractAmount,
       background: payload.background,
@@ -4261,7 +4379,10 @@ export class MockApiClient implements ApiClient {
     await delay();
     const db = getDb();
     const me = assertCan(db, 'user.manage');
-    if (['A', 'B', 'C', 'D'].indexOf(payload.projectType) < 0) throw new ApiError(ErrorCode.E_VALIDATION, '适用分类必须为 A / B / C / D');
+    /* 类型校验改查表（含停用的新类型也要能配模板）——与后端 admin.routes 同口径 */
+    if (!db.projectTypes.some((t) => t.code === payload.projectType)) {
+      throw new ApiError(ErrorCode.E_VALIDATION, `适用分类「${payload.projectType}」不存在，请先在「项目类型」中创建`);
+    }
     if (!payload.name || !String(payload.name).trim()) throw new ApiError(ErrorCode.E_VALIDATION, '模板名称必填');
     const tpl: LifecycleTemplate = {
       id: genId('TMP'),

@@ -26,9 +26,9 @@ import {
 } from '@/components/common';
 import type { Column } from '@/components/common';
 import { useProjectStore } from '@/stores/projectStore';
-import { useDebounced, useToast } from '@/hooks';
+import { useDebounced, useToast, useProjectTypes } from '@/hooks';
 import type { ProjectListItem, ProjectType, ProjectStatus, Health } from '@/types/project';
-import { PROJECT_STATUSES, PROJECT_TYPES, PROJECT_TYPE_LABEL, PROJECT_TYPE_SHORT, HEALTH_LABEL } from '@/config/enums';
+import { PROJECT_STATUSES, HEALTH_LABEL } from '@/config/enums';
 import { ROUTES } from '@/config/routes';
 import { fmtDate } from '@/utils/date';
 import { fmtAmount } from '@/utils/format';
@@ -59,6 +59,9 @@ export function ProjectListPage(): JSX.Element {
   const loading = useProjectStore((s) => s.listLoading);
   const setQuery = useProjectStore((s) => s.setQuery);
   const fetchList = useProjectStore((s) => s.fetchList);
+
+  /* 类型标签 / 筛选项走运行时目录（表驱动） */
+  const { types, labelOf, shortOf } = useProjectTypes();
 
   const [keyword, setKeyword] = useState<string>(query.keyword ?? '');
   const debounced = useDebounced(keyword, 300);
@@ -137,8 +140,8 @@ export function ProjectListPage(): JSX.Element {
         <Chip
           size="small"
           variant="outlined"
-          label={PROJECT_TYPE_SHORT[r.type]}
-          title={PROJECT_TYPE_LABEL[r.type]}
+          label={shortOf(r.type)}
+          title={labelOf(r.type)}
           sx={{ height: 22 }}
         />
       ),
@@ -200,7 +203,9 @@ export function ProjectListPage(): JSX.Element {
     <Box>
       <PageHeader
         title="项目"
-        subtitle={`共 ${total} 个项目 · A 类交付型 / B 类产品型 / C 类基建型 / D 类通用轻量型 走不同生命周期`}
+        subtitle={`共 ${total} 个项目${
+          types.length ? ` · ${types.map((t) => t.name).join(' / ')} 走不同生命周期` : ''
+        }`}
         actions={
           <Stack direction="row" spacing={1}>
             <Button
@@ -249,9 +254,10 @@ export function ProjectListPage(): JSX.Element {
             sx={{ minWidth: 132 }}
           >
             <MenuItem value="">全部分类</MenuItem>
-            {PROJECT_TYPES.map((t) => (
-              <MenuItem key={t} value={t}>
-                {PROJECT_TYPE_LABEL[t]}
+            {types.map((t) => (
+              <MenuItem key={t.code} value={t.code}>
+                {t.name}
+                {!t.enabled ? '（已停用）' : ''}
               </MenuItem>
             ))}
           </TextField>

@@ -30,6 +30,7 @@ import { AdminUsersPage } from '@/pages/admin/AdminUsersPage';
 import { AdminPermissionsPage } from '@/pages/admin/AdminPermissionsPage';
 import { AdminReviewTemplatesPage } from '@/pages/admin/AdminReviewTemplatesPage';
 import { AdminTemplatesPage } from '@/pages/admin/AdminTemplatesPage';
+import { AdminProjectTypesPage } from '@/pages/admin/AdminProjectTypesPage';
 import { AdminRolesPage } from '@/pages/admin/AdminRolesPage';
 import { AdminAuditPage } from '@/pages/admin/AdminAuditPage';
 import { AdminPageGuard } from '@/components/common/AdminPageGuard';
@@ -150,6 +151,14 @@ export function AppRouter(): JSX.Element {
           element={
             <AdminPageGuard action="admin:template">
               <AdminReviewTemplatesPage />
+            </AdminPageGuard>
+          }
+        />
+        <Route
+          path="admin/project-types"
+          element={
+            <AdminPageGuard action="admin:template">
+              <AdminProjectTypesPage />
             </AdminPageGuard>
           }
         />

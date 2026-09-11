@@ -46,15 +46,9 @@ import {
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
 import { useAuthStore } from '@/stores/authStore';
-import { useAsync, usePermission, useToast } from '@/hooks';
+import { useAsync, usePermission, useProjectTypes, useToast } from '@/hooks';
 import type { CloseBlocker, GateChecklistItem, LifecycleTemplate, MilestoneWithGate, ProjectMember, ProjectRole, ProjectStatus, ProjectType, QualityGate, Role, User } from '@/types/project';
-import {
-  GATE_CONCLUSIONS,
-  GATE_ICON,
-  PROJECT_ROLE_LABEL,
-  PROJECT_TRANSITIONS,
-  PROJECT_TYPE_LABEL,
-} from '@/config/enums';
+import { GATE_CONCLUSIONS, GATE_ICON, PROJECT_ROLE_LABEL, PROJECT_TRANSITIONS } from '@/config/enums';
 import { alphaOf as alpha, colorOf, tokens, toneColor } from '@/theme/tokens';
 import { ErrorCode, isApiError } from '@/types/api';
 import { fmtDate } from '@/utils/date';
@@ -83,6 +77,8 @@ export function ProjectOverviewPage(): JSX.Element {
   const navigate = useNavigate();
   const toast = useToast();
   const { can } = usePermission();
+  /* 类型标签 / 下拉走运行时目录 —— 必须置于所有 early return 之前（Hooks 顺序稳定） */
+  const { types, enabledTypes, labelOf } = useProjectTypes();
 
   const project = useProjectStore((s) => s.current);
   const members = useProjectStore((s) => s.members);
@@ -484,6 +480,12 @@ export function ProjectOverviewPage(): JSX.Element {
 
   if (!project) return <EmptyState title="项目不存在" description="请返回项目列表重新选择" />;
 
+  /* OQ-2：项目类型已停用时打「已停用」标记（历史项目标签仍可解析，不阻断查看） */
+  const currentType = types.find((t) => t.code === project.type);
+  const isTypeDisabled = !!currentType && !currentType.enabled;
+  /** 项目类型下拉数据源：启用中类型 + （若当前类型已停用）补一个带「已停用」后缀的选项 */
+  const typeOptions = currentType && !currentType.enabled ? [...enabledTypes, currentType] : enabledTypes;
+
   /* ── 门检查项 ────────────────────────────────── */
 
   const handleToggleItem = async (item: GateChecklistItem, checked: boolean): Promise<void> => {
@@ -590,7 +592,7 @@ export function ProjectOverviewPage(): JSX.Element {
       {/* 里程碑时间轴 */}
       <SectionCard
         title="里程碑时间轴"
-        subtitle={`${PROJECT_TYPE_LABEL[project.type]} · 共 ${milestones.length} 个里程碑，已达成 ${milestones.filter((m) => m.done).length} 个`}
+        subtitle={`${labelOf(project.type)}${isTypeDisabled ? '（已停用）' : ''} · 共 ${milestones.length} 个里程碑，已达成 ${milestones.filter((m) => m.done).length} 个`}
         actions={
           activeMs && !activeMs.done && !activeMs.gate ? (
             <PermissionButton
@@ -906,13 +908,7 @@ export function ProjectOverviewPage(): JSX.Element {
                   )}
                 </Stack>
               </FieldRow>
-              {project.classifyOverrideReason && (
-                <FieldRow label="分类覆盖">
-                  <Typography variant="body2" sx={{ color: toneColor.warning }}>
-                    {project.classifyOverrideReason}
-                  </Typography>
-                </FieldRow>
-              )}
+              {/* 分类覆盖（classify*）为已废弃的只读历史字段，不再展示 */}
             </Stack>
           </SectionCard>
 
@@ -1386,9 +1382,10 @@ export function ProjectOverviewPage(): JSX.Element {
               void loadEditTemplateOptions(t);
             }}
           >
-            {(['A', 'B', 'C', 'D'] as ProjectType[]).map((t) => (
-              <MenuItem key={t} value={t}>
-                {PROJECT_TYPE_LABEL[t]}（{t} 类）
+            {typeOptions.map((t) => (
+              <MenuItem key={t.code} value={t.code}>
+                {t.name}
+                {t.enabled ? '' : '（已停用）'}
               </MenuItem>
             ))}
           </TextField>

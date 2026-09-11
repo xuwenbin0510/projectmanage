@@ -102,7 +102,8 @@ function normalizeQuery(query) {
 
   return {
     scope: q.scope === 'all' || q.scope === 'mine' ? String(q.scope) : '',
-    type: enums.PROJECT_TYPES.indexOf(q.type) >= 0 ? String(q.type) : '',
+    /* 类型过滤放宽：非空字符串即接受（唯一真相源 = project_types 表，此处不再白名单化） */
+    type: typeof q.type === 'string' && q.type.trim() !== '' ? q.type.trim() : '',
     /* 决策 ⑥：只接受在管三态，其它一律回落三态基线 */
     status: MANAGED_STATUSES.indexOf(q.status) >= 0 ? String(q.status) : '',
     health: enums.HEALTHS.indexOf(q.health) >= 0 ? String(q.health) : '',

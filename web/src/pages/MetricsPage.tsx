@@ -70,17 +70,10 @@ import type {
   DashboardGatesQuery,
   ReportClosureItem,
 } from '@/types/dashboard';
-import { useDashboardOverview, useDebounced } from '@/hooks';
+import { useDashboardOverview, useDebounced, useProjectTypes } from '@/hooks';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/config/routes';
-import {
-  HEALTH_LABEL,
-  PRIORITIES,
-  PRIORITY_OPTIONS,
-  PROJECT_TYPE_SHORT,
-  PROJECT_TYPES,
-  TASK_STATUSES,
-} from '@/config/enums';
+import { HEALTH_LABEL, PRIORITIES, PRIORITY_OPTIONS, TASK_STATUSES } from '@/config/enums';
 import { diffDays, fmtDate, today } from '@/utils/date';
 import { hexAlpha, useChartPalette } from '@/theme/chartPalette';
 import type { Health, ProjectStatus, ProjectType } from '@/types/project';
@@ -134,6 +127,9 @@ export function MetricsPage(): JSX.Element {
     setScope,
     refresh,
   } = useDashboardOverview();
+
+  /* 类型分布 / 筛选维度走运行时目录（含停用类型，便于筛历史项目） */
+  const { types } = useProjectTypes();
 
   const [keyword, setKeyword] = useState<string>(query.keyword ?? '');
   const debounced = useDebounced(keyword, 300);
@@ -456,9 +452,10 @@ export function MetricsPage(): JSX.Element {
             sx={{ minWidth: 132 }}
           >
             <MenuItem value="">全部分类</MenuItem>
-            {PROJECT_TYPES.map((t) => (
-              <MenuItem key={t} value={t}>
-                {PROJECT_TYPE_SHORT[t]}
+            {types.map((t) => (
+              <MenuItem key={t.code} value={t.code}>
+                {t.name}
+                {!t.enabled ? '（已停用）' : ''}
               </MenuItem>
             ))}
           </TextField>

@@ -15,7 +15,8 @@
 
 /* ── 项目 ─────────────────────────────────────────── */
 
-const PROJECT_TYPES = ['A', 'B', 'C', 'D'];
+// 项目类型（PROJECT_TYPES）不再写死：单一真相源 = DB `project_types` 表
+// （出生种子 server/config/project-types-catalog.js，运行时读表 server/services/projectType.service.js）。
 
 const PROJECT_STATUSES = [
   '草稿',
@@ -225,8 +226,7 @@ const CHANGE_STATUSES = ['草稿', '审批中', '已批准', '已驳回', '已�
 /** 变更路由判定阈值：≥3 人日走 CCB */
 const CCB_EFFORT_THRESHOLD = 3;
 
-/** 项目分类金额参考阈值（万元）：无本质特征且 ≥ 该值时建议 A 类 */
-const CLASSIFY_AMOUNT_THRESHOLD = 100;
+/** 项目分类金额参考阈值已随分类器（classify.service）整链移除（项目类型改为表驱动） */
 
 /* ── 审计 ─────────────────────────────────────────── */
 
@@ -258,7 +258,6 @@ const AUDIT_ENTITY_TYPES = [
 const USER_STATUSES = ['active', 'disabled'];
 
 module.exports = {
-  PROJECT_TYPES,
   PROJECT_STATUSES,
   PROJECT_TRANSITIONS,
   PROJECT_ARCHIVED_STATUSES,
@@ -291,7 +290,6 @@ module.exports = {
   CHANGE_ROUTES,
   CHANGE_STATUSES,
   CCB_EFFORT_THRESHOLD,
-  CLASSIFY_AMOUNT_THRESHOLD,
   AUDIT_ACTIONS,
   AUDIT_ENTITY_TYPES,
   USER_STATUSES,

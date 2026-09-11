@@ -58,6 +58,10 @@ export const ErrorCode = {
   E_CHANGE_ROUTE: 'E_CHANGE_ROUTE',
   E_PROJECT_ARCHIVED: 'E_PROJECT_ARCHIVED',
   E_CLOSE_BLOCKED: 'E_CLOSE_BLOCKED',
+  /** 项目类型尚未配置生命周期模板或立项审批流（OQ-1：建项前置闸门 → 409） */
+  E_TYPE_NOT_CONFIGURED: 'E_TYPE_NOT_CONFIGURED',
+  /** 所选项目类型已停用，不可用于新建项目（400） */
+  E_TYPE_DISABLED: 'E_TYPE_DISABLED',
   E_NETWORK: 'E_NETWORK',
   /* ── 后端专有码（server/lib/errors.js）：前端只消费、不主动产生 ── */
   /** 501 · 接口尚未实现（Connect v1 降级桩返回，页面应降级为空态而非白屏） */
@@ -102,6 +106,8 @@ export const ERROR_MESSAGE_ZH: Record<string, string> = {
   E_CHANGE_ROUTE: '变更审批路径不匹配',
   E_PROJECT_ARCHIVED: '项目已结项，处于只读归档状态',
   E_CLOSE_BLOCKED: '结项被阻塞，请先处理阻塞项',
+  E_TYPE_NOT_CONFIGURED: '所选项目类型尚未配置生命周期模板或立项审批流，请先在管理后台完成配置',
+  E_TYPE_DISABLED: '所选项目类型已停用，不可用于新建项目',
   E_NETWORK: '网络异常，请稍后重试',
   E_NOT_IMPLEMENTED: '该功能尚未上线',
   E_INTERNAL: '服务器内部错误',

@@ -56,6 +56,9 @@ const VALID_ROLE_KEYS = ROLE_CATALOG.map(function (r) { return r[0]; });
 /** 权限矩阵默认源（server/config/permissions.js 的 DEFAULT_PERMISSIONS）：v18 种子唯一写入源 */
 const { DEFAULT_PERMISSIONS } = require('../config/permissions');
 
+/** 项目类型出生种子（server/config/project-types-catalog.js 的 PROJECT_TYPE_CATALOG）：v29 唯一写入源 */
+const { PROJECT_TYPE_CATALOG } = require('../config/project-types-catalog');
+
 /** 允许的项目状态（与 enums.PROJECT_STATUSES 一致） */
 const VALID_PROJECT_STATUSES = [
   '草稿', '审批中', '已批准', '进行中', '挂起', '已结项', '已终止', '已驳回',
@@ -1757,6 +1760,86 @@ function migrationV28(db, now) { // eslint-disable-line no-unused-vars
   console.log('[migrations] v28 review_templates 加 assignees 列（逐节点指定审批人）');
 }
 
+/* ── 迁移 v29：项目类型表（表驱动可配置）+ 补种 project:D ── */
+
+/**
+ * v29 = 项目类型从「代码常量」下沉为「表驱动实体」的数据底座。
+ *
+ * 拆解：
+ *  1. `project_types`：类型单一真相源（标识 / 名称 / 例子 / 启停 / 排序）。
+ *     存量 A/B/C/D 项目通过「标识沿用 A/B/C/D」继续有效，**零数据迁移、零表重建**
+ *     （本库实测 `projects.type` 为 `TEXT NOT NULL DEFAULT 'B'`，无 CHECK，可直接容纳 T1/T2…）。
+ *  2. 出生种子：`PROJECT_TYPE_CATALOG` 的 4 行（A/B/C/D）`INSERT OR IGNORE`，
+ *     照 roles-catalog 分层——后台后续改动不被覆盖。
+ *  3. **补种 `project:D` 立项审批模板**：本库实测 `review_templates` 只有
+ *     `project:A/B/C/_default`，D 类一直靠 `_default` 兜底。若不补种，新的 readiness 闸门
+ *     （projectType.service#assertTypeReadyForCreate）会把 D 类建项直接挡死。
+ *     补种口径 = **把 `project:_default` 那一行的 mode/chain/assignees 原样复制**到 `project:D`，
+ *     从而 D 类行为与今天完全一致；`_default` 不存在则回落 `mode='serial'`、`chain=['pm','tl']`。
+ *     不种 `ccb:D`：`ccb:<类型>` 是后台配置项，D 类今天就是回落通用 `ccb`，保持原样。
+ *
+ * 幂等：建表 / 索引 `IF NOT EXISTS`，种子 `INSERT OR IGNORE`，重复执行安全。
+ * ⚠ `run()` 已统一开事务并处理 `PRAGMA foreign_keys`，此处**不要**自行 BEGIN。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} now ISO 时间戳
+ * @returns {void}
+ */
+function migrationV29(db, now) {
+  /* ---------- 1. project_types ---------- */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_types (
+      code       TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      example    TEXT NOT NULL DEFAULT '',
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      order_no   INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_types_enabled ON project_types(enabled, order_no);
+  `);
+
+  /* ---------- 2. 出生种子 A/B/C/D（唯一源 = PROJECT_TYPE_CATALOG，INSERT OR IGNORE） ---------- */
+  const insType = db.prepare(
+    'INSERT OR IGNORE INTO project_types (code, name, example, enabled, order_no, created_at, updated_at) '
+    + 'VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  const txSeed = db.transaction(function () {
+    PROJECT_TYPE_CATALOG.forEach(function (t) {
+      insType.run(t[0], t[1], t[2], t[3], t[4], now, now);
+    });
+  });
+  txSeed();
+
+  /* ---------- 3. 补种 project:D（复制 _default 口径，保证 D 类建项通过 readiness 闸门） ---------- */
+  if (tableExists(db, 'review_templates')) {
+    const def = db
+      .prepare("SELECT mode, chain, assignees FROM review_templates WHERE key = 'project:_default'")
+      .get();
+    const mode = def && def.mode ? def.mode : 'serial';
+    const chain = def && def.chain ? def.chain : JSON.stringify(['pm', 'tl']);
+    const assignees = def && def.assignees != null ? def.assignees : null;
+    db.prepare(
+      'INSERT OR IGNORE INTO review_templates '
+      + '(key, scope, label, mode, chain, assignees, description, active, created_at, updated_at) '
+      + 'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)',
+    ).run(
+      'project:D',
+      'project',
+      'D 类项目立项审批',
+      mode,
+      chain,
+      assignees,
+      'D 类项目立项审批串行链（沿袭原「立项审批（默认）」兜底口径，v29 补种）',
+      now,
+      now,
+    );
+  }
+
+  console.log('[migrations] v29 project_types 表 + A/B/C/D 出生种子 + 补种 project:D 审批模板（项目类型可配置）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1792,6 +1875,7 @@ const MIGRATIONS = [
   { version: 26, name: 'connect-v26-openid-realign', up: migrationV26 },
   { version: 27, name: 'connect-v27-snapshot-source', up: migrationV27 },
   { version: 28, name: 'connect-v28-review-template-assignees', up: migrationV28 },
+  { version: 29, name: 'connect-v29-project-types', up: migrationV29 },
 ];
 
 /**

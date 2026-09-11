@@ -3,8 +3,8 @@ import { Box, Chip, Stack, Tab, Tabs, Typography } from '@mui/material';
 import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { HealthDot, LoadingState, PageHeader, StatusChip } from '@/components/common';
 import { PROJECT_TABS, ROUTES } from '@/config/routes';
-import { PROJECT_TYPE_SHORT } from '@/config/enums';
 import { useProjectStore } from '@/stores/projectStore';
+import { useProjectTypes } from '@/hooks';
 import { useToast } from '@/hooks/useToast';
 import { fmtAmount } from '@/utils/format';
 
@@ -17,6 +17,8 @@ export function ProjectLayout(): JSX.Element {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const toast = useToast();
+  /* 类型标签走运行时目录（stop 新类型渲染为空）——必须置于所有 early return 之前 */
+  const { shortOf } = useProjectTypes();
 
   const current = useProjectStore((s) => s.current);
   const loading = useProjectStore((s) => s.detailLoading);
@@ -46,7 +48,7 @@ export function ProjectLayout(): JSX.Element {
         subtitle={`${current.customer || '内部项目'} · 合同额 ${fmtAmount(current.contractAmount)} · 计划 ${current.planStart} ~ ${current.planEnd}`}
         badges={
           <Stack direction="row" spacing={1} alignItems="center">
-            <Chip size="small" label={PROJECT_TYPE_SHORT[current.type]} variant="outlined" />
+            <Chip size="small" label={shortOf(current.type)} variant="outlined" />
             <StatusChip status={current.status} />
             <HealthDot health={current.health} showLabel />
           </Stack>

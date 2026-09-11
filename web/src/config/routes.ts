@@ -26,6 +26,7 @@ export const ROUTES = {
   adminReviewTemplates: '/admin/review-templates',
   adminAuditLog: '/admin/audit-logs',
   adminTemplates: '/admin/templates',
+  adminProjectTypes: '/admin/project-types',
   adminRoles: '/admin/roles',
 } as const;
 

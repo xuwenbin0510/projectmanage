@@ -14,8 +14,7 @@ import type {
   ProjectRole,
   ProjectStatus,
   ProjectType,
-  ClassifyInput,
-  ClassifyResult,
+  ProjectTypeEntity,
   LifecycleTemplate,
   MilestoneWithGate,
   CloseBlocker,
@@ -49,6 +48,8 @@ import type {
   ProjectQuery,
   CreateProjectPayload,
   UpdateProjectPayload,
+  CreateProjectTypePayload,
+  UpdateProjectTypePayload,
   GateDecisionPayload,
   MilestoneCreatePayload,
   MilestoneUpdatePayload,
@@ -191,11 +192,23 @@ export class HttpApiClient implements ApiClient {
     return get<LifecycleTemplate[]>(`/meta/templates/options?type=${encodeURIComponent(type)}`);
   }
 
-  /* 项目 */
-  classify(input: ClassifyInput): Promise<ClassifyResult> {
-    return post<ClassifyResult>('/projects/classify', input);
+  /* 项目类型元数据（表驱动） */
+  /** 全部项目类型（含已停用）：`GET /api/meta/project-types`（仅 requireAuth，建项页非管理员也要读） */
+  listProjectTypes(): Promise<ProjectTypeEntity[]> {
+    return get<ProjectTypeEntity[]>('/meta/project-types');
   }
 
+  /** 新增项目类型：`POST /api/admin/project-types`（`admin:template`） */
+  createProjectType(payload: CreateProjectTypePayload): Promise<ProjectTypeEntity> {
+    return post<ProjectTypeEntity>('/admin/project-types', payload);
+  }
+
+  /** 更新项目类型：`PUT /api/admin/project-types/:code`（`admin:template`；部分更新，code 不可改） */
+  updateProjectType(code: string, patch: UpdateProjectTypePayload): Promise<ProjectTypeEntity> {
+    return put<ProjectTypeEntity>(`/admin/project-types/${encodeURIComponent(code)}`, patch);
+  }
+
+  /* 项目 */
   listProjects(query: ProjectQuery): Promise<Paged<ProjectListItem>> {
     return get<Paged<ProjectListItem>>(`/projects${qs(query as Record<string, unknown>)}`);
   }

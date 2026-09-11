@@ -1,8 +1,9 @@
 /**
  * 项目主链路路由（P0-01 ~ P0-04 / P0-07）
  *
- * ⚠ **注册顺序硬约束**（§3.4）：静态段必须早于 `:id` 段，否则 `classify` 会被当成项目 id。
- *   POST /api/projects/classify        ← 必须早于 GET /api/projects/:id
+ * ⚠ 注册顺序硬约束（§3.4）：静态段必须早于 `:id` 段。
+ *   注：项目分类判定 `POST /api/projects/classify` 已随分类器整链移除（项目类型改为表驱动），
+ *   原「classify 会被当成项目 id」的顺序隐患随之消失。
  *
  * 本文件只放**批次 1 已实现**的接口；未实现域（WBS / 看板 / 周报 / 评审 / 变更 / 审计 /
  * 风险 / 文档 / close-check）集中在 `stubs.routes.js` 降级返回。
@@ -20,23 +21,11 @@ const { ok, asyncHandler, AppError, ErrorCode } = require('../lib/envelope');
 const { requireAuth } = require('../middleware/auth');
 const rbac = require('../middleware/rbac');
 const projectService = require('../services/project.service');
-const classifyService = require('../services/classify.service');
 const memberService = require('../services/member.service');
 const boardService = require('../services/board.service');
 const projectFlowService = require('../services/project-flow.service');
 
 const router = express.Router();
-
-/* ── 静态段（必须早于 /:id） ─────────────────────────── */
-
-/** P0-01 分类判定（纯计算，不落库） */
-router.post(
-  '/projects/classify',
-  requireAuth,
-  asyncHandler(async function classify(req, res) {
-    res.json(ok(classifyService.classifyProject(req.body)));
-  }),
-);
 
 /* ── 项目集合 ───────────────────────────────────────── */
 

@@ -6,6 +6,15 @@ import { useToast } from './useToast';
 export { useToast } from './useToast';
 export { useDashboardOverview, DASHBOARD_DEFAULT_PAGE_SIZE } from './useDashboardOverview';
 export type { UseDashboardOverviewResult } from './useDashboardOverview';
+export {
+  useProjectTypes,
+  ensureProjectTypes,
+  reloadProjectTypes,
+  labelOf,
+  shortOf,
+  isTypeEnabled,
+} from './useProjectTypes';
+export type { UseProjectTypesResult } from './useProjectTypes';
 
 /**
  * useAsync 选项

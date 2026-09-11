@@ -27,7 +27,35 @@ export type GlobalRole = RoleKey;
 
 export type ProjectRole = RoleKey;
 
-export type ProjectType = 'A' | 'B' | 'C' | 'D';
+/**
+ * 项目类型标识（运行时**唯一真相源 = 后端 `project_types` 表**，经 `GET /api/meta/project-types` 下发）。
+ *
+ * - 内置 `A/B/C/D`；新增类型为系统生成的 `T{n}`（创建后不可改）
+ * - 前端**不再维护固定联合类型**（原 `'A'|'B'|'C'|'D'` 已收敛为 `string`），
+ *   否则新增类型会导致标签解析为空
+ */
+export type ProjectType = string;
+
+/**
+ * 项目类型实体（API 形态 `ProjectTypeEntity`）。
+ *
+ * 建项下拉、全站标签解析、后台「项目类型」管理页均以此为唯一数据源；
+ * 字段口径与 `GET /api/meta/project-types` 出参逐字一致（含已停用类型）。
+ */
+export interface ProjectTypeEntity {
+  /** 标识：内置 `A/B/C/D`；新增 `T1/T2…`（系统生成，创建后不变） */
+  code: string;
+  /** 名称（可改，如「基建类」） */
+  name: string;
+  /** 例子 / 说明（可改，建项时辅助识别） */
+  example: string;
+  /** 启用：`false` = 停用（建项不可选，历史项目保留） */
+  enabled: boolean;
+  /** 排序（升序；新增默认排到末尾） */
+  orderNo: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export type ProjectStatus =
   | '草稿'
@@ -190,28 +218,26 @@ export interface RoleCandidate {
   name: string;
 }
 
-/** 分类判定输入（P0-01） */
-export interface ClassifyInput {
-  contractAmount: number;
-  hasHardware: boolean;
-  hasAcceptance: boolean;
-  isSelfIteration: boolean;
-  isInfrastructure: boolean;
-}
-
-/** 分类判定结果 */
-export interface ClassifyResult {
-  suggested: ProjectType;
-  reasons: string[];
-}
-
 export interface Project {
   id: string;
   code: string;
   name: string;
   type: ProjectType;
-  classifyInput: ClassifyInput;
+  /**
+   * ⚠️ **只读历史字段**：分类器（`classifyProject` / `POST /projects/classify`）已整链移除。
+   * 后端 / mock 的 mapper 仍会返回该字段，故保留以免连带类型报错；
+   * 任何业务代码**不得**再据此做类型判定 —— 唯一真相源 = `Project.type`（建项时用户显式选择）。
+   */
+  classifyInput: {
+    contractAmount: number;
+    hasHardware: boolean;
+    hasAcceptance: boolean;
+    isSelfIteration: boolean;
+    isInfrastructure: boolean;
+  };
+  /** ⚠️ 只读历史字段（同上），语义已废弃 */
   classifySuggested: ProjectType;
+  /** ⚠️ 只读历史字段（同上），语义已废弃 */
   classifyOverrideReason: string;
   customer: string;
   contractAmount: number;

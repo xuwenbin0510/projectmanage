@@ -23,6 +23,7 @@ const { DEFAULT_PASSWORD } = require('../dal/seed');
 const roleCatalog = require('../services/roleCatalog');
 const { refreshRoleCatalog } = roleCatalog;
 const projectService = require('../services/project.service');
+const projectTypeService = require('../services/projectType.service');
 const feishuContacts = require('../lib/feishu_contacts');
 const feishuImport = require('../services/feishuImport.service');
 const mappers = require('../lib/mappers');
@@ -841,7 +842,6 @@ router.delete(
 
 /* ── 生命周期模板管理（阶段三：内置模板 CRUD + 节点编辑） ────── */
 
-const PROJECT_TYPES = ['A', 'B', 'C', 'D'];
 
 /**
  * 校验并规范化模板 definition（整包替换语义）。
@@ -975,9 +975,10 @@ router.post(
     const body = req.body || {};
     const projectType = String(body.projectType || '');
     const name = String(body.name || '').trim();
-    if (PROJECT_TYPES.indexOf(projectType) < 0) {
+    /* 唯一真相源 = project_types 表：已停用的类型也要能继续配置模板，故只校验存在、不校验 enabled */
+    if (!projectTypeService.getType(db, projectType)) {
       throw new AppError(ErrorCode.E_VALIDATION, undefined, {
-        fields: [{ field: 'projectType', message: '适用分类必须为 A / B / C / D' }],
+        fields: [{ field: 'projectType', message: '适用分类不存在，请先在「项目类型」中创建' }],
       });
     }
     if (!name) {
@@ -1118,6 +1119,51 @@ router.post(
     );
 
     res.json(ok(projectService.getTemplateById(db, newId), '已复制（副本默认停用）'));
+  }),
+);
+
+/* ── 项目类型管理（表驱动：内置 A/B/C/D + 后台新增 T1/T2…） ──
+ * 权限复用 admin:template（与生命周期 / 审批模板同属「流程配置」域，R11 语义吻合）。
+ * 响应一律 camelCase（order_no → orderNo），走 ok()/AppError 统一信封。
+ * 只提供启停（enabled），无 DELETE —— 停用不删、不触碰历史项目。 */
+
+/** 项目类型列表（仅 admin:template；按 order_no 升序，含已停用） */
+router.get(
+  '/admin/project-types',
+  requireAuth,
+  requirePermission('admin:template'),
+  asyncHandler(async function listProjectTypes(req, res) {
+    res.json(ok(projectTypeService.listTypes(db)));
+  }),
+);
+
+/**
+ * 新增项目类型（仅 admin:template）。
+ * body: { name, example?, cloneFrom? }；code 由系统生成（T + 自增整数），创建后不可改。
+ * cloneFrom 时克隆来源类型的生命周期模板 + 审批流（project:<src>→project:<new>、ccb:<src>→ccb:<new>）。
+ */
+router.post(
+  '/admin/project-types',
+  requireAuth,
+  requirePermission('admin:template'),
+  asyncHandler(async function createProjectType(req, res) {
+    const body = req.body || {};
+    res.json(ok(projectTypeService.createType(db, body), '项目类型已创建'));
+  }),
+);
+
+/**
+ * 更新项目类型（仅 admin:template）。
+ * body: { name?, example?, orderNo?, enabled? } 部分更新；code 不可改（只停用不删除）。
+ */
+router.put(
+  '/admin/project-types/:code',
+  requireAuth,
+  requirePermission('admin:template'),
+  asyncHandler(async function updateProjectType(req, res) {
+    const code = String(req.params.code || '');
+    const body = req.body || {};
+    res.json(ok(projectTypeService.updateType(db, code, body), '已更新'));
   }),
 );
 

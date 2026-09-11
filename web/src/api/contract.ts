@@ -12,9 +12,8 @@ import type {
   ProjectMember,
   ProjectRole,
   ProjectType,
+  ProjectTypeEntity,
   ProjectStatus,
-  ClassifyInput,
-  ClassifyResult,
   LifecycleTemplate,
   MilestoneWithGate,
   MilestoneOverride,
@@ -68,9 +67,10 @@ export interface CreateProjectPayload {
   planStart: string;
   planEnd: string;
   pm: string;
-  classifyInput: ClassifyInput;
-  classifySuggested: ProjectType;
-  classifyOverrideReason: string;
+  /*
+   * ⚠️ 分类器已整链移除：不再携带 `classifyInput / classifySuggested / classifyOverrideReason`。
+   * 项目类型由用户在建项向导「基本信息」步显式单选（`type`），提交即终值。
+   */
   /** 建项成员：优先 userId（users.id 系统身份键），兼容 userOpenId（open_id） */
   members: Array<{ userId?: number; userOpenId?: string; role: ProjectRole }>;
   /**
@@ -99,6 +99,32 @@ export interface UpdateProjectPayload {
   planStart?: string;
   planEnd?: string;
   health?: string;
+}
+
+/* ── 项目类型管理（后台可配置 · 表驱动） ───────────── */
+
+/**
+ * 新增项目类型入参（`POST /api/admin/project-types`）。
+ * `code` 由服务端生成（`T{n}`），前端不提供该字段。
+ */
+export interface CreateProjectTypePayload {
+  /** 名称（必填） */
+  name: string;
+  /** 例子 / 说明（选填） */
+  example?: string;
+  /**
+   * 克隆来源类型标识（选填）；`'__blank__'` 或省略 = 空白起步。
+   * 提供时服务端克隆 ①生命周期模板（definition 整包）②审批流（`project:` / `ccb:`）。
+   */
+  cloneFrom?: string;
+}
+
+/** 更新项目类型入参（`PUT /api/admin/project-types/:code`；只传需要更新的字段） */
+export interface UpdateProjectTypePayload {
+  name?: string;
+  example?: string;
+  orderNo?: number;
+  enabled?: boolean;
 }
 
 export interface GateDecisionPayload {
@@ -305,8 +331,18 @@ export interface ApiClient {
   /** 方案A：某分类下全部启用模板（version DESC，建项向导「生命周期模板」下拉数据源） */
   listTemplateOptions(type: ProjectType): Promise<LifecycleTemplate[]>;
 
+  /* 项目类型元数据（表驱动 · 唯一真相源 `project_types`） */
+  /**
+   * 全部项目类型（**含已停用**，按 `orderNo` 升序）。
+   * 建项下拉 / 全站标签解析 / 后台列表共用；前端按 `enabled` 过滤可选项。
+   */
+  listProjectTypes(): Promise<ProjectTypeEntity[]>;
+  /** 新增项目类型（仅 `admin:template`）；`code` 由服务端生成 */
+  createProjectType(payload: CreateProjectTypePayload): Promise<ProjectTypeEntity>;
+  /** 更新项目类型（仅 `admin:template`，部分更新；`code` 不可改） */
+  updateProjectType(code: string, patch: UpdateProjectTypePayload): Promise<ProjectTypeEntity>;
+
   /* 项目 P0-01 ~ P0-04 P0-17 */
-  classify(input: ClassifyInput): Promise<ClassifyResult>;
   listProjects(query: ProjectQuery): Promise<Paged<ProjectListItem>>;
   getProject(id: string): Promise<Project>;
   createProject(payload: CreateProjectPayload): Promise<Project>;
