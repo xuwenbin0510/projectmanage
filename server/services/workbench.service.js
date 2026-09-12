@@ -14,7 +14,8 @@
  *  - `reportReminders` 仅在「我参与（project_members 含我）且 status='进行中'」的项目中，
  *    **且我名下有 ≥1 个未完成叶子任务、其计划窗口与本周(周一~周日)相交** 才入选
  *    （无 start_date/due_date 的任务视为「有活」，恒计入，避免库内大量无日期任务整批掉出）；
- *  - `filled` = 本周存在 `work_reports.status='已提交'`（项目级、任一成员提交即算，草稿不计）；
+ *  - `filled` = 本周存在 `work_reports.status IN ('已提交','已确认')`（项目级、任一成员提交或确认即算，草稿/已打回不计）；
+ *    注：周报被确认后状态变为 `已确认`，仍视为已填——避免「已确认」被误判为「待填」（2026-09-12 修复）。
  *  - `week` = `dates.weekCode()`（如 `2026-W35`）；
  *  - `weekStart/weekEnd` = `dates.weekRange(week).start/end` **截前 10 位**（`YYYY-MM-DD`，
  *    与前端展示逐字一致；服务端 weekRange 返回 ISO 带时区串）。
@@ -229,7 +230,7 @@ function listReportReminders(db, me) {
     .all(myId, myId, weekStart, weekEnd, weekStart, weekEnd);
 
   const filledStmt = db.prepare(
-    "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已提交'",
+    "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status IN ('已提交', '已确认')",
   );
   const confirmedStmt = db.prepare(
     "SELECT COUNT(*) AS c FROM work_reports WHERE project_id = ? AND week = ? AND status = '已确认'",
