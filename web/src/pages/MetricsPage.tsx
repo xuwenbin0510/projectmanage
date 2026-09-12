@@ -4,7 +4,7 @@
  * 复用 `/metrics` 路由：顶部 8 张指标卡 + 筛选栏（分类 / 状态 / 健康度 /
  * 关键字 / 负责人 / 范围开关）+ 图表区（任务执行：任务进度环 / 优先级 / 状态 /
  * 逾期时长；项目健康：状态环 / 健康度 / 负责人负荷 / 各项目任务量；质量与交付：质量门 / 交付物）
- * + 任务时间轴（逾期 / 临期 / 计划周期内 三栏，任务级），
+ * + 任务时间轴（逾期 / 临期 / 计划周期内 / 未排期 四栏，任务级），
  * 行点击钻取到 B11 单项目仪表盘，健康/状态色段下钻到同页筛选，负责人行
  * 下钻到 OwnerLoadDrawer（P1-6）。
  *
@@ -19,7 +19,7 @@
  * @prd B12
  */
 
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import {
   Box,
   Button,
@@ -250,7 +250,10 @@ export function MetricsPage(): JSX.Element {
   };
 
   /* B12：任务时间轴「查看全部」→ 复用 DistributionTaskDrawer（dueWindow 维度下钻） */
-  const openTimelineAll = (dueWindow: 'overdue' | 'dueSoon' | 'cycle', title: string): void => {
+  const openTimelineAll = (
+    dueWindow: 'overdue' | 'dueSoon' | 'cycle' | 'unscheduled',
+    title: string,
+  ): void => {
     setDistDrawer({
       open: true,
       title,
@@ -269,15 +272,16 @@ export function MetricsPage(): JSX.Element {
   /* 分组锚点 ref（指标卡下钻滚动目标） */
   const tasksRef = useRef<HTMLDivElement | null>(null);
 
-  /* B12：任务时间轴单栏渲染（逾期 / 临期 / 计划周期内 三栏同格式，复用共享 TaskTimeRow） */
+  /* B12：任务时间轴单栏渲染（逾期 / 临期 / 计划周期内 / 未排期 四栏同格式，复用共享 TaskTimeRow） */
   const renderTimelineColumn = (
     title: string,
     subtitle: string,
     rows: WbsNode[],
     hintFn: (t: WbsNode) => string,
-    dueWindow: 'overdue' | 'dueSoon' | 'cycle',
+    dueWindow: 'overdue' | 'dueSoon' | 'cycle' | 'unscheduled',
     allTitle: string,
     emptyTitle: string,
+    actionFor?: (t: WbsNode) => ReactNode,
   ): JSX.Element => (
     <SectionCard
       title={title}
@@ -300,6 +304,7 @@ export function MetricsPage(): JSX.Element {
               task={t}
               hint={hintFn(t)}
               onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
+              action={actionFor ? actionFor(t) : undefined}
             />
           ))}
         </Stack>
@@ -312,6 +317,7 @@ export function MetricsPage(): JSX.Element {
     overdue: '没有逾期任务',
     dueSoon: '未来 3 天没有临期任务',
     cycle: '未来两周内没有即将到期的任务',
+    unscheduled: '范围内没有未排期任务',
   };
   const qualityRef = useRef<HTMLDivElement | null>(null);
   const weeklyRef = useRef<HTMLDivElement | null>(null);
@@ -737,12 +743,12 @@ export function MetricsPage(): JSX.Element {
           </Box>
         </SectionCard>
 
-        {/* ②-2 任务时间轴（B12 新增 · 任务级三栏，对齐工作台「时间轴」） */}
+        {/* ②-2 任务时间轴（B12 新增 · 任务级四栏，对齐工作台「时间轴」） */}
         <Box
           sx={{
             display: 'grid',
             gap: 2,
-            gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+            gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(4, 1fr)' },
             mb: 2.5,
           }}
         >
@@ -772,6 +778,26 @@ export function MetricsPage(): JSX.Element {
             'cycle',
             '计划周期内任务明细',
             EMPTY_TITLE.cycle,
+          )}
+          {renderTimelineColumn(
+            '未排期任务',
+            `${timeline?.unscheduled?.length ?? 0} 个 · 暂无计划时间`,
+            timeline?.unscheduled ?? [],
+            (t) => `项目 ${t.projectName} · 未排期`,
+            'unscheduled',
+            '未排期任务明细',
+            EMPTY_TITLE.unscheduled,
+            (t) => (
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() =>
+                  navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id + '&edit=1')
+                }
+              >
+                去排期
+              </Button>
+            ),
           )}
         </Box>
       </Box>

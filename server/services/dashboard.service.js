@@ -41,8 +41,8 @@ const MANAGED_STATUSES = ['已批准', '进行中', '挂起'];
 /** B18：逾期档位白名单（与 portfolioAgg.overdueBucketOf 返回值逐字一致） */
 const OVERDUE_BUCKETS = ['1to7', '8to30', 'over30'];
 
-/** B12 任务时间轴：dueWindow 白名单（逾期 / 临期 / 计划周期内） */
-const DUE_WINDOWS = ['overdue', 'dueSoon', 'cycle'];
+/** B12 任务时间轴：dueWindow 白名单（逾期 / 临期 / 计划周期内 / 未排期） */
+const DUE_WINDOWS = ['overdue', 'dueSoon', 'cycle', 'unscheduled'];
 
 /** B12 任务时间轴·计划周期前瞻窗口（天），与 portfolioAgg.CYCLE_LOOKAHEAD_DAYS 一致 */
 const CYCLE_LOOKAHEAD_DAYS = 14;
@@ -192,21 +192,24 @@ function resolveDimension(query) {
 /**
  * 任务时间轴 dueWindow 维度过滤（B12 · GET /api/dashboard/tasks 新增）。
  *
- * 与 `portfolioAgg.aggregateTaskTimeline` 的三档切分逐字一致：
+ * 与 `portfolioAgg.aggregateTaskTimeline` 的四档切分逐字一致：
+ *  - `unscheduled`：无 startDate 且无 dueDate（未排期）
  *  - `overdue`  ：gap = diffDays(today, dueDate) < 0
  *  - `dueSoon`  ：0 ≤ gap ≤ DUE_SOON_DAYS（默认 3）
  *  - `cycle`    ：4 ≤ gap ≤ CYCLE_LOOKAHEAD_DAYS（默认 14）
- * `dw === ''` 或非法值 → 不过滤（返回在办叶子全集）。无 dueDate → 恒不匹配。
+ * `dw === ''` 或非法值 → 不过滤（返回在办叶子全集）。逾期/临期/周期内三档无 dueDate → 恒不匹配。
  *
  * @param {object} n WbsNode
  * @param {string} todayStr
- * @param {string} dw 'overdue' | 'dueSoon' | 'cycle' | ''
+ * @param {string} dw 'overdue' | 'dueSoon' | 'cycle' | 'unscheduled' | ''
  * @returns {boolean}
  */
 function matchDueWindow(n, todayStr, dw) {
   if (!dw) return true;
   const due = String((n && n.dueDate) || '');
-  if (!due) return false;
+  const start = String((n && n.startDate) || '');
+  if (dw === 'unscheduled') return !start && !due; // 未排期：无开始且无截止
+  if (!due) return false;                          // 其余三档必须有截止日
   const gap = dates.diffDays(todayStr, due);
   if (dw === 'overdue') return gap < 0;
   if (dw === 'dueSoon') return gap >= 0 && gap <= agg.DUE_SOON_DAYS;

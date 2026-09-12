@@ -111,8 +111,8 @@ export function DocumentsPage(): JSX.Element {
   const [uploadKind, setUploadKind] = useState<FilterKind>('none' as FilterKind);
   const [uploadTarget, setUploadTarget] = useState('');
   const [uploading, setUploading] = useState(false);
-  /* D02：粘贴链接模式（false=上传文件 / true=关联飞书文档） */
-  const [linkMode, setLinkMode] = useState(false);
+  /* D02：粘贴链接模式（true=关联飞书文档，默认 / false=上传文件，可选） */
+  const [linkMode, setLinkMode] = useState(true);
   const [linkName, setLinkName] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
   /* D04：模板项交付（非空时提交走覆盖升版） */
@@ -205,7 +205,7 @@ export function DocumentsPage(): JSX.Element {
     }
     setUploadKind(initKind);
     setUploadTarget(initTarget);
-    setLinkMode(false);
+    setLinkMode(true);
     setLinkName('');
     setLinkUrl('');
     setUploadTemplateKey('');
@@ -219,7 +219,7 @@ export function DocumentsPage(): JSX.Element {
     setUploadFile(null);
     setUploadKind('none' as FilterKind);
     setUploadTarget('');
-    setLinkMode(false);
+    setLinkMode(true);
     setLinkName('');
     setLinkUrl('');
     setUploadTemplateKey(d.templateKey);
@@ -400,7 +400,7 @@ export function DocumentsPage(): JSX.Element {
           </Box>
           <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
             {isTpl && pending && (
-              <Tooltip title="上传文件或粘贴链接完成交付">
+              <Tooltip title="粘贴飞书链接或上传文件完成交付">
                 <Button size="small" variant="outlined" startIcon={<UploadFileIcon fontSize="small" />} onClick={() => openDeliver(d)}>
                   交付
                 </Button>
@@ -475,7 +475,7 @@ export function DocumentsPage(): JSX.Element {
     <Stack spacing={2.5}>
       <PageHeader
         title="项目文档"
-        subtitle="D04：模板交付物清单（按里程碑派生，交付/替换自动升版）+ 上传附件（≤20MB）/ 关联飞书文档（粘贴链接自动抓标题）"
+        subtitle="D04：模板交付物清单（按里程碑派生，交付/替换自动升版）+ 关联飞书文档（粘贴链接自动抓标题，默认）/ 上传附件（≤20MB，可选）"
         actions={
           can('document:upload') ? (
             <Button variant="contained" startIcon={<UploadFileIcon />} onClick={openUpload}>
@@ -513,7 +513,7 @@ export function DocumentsPage(): JSX.Element {
             </FormControl>
 
             {rows.length === 0 ? (
-              <EmptyState title="暂无文档" description="点击右上角「上传附件」上传文件或「粘贴链接」关联飞书文档" />
+              <EmptyState title="暂无文档" description="点击右上角「添加文档」粘贴飞书文档链接，或改选「上传文件」" />
             ) : (
               <Stack spacing={2}>
                 {groups.map((g) => {
@@ -570,11 +570,11 @@ export function DocumentsPage(): JSX.Element {
               }}
               fullWidth
             >
-              <ToggleButton value="file" disabled={uploading}>
-                上传文件
-              </ToggleButton>
               <ToggleButton value="link" disabled={uploading}>
-                粘贴链接
+                粘贴飞书链接
+              </ToggleButton>
+              <ToggleButton value="file" disabled={uploading}>
+                上传文件（可选）
               </ToggleButton>
             </ToggleButtonGroup>
 

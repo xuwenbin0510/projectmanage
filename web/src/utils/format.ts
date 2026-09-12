@@ -43,6 +43,34 @@ export function genRequestId(): string {
   return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * 生成幂等键（「提交」类写操作的并发防重，如周报提交）。
+ *
+ * 仅由客户端生成、随请求体下发，同一「表单打开」会话内复用同一个键：
+ * 按钮双击 / 请求重试 / 并发竞态 → 服务端判重后返回既有记录，不会产生重复数据。
+ *
+ * ⚠️ 不用裸 `crypto.randomUUID()`：线上以 `http://<IP>:3000` 访问属**非安全上下文**，
+ *    该 API 直接不可用。这里优先用它（有则更优），否则回退到全上下文可用的
+ *    `crypto.getRandomValues`（128 位随机）+ 时间戳，最后兜底 Math.random。
+ */
+export function genIdemKey(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch {
+    /* 非安全上下文 / 旧浏览器：走下面的回退 */
+  }
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${Date.now().toString(36)}-${hex}`;
+}
+
 /** 深拷贝（结构化数据，mock 引擎写入前隔离引用） */
 export function deepClone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;

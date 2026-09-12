@@ -29,6 +29,7 @@ import { dayjs, weekCode, shiftWeek } from '@/utils/date';
 import { tokens, alphaOf, progressToneOf } from '@/theme/tokens';
 import { memberNameOf } from '@/utils/member';
 import { flattenTree, parentIdSet } from '@/utils/wbs';
+import { genIdemKey } from '@/utils/format';
 
 interface TaskProgress {
   progressAfter: number;
@@ -128,6 +129,16 @@ export function ReportFormModal({
   // planItems 为基础字符串数组，直接用本地状态管理（避免原始数组进入 useFieldArray 的类型约束）
   const [planItems, setPlanItems] = useState<string[]>(['']);
 
+  /* ── 并发防重（v30）：提交中状态 + 幂等键 ──
+   * `saving`：驱动 FormDialog 的 submitting（禁用「提交/取消」并显示「提交中…」）。
+   * `inFlightRef`：同步的 in-flight 互斥锁 —— 双击 / 回车连发时 setState 尚未提交，
+   *   仅有 state 会漏；ref 在同一 tick 内即可拦截，是真正的第一道闸。
+   * `idemKeyRef`：本次「打开表单」会话的幂等键，随 payload 下发；成功后重置
+   *   （保证 keepOpenOnSubmit 连续填报时下一次提交仍是新的一次操作，不被误判重放）。 */
+  const [saving, setSaving] = useState(false);
+  const inFlightRef = useRef(false);
+  const idemKeyRef = useRef('');
+
   // 周次选项：每次打开弹窗时重新计算，确保默认选中本周（避免组件不卸载导致默认值陈旧）
   const [weekOptions, setWeekOptions] = useState<string[]>(() => buildWeekOptions(weekCode(dayjs())));
 
@@ -171,6 +182,10 @@ export function ReportFormModal({
   // 打开时初始化表单（编辑态回填；新建态全不选 + lockNodeId 锁定勾选）
   useEffect(() => {
     if (!open) return;
+    // 并发防重：新一次「打开表单」= 新一次操作意图 → 清空 in-flight 锁与幂等键
+    inFlightRef.current = false;
+    idemKeyRef.current = '';
+    setSaving(false);
     // 每次打开重算周次选项，默认本周选中（修复「周次下拉为空需手选」）
     const freshWeekOptions = buildWeekOptions(weekCode(dayjs()));
     setWeekOptions(freshWeekOptions);
@@ -320,6 +335,9 @@ export function ReportFormModal({
   };
 
   const doSave = async (values: FormValues, submit: boolean): Promise<void> => {
+    /* 并发防重 · 第一道闸（同步互斥）：双击 / 回车连发时第二次调用直接丢弃。
+       必须用 ref 而非 state —— setSaving 是异步的，同一 tick 内的第二次点击读不到新值。 */
+    if (inFlightRef.current) return;
     // B8（R2）：提交 / 编辑已提交日志时校验实际工时；存草稿允许任意值（同进度语义）
     if (submit) {
       // 「本周完成内容」提交必填（草稿可空）：trim 后为空拦截
@@ -334,10 +352,22 @@ export function ReportFormModal({
         return;
       }
     }
+    /* 并发防重 · 第二道闸：占位互斥 + 进入「提交中」态（按钮禁用并显示「提交中…」）。
+       校验不通过时已在上面 return，故不会误锁。 */
+    inFlightRef.current = true;
+    setSaving(true);
+
     const payload = assemble(values);
+    /* v30 幂等键：仅「新建 / 提交」需要（编辑是原地更新，天然幂等，不带键）。
+       同一「打开表单」会话复用同一个键 → 双击 / 重试 / 并发竞态由服务端判重并返回既有周报。 */
+    if (!editingReport) {
+      if (!idemKeyRef.current) idemKeyRef.current = genIdemKey();
+      payload.idemKey = idemKeyRef.current;
+    }
     /* B15：编辑态点「提交」→ 携带 submit 标记，服务端将 草稿/已打回 流转为「已提交」；
      *  点「存草稿」则不携带，保持原状态（已打回 保存后仍停留该态，仅更新内容）。 */
     if (editingReport && submit) payload.submit = true;
+    let succeeded = false;
     try {
       let saved: Report;
       if (editingReport) {
@@ -350,6 +380,13 @@ export function ReportFormModal({
         saved = await saveReport(payload);
         toast.success('工作日志已存草稿');
       }
+      /* 落库成功：
+         · 非「连续填报」→ **保留幂等键**。此时弹窗正在淡出（MUI Fade ≈225ms），按钮仍在 DOM
+           且可点；若在此清空键，紧随的第二次点击会生成**新键**再提交一次 → 重复数据。
+           保留键后，即使某次点击漏过同步锁，服务端也判重返回既有周报（不产生第二条）。
+         · 「连续填报」（keepOpenOnSubmit）→ 弹窗保持打开、下一次是**新的一次操作**，必须清空键。 */
+      succeeded = true;
+      if (keepOpenOnSubmit) idemKeyRef.current = '';
       onSubmitted(saved);
       if (keepOpenOnSubmit) {
         // R4-P0-4：保持打开并重置（周次默认本周、任务全不选 + 锁定任务保留勾选、计划/风险清空）→ 连续添加
@@ -373,7 +410,19 @@ export function ReportFormModal({
         onClose();
       }
     } catch (e) {
+      /* 失败**不**重置幂等键：用户重试仍属同一次操作意图，沿用同一个键 ——
+         若首次请求其实已在服务端落库（如响应丢失 / 超时重发），重试会被判重并返回既有周报，
+         而不会落第二条。 */
       toast.error(e);
+    } finally {
+      /* **成功且非连续填报时不释放锁**：弹窗此刻正在淡出，按钮仍在 DOM ——
+         释放锁（inFlightRef/saving 归位）会让它对紧随的第二次点击重新"变绿"，
+         这正是重复数据的另一半成因。留待下次「打开表单」由 [open] effect 统一复位。
+         失败时才释放，让用户可以重试（重试沿用同一个键）。 */
+      if (!succeeded || keepOpenOnSubmit) {
+        inFlightRef.current = false;
+        setSaving(false);
+      }
     }
   };
 
@@ -499,9 +548,16 @@ export function ReportFormModal({
       // B8.3：弹窗加宽 lg(1200px)，保证一行 6 元素（勾选/名称/进度条/完成进度/实际工时）不换行不拥挤
       maxWidth="lg"
       onClose={onClose}
+      /* 并发防重：submitting 由 FormDialog 内置消费 —— 禁用「提交/取消」+ 文案变「提交中…」
+         + 屏蔽 Esc/遮罩关闭，避免请求在途时用户重复触发或关窗造成状态错乱 */
+      submitting={saving}
       onSubmit={handleSubmit((v) => void doSave(v, true))}
       extraActions={
-        <Button color="inherit" onClick={handleSubmit((v) => void doSave(v, false))}>
+        <Button
+          color="inherit"
+          disabled={saving}
+          onClick={handleSubmit((v) => void doSave(v, false))}
+        >
           存草稿
         </Button>
       }

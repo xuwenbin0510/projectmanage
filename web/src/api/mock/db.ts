@@ -190,6 +190,13 @@ const STORAGE_KEY = 'pm_mock_db_v4';
 
 let instance: MockDb | null = null;
 
+/**
+ * 幂等键索引（v30，与后端 `work_reports.idem_key` + 部分唯一索引同构）：
+ * `idemKey → reportId`，用于「提交」类写操作的并发 / 重放防重。
+ * 与 db 实例同生命周期（`resetDb` 清空），不落 sessionStorage（重放窗口只在一次会话内有效）。
+ */
+export const idemReportIndex = new Map<string, string>();
+
 function load(): MockDb | null {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
@@ -243,6 +250,7 @@ export function saveDb(): void {
 
 /** 重置为演示初始态 */
 export function resetDb(): MockDb {
+  idemReportIndex.clear();
   instance = createSeedDb();
   persist(instance);
   return instance;

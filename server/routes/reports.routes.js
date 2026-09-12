@@ -88,7 +88,14 @@ router.get(
 
 /* ── 写 ─────────────────────────────────────────────── */
 
-/** 暂存 / 提交：用 body.submit 区分（对齐 web/src/api/http.ts#saveReport/submitReport） */
+/**
+ * 暂存 / 提交：用 body.submit 区分（对齐 web/src/api/http.ts#saveReport/submitReport）。
+ *
+ * v30 幂等：body 可携带 `idemKey`（客户端每次「打开表单」生成一个，提交时复用）。
+ * 同一键的重放（按钮双击 / 客户端重试 / 并发竞态）由 service 层判重，
+ * 直接返回既有周报，不会重复插入或重复累加工时 —— 见 `report.service#createReport`。
+ * 键缺失/非法一律降级为「无键」，行为与改动前完全一致（向后兼容）。
+ */
 router.post(
   '/projects/:projectId/reports',
   requireAuth,
@@ -99,7 +106,8 @@ router.post(
 
     const body = req.body || {};
     const submit = body.submit === true;
-    /* 路径参数是唯一真源，防止 body.projectId 与 URL 不一致造成跨项目写入 */
+    /* 路径参数是唯一真源，防止 body.projectId 与 URL 不一致造成跨项目写入；
+       idemKey 随 body 原样透传（service 层归一化与判重） */
     const payload = Object.assign({}, body, { projectId: projectId });
 
     const report = reportSvc.createReport(db, payload, req.user, submit);

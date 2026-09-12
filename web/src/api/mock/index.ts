@@ -76,7 +76,7 @@ import type {
   FeishuImportSearchResult,
 } from '../contract';
 import type { ReviewTemplateConfig, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, CreateTemplatePayload, UpdateTemplatePayload } from '@/types/project';
-import { getDb, saveDb, resetDb } from './db';
+import { getDb, saveDb, resetDb, idemReportIndex } from './db';
 import type { MockDb } from './db';
 import { defaultPermissionRules } from './db';
 import { delay } from './delay';
@@ -2100,6 +2100,17 @@ export class MockApiClient implements ApiClient {
     const db = getDb();
     assertWritable(db, payload.projectId);
     const me = assertCan(db, 'report.write', payload.projectId);
+
+    /* v30 幂等（与后端 createReport 同构）：同一幂等键的重放（按钮双击 / 客户端重试 /
+       并发竞态）直接返回既有周报 —— 不新建、不重复回写进度、不重复累加工时、不重复冻结快照。
+       置于结构校验之前：首次已成功，重放必须同样成功返回。 */
+    const idemKey = (payload.idemKey ?? '').trim();
+    if (idemKey) {
+      const prevId = idemReportIndex.get(idemKey);
+      const prev = prevId ? db.reports.find((r) => r.id === prevId) : undefined;
+      if (prev) return deepClone(prev);
+    }
+
     const range = weekRange(payload.week);
     const ts = nowIso();
 
@@ -2134,6 +2145,8 @@ export class MockApiClient implements ApiClient {
       updatedAt: ts,
     };
     db.reports.push(report);
+    /* v30：登记幂等键 → 后续同键请求判重并返回本条（与后端唯一索引等价） */
+    if (idemKey) idemReportIndex.set(idemKey, report.id);
     const isNew = true;
 
     report.status = status;

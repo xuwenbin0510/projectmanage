@@ -47,7 +47,7 @@ import { useAsync, useProjectTypes } from '@/hooks';
 import { ROUTES } from '@/config/routes';
 import type { ProgressSegment } from '@/types/dashboard';
 import type { Priority, WbsNode } from '@/types/wbs';
-import { buildDashboard, sortByPriority } from '@/utils/dashboardAgg';
+import { buildDashboard, sortByPriority, UNNAMED_PROJECT } from '@/utils/dashboardAgg';
 import { fmtDate, isOverdue, today, diffDays } from '@/utils/date';
 import { alphaOf as alpha, tokens } from '@/theme/tokens';
 
@@ -176,6 +176,12 @@ export function WorkbenchPage(): JSX.Element {
       .sort((a, b) => a.d - b.d)
       .map(({ t }) => t);
   }, [data]);
+
+  /* 未排期任务：既无开始日期也无截止日期，无法落入时间轴三栏（与逾期/临期/周期内零重叠），驱动用户排期 */
+  const unscheduledTasks = useMemo(
+    () => sortedTasks.filter((t) => !t.startDate && !t.dueDate),
+    [sortedTasks],
+  );
 
   /** B13：打开逾期/临期任务下探抽屉（projectName 从本地 dashboard.overdue 解析；B15 补 mode） */
   const openOverdue = (projectId: string): void => {
@@ -400,12 +406,12 @@ export function WorkbenchPage(): JSX.Element {
         />
       </Box>
 
-      {/* 时间轴：逾期 / 临期 / 计划周期内（三栏同格式并列） */}
+      {/* 时间轴：逾期 / 临期 / 计划周期内 / 未排期（四栏同格式并列，统一网格） */}
       <Box
         sx={{
           display: 'grid',
           gap: 2,
-          gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', xl: 'repeat(4, 1fr)' },
           mb: 2.5,
         }}
       >
@@ -429,7 +435,7 @@ export function WorkbenchPage(): JSX.Element {
                 <TaskTimeRow
                   key={t.id}
                   task={t}
-                  hint={`截止 ${fmtDate(t.dueDate)} · 已逾期 ${-diffDays(today(), t.dueDate)} 天`}
+                  hint={`项目 ${t.projectName || UNNAMED_PROJECT} · 截止 ${fmtDate(t.dueDate)} · 已逾期 ${-diffDays(today(), t.dueDate)} 天`}
                   onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
                 />
               ))}
@@ -457,7 +463,7 @@ export function WorkbenchPage(): JSX.Element {
                 <TaskTimeRow
                   key={t.id}
                   task={t}
-                  hint={`截止 ${fmtDate(t.dueDate)} · 临期 · 还有 ${diffDays(today(), t.dueDate)} 天`}
+                  hint={`项目 ${t.projectName || UNNAMED_PROJECT} · 截止 ${fmtDate(t.dueDate)} · 临期 · 还有 ${diffDays(today(), t.dueDate)} 天`}
                   onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
                 />
               ))}
@@ -487,11 +493,50 @@ export function WorkbenchPage(): JSX.Element {
                   <TaskTimeRow
                     key={t.id}
                     task={t}
-                    hint={`截止 ${fmtDate(t.dueDate)} · 还有 ${d} 天`}
+                    hint={`项目 ${t.projectName || UNNAMED_PROJECT} · 截止 ${fmtDate(t.dueDate)} · 还有 ${d} 天`}
                     onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id)}
                   />
                 );
               })}
+            </Stack>
+          )}
+        </SectionCard>
+
+        {/* 未排期任务：既无开始日期也无截止日期，与逾期/临期/周期内零重叠，统一并入时间轴网格 */}
+        <SectionCard
+          title="未排期任务"
+          subtitle={`${unscheduledTasks.length} 个 · 暂无计划时间`}
+          actions={
+            unscheduledTasks.length > 0 ? (
+              <Button size="small" onClick={() => openMyTasks({}, unscheduledTasks)}>
+                查看全部
+              </Button>
+            ) : undefined
+          }
+        >
+          {unscheduledTasks.length === 0 ? (
+            <EmptyState title="名下任务均已排期" dense />
+          ) : (
+            <Stack spacing={1}>
+              {unscheduledTasks.slice(0, 8).map((t) => (
+                <TaskTimeRow
+                  key={t.id}
+                  task={t}
+                  hint={`项目 ${t.projectName || UNNAMED_PROJECT} · 暂无计划时间`}
+                  onClick={() => navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id + '&edit=1')}
+                  action={
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() =>
+                        navigate(ROUTES.projectWbs(t.projectId) + '?taskId=' + t.id + '&edit=1')
+                      }
+                    >
+                      去排期
+                    </Button>
+                  }
+                />
+              ))}
             </Stack>
           )}
         </SectionCard>

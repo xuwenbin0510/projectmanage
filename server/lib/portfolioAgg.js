@@ -405,13 +405,15 @@ function byDueAsc(a, b) {
 }
 
 /**
- * 任务时间轴三栏（B12 全局总览「任务时间轴」数据源，对应工作台三栏同格式）。
+ * 任务时间轴四栏（B12 全局总览「任务时间轴」数据源，对应工作台四栏同格式）。
  *
  * 输入 = 范围内**全量叶子任务（含已完成）** + projectId → projectName 映射；
- * 仅取**非完成**叶子、且**有 dueDate** 者，按「截止日相对今天」单一真源切成三档，三栏零重叠：
+ * 仅取**非完成**叶子，按「截止日相对今天」单一真源切分，四栏零重叠：
+ *  - `unscheduled`：既无开始日也无截止日（未排期，与工作台「未排期任务」口径逐字一致；按优先级 P0 前置）
  *  - `overdue`：gap < 0（已逾期，最早截止的排最前）
  *  - `dueSoon`：0 ≤ gap ≤ `DUE_SOON_DAYS`（临期，默认 3 天）
  *  - `cycle`：4 ≤ gap ≤ `CYCLE_LOOKAHEAD_DAYS`（计划周期内，默认 14 天；与工作台「未来 4–14 天到期」口径一致）
+ * 「有开始日但无截止日」的任务暂不入任一时间轴栏（无法判定到期窗口）。
  *
  * 每行 = 原 WbsNode 浅拷贝并补 `projectName`（跨项目展示用，缺失回落 UNNAMED_PROJECT）。
  *
@@ -419,7 +421,7 @@ function byDueAsc(a, b) {
  * @param {Array<object>} allLeafTasks WbsNode[]（含已完成叶子）
  * @param {Object<string, string>} nameById projectId → 项目名
  * @param {string} [todayStr] 今天 `YYYY-MM-DD`；缺省取 dates.today()
- * @returns {{overdue: Array<object>, dueSoon: Array<object>, cycle: Array<object>}}
+ * @returns {{overdue: Array<object>, dueSoon: Array<object>, cycle: Array<object>, unscheduled: Array<object>}}
  */
 function aggregateTaskTimeline(items, allLeafTasks, nameById, todayStr) {
   const t = todayStr || dates.today();
@@ -427,20 +429,33 @@ function aggregateTaskTimeline(items, allLeafTasks, nameById, todayStr) {
   const overdue = [];
   const dueSoon = [];
   const cycle = [];
+  const unscheduled = [];
+  /** 优先级序（P0=0..P3=3；脏值兜底 DEFAULT_PRIORITY）——供未排期栏排序 */
+  const prioRank = function (n) {
+    const raw = String((n && n.priority) || '').trim().toUpperCase();
+    const idx = PRIORITIES.indexOf(raw);
+    return idx >= 0 ? idx : PRIORITIES.indexOf(DEFAULT_PRIORITY);
+  };
   asArray(allLeafTasks).forEach(function (n) {
     if (String((n && n.status) || '') === '完成') return;   // 仅非完成叶子
     const due = String((n && n.dueDate) || '');
-    if (!due) return;                                        // 无截止日不入三栏
-    const gap = dates.diffDays(t, due);                     // due - today（天）
+    const start = String((n && n.startDate) || '');
     const row = Object.assign({}, n, {
       projectName: names[String(n.projectId)] || String((n && n.projectName) || '') || UNNAMED_PROJECT,
     });
+    if (!start && !due) { unscheduled.push(row); return; }  // 未排期：无开始且无截止
+    if (!due) return;                                        // 有开始无截止 → 暂不入时间轴
+    const gap = dates.diffDays(t, due);                     // due - today（天）
     if (gap < 0) overdue.push(row);
     else if (gap <= DUE_SOON_DAYS) dueSoon.push(row);
     else if (gap >= 4 && gap <= CYCLE_LOOKAHEAD_DAYS) cycle.push(row);
   });
   [overdue, dueSoon, cycle].forEach(function (arr) { arr.sort(byDueAsc); });
-  return { overdue: overdue, dueSoon: dueSoon, cycle: cycle };
+  /* 未排期行无截止日：按优先级升序（P0 置顶），同级按 wbsCode（与工作台 sortByPriority 口径一致） */
+  unscheduled.sort(function (a, b) {
+    return prioRank(a) - prioRank(b) || String((a && a.wbsCode) || '').localeCompare(String((b && b.wbsCode) || ''));
+  });
+  return { overdue: overdue, dueSoon: dueSoon, cycle: cycle, unscheduled: unscheduled };
 }
 
 /**

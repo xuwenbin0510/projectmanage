@@ -726,6 +726,25 @@ function applyEffortDelta(db, nodeId, delta, ts) {
  * @returns {object} Report
  * @throws {AppError} `E_VALIDATION` 缺 projectId/week；`E_REPORT_RISK_INCOMPLETE` 提交强校验未过
  */
+function normalizeIdemKey(v) {
+  const s = toStr(v).trim();
+  if (!s || s.length < 8 || s.length > 64) return '';
+  return /^[A-Za-z0-9_-]+$/.test(s) ? s : '';
+}
+
+/** 按幂等键查既有周报（无则 null） */
+function findReportByIdemKey(db, idemKey) {
+  if (!idemKey) return null;
+  return db.prepare('SELECT * FROM work_reports WHERE idem_key = ? LIMIT 1').get(idemKey) || null;
+}
+
+/** better-sqlite3 唯一约束冲突判定（并发竞态兜底，避免吞掉其它约束错误） */
+function isUniqueViolation(e) {
+  const code = e && e.code ? String(e.code) : '';
+  if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return true;
+  return /UNIQUE constraint failed/i.test(String((e && e.message) || ''));
+}
+
 function createReport(db, payload, me, submit) {
   const p = payload || {};
   const actor = me || {};
@@ -742,6 +761,16 @@ function createReport(db, payload, me, submit) {
     throw new AppError(ErrorCode.E_VALIDATION, undefined, {
       fields: [{ field: 'week', message: '缺少周次（YYYY-Www）' }],
     });
+  }
+
+  /* v30 幂等（并发防重）：同一「提交尝试」的重放（按钮双击 / 客户端重试 / 代理重发）
+     → 直接返回既有周报，**不重复插入、不重复回写进度、不重复累加工时、不重复冻结快照、不重复写审计**。
+     键由客户端生成（每次打开表单一个），故不影响「同周允许多次提交」的既有能力。
+     置于强校验之前：首次已成功，重放必须同样成功返回（而非被校验/状态变化挡住）。 */
+  const idemKey = normalizeIdemKey(p.idemKey);
+  if (idemKey) {
+    const replayed = findReportByIdemKey(db, idemKey);
+    if (replayed) return assembleById(db, replayed.id);
   }
 
   /* 提交才跑强校验；存草稿允许残缺（对齐 Mock / 前端「存草稿」语义） */
@@ -776,11 +805,11 @@ function createReport(db, payload, me, submit) {
     INSERT INTO work_reports (
       id, project_id, week, week_start, week_end, author_open_id, author_name, author_user_id,
       status, done_note, plan_items, resource_note, snapshot, submitted_at,
-      created_at, updated_at
+      created_at, updated_at, idem_key
     ) VALUES (
       @id, @project_id, @week, @week_start, @week_end, @author_open_id, @author_name, @author_user_id,
       @status, @done_note, @plan_items, @resource_note, @snapshot, @submitted_at,
-      @created_at, @updated_at
+      @created_at, @updated_at, @idem_key
     )
   `);
   const updNodeProgress = db.prepare(
@@ -805,6 +834,8 @@ function createReport(db, payload, me, submit) {
       submitted_at: isSubmit ? ts : null,
       created_at: ts,
       updated_at: ts,
+      /* 无键（老客户端 / 未提供）写 NULL：部分唯一索引允许多个 NULL，向后兼容 */
+      idem_key: idemKey || null,
     });
 
     insertChildren(db, reportId, taskRefs, riskRefs);
@@ -833,7 +864,18 @@ function createReport(db, payload, me, submit) {
     }
   });
 
-  tx();
+  try {
+    tx();
+  } catch (e) {
+    /* v30 并发竞态兜底：两个请求**同时**携带同一幂等键时，「先到者」已提交落库，
+       后到者在 `uq_work_reports_idem_key` 上冲突 → 回查并返回既有周报（幂等语义），
+       而不是把 500 抛给用户。事务已整体回滚，故不会出现「重复累加工时 / 重复回写进度」。 */
+    if (idemKey && isUniqueViolation(e)) {
+      const replayed = findReportByIdemKey(db, idemKey);
+      if (replayed) return assembleById(db, replayed.id);
+    }
+    throw e;
+  }
 
   /* D03：周报提交 → 全量真叶子任务快照（事务外 + try/catch 隔离：快照失败只丢环比，不阻塞提交） */
   if (isSubmit) {

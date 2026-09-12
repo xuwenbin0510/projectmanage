@@ -8,6 +8,7 @@
  * 🚫 禁止 import `tokens` / `alphaOf` 之外的硬编码色；颜色走主题 tokens。
  */
 import { Box, Stack, Typography } from '@mui/material';
+import type { ReactNode } from 'react';
 import { PriorityChip, ProgressBar } from '@/components/common';
 import type { WbsNode } from '@/types/wbs';
 import { alphaOf as alpha, tokens } from '@/theme/tokens';
@@ -19,9 +20,11 @@ export interface TaskTimeRowProps {
   hint: string;
   /** 整行点击（跳转到任务详情 / 所属项目 WBS） */
   onClick: () => void;
+  /** 右侧操作位（如「去排期」按钮）；缺省回退为进度条 */
+  action?: ReactNode;
 }
 
-export function TaskTimeRow({ task, hint, onClick }: TaskTimeRowProps): JSX.Element {
+export function TaskTimeRow({ task, hint, onClick, action }: TaskTimeRowProps): JSX.Element {
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
@@ -49,7 +52,13 @@ export function TaskTimeRow({ task, hint, onClick }: TaskTimeRowProps): JSX.Elem
           {hint}
         </Typography>
       </Box>
-      <ProgressBar value={task.progress} tone="brand" sx={{ maxWidth: 130, flexShrink: 0 }} />
+      {action ? (
+        <Box onClick={(e) => e.stopPropagation()} sx={{ flexShrink: 0 }}>
+          {action}
+        </Box>
+      ) : (
+        <ProgressBar value={task.progress} tone="brand" sx={{ maxWidth: 130, flexShrink: 0 }} />
+      )}
     </Stack>
   );
 }

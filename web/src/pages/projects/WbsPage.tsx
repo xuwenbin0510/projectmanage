@@ -449,6 +449,11 @@ export function WbsPage(): JSX.Element {
     locatedRef.current = locateId;
     setHighlightNodeId(locateId);
     setHighlightDim(false);
+    // ?edit=1：从工作台「去排期」跳入 → 直接打开任务编辑弹窗（聚焦开始/截止日期填写）
+    if (searchParams.get('edit') === '1') {
+      const node = flatNodes.find((n) => n.id === locateId);
+      if (node) openEdit(node);
+    }
     // 等待行渲染并挂上 wbs-locate 类后，用 scrollIntoView 居中（兼容页面整体滚动，比固定容器更稳）
     const t = window.setTimeout(() => {
       const row = document.querySelector('.wbs-locate') as HTMLElement | null;

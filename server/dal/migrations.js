@@ -1840,6 +1840,44 @@ function migrationV29(db, now) {
   console.log('[migrations] v29 project_types 表 + A/B/C/D 出生种子 + 补种 project:D 审批模板（项目类型可配置）');
 }
 
+/* ── 迁移 v30：周报提交幂等键（并发双击防重） ─────── */
+
+/**
+ * v30 = `work_reports` 增加 `idem_key` 列 + **部分唯一索引**，用于周报「提交/暂存」的幂等去重。
+ *
+ * 背景：周报提交走 `POST /projects/:id/reports`，语义是「每次调用新建一条」
+ * （同周允许多次提交是刻意设计，见 report.service#createReport 注释）。
+ * 因此前端「提交」按钮连点两次会产生两条内容相同的周报，且 `submit=true` 会
+ * **重复累加** `wbs_nodes.effort_hours`（applyEffortDelta）与重复回写进度 —— 属于数据正确性问题。
+ *
+ * 设计取舍（为什么不用「同项目+周次+作者」唯一约束，也不用时间窗判重）：
+ *  1. 「同周多次提交」是明确保留的能力（`ReportFormModal#keepOpenOnSubmit` 连续填报分支），
+ *     任何基于 (project, week, author) 的查重都会误伤它；
+ *  2. 时间窗启发式同样会误伤「几秒内连续填报两条」的合法操作，且引入魔法值。
+ *  故采用**客户端幂等键**：前端每次「打开表单」生成一个 key，随 payload 下发；
+ *     双击 → 两次请求携带同一 key → 第二次命中已存在键，直接返回既有周报；
+ *     连续填报 → 成功后前端重置 key → 新的一次提交携带新 key → 正常放行。
+ *
+ * 索引为**部分唯一索引**（`WHERE idem_key IS NOT NULL`）：
+ *  存量行与不带键的调用方（如无 key 的历史客户端）`idem_key` 为 NULL，
+ *  SQLite 唯一索引允许多个 NULL，故向后完全兼容、零数据迁移。
+ *
+ * 幂等：`hasColumn` 守卫 + `IF NOT EXISTS`，重复执行安全。
+ *
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrationV30(db) {
+  if (!tableExists(db, 'work_reports')) return;
+  if (!hasColumn(db, 'work_reports', 'idem_key')) {
+    db.exec('ALTER TABLE work_reports ADD COLUMN idem_key TEXT');
+  }
+  db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS uq_work_reports_idem_key '
+    + 'ON work_reports(idem_key) WHERE idem_key IS NOT NULL'
+  );
+  console.log('[migrations] v30 work_reports 加 idem_key 列 + 部分唯一索引（周报提交幂等防重）');
+}
+
 /* ── 迁移注册表 ───────────────────────────────────── */
 
 /**
@@ -1876,6 +1914,7 @@ const MIGRATIONS = [
   { version: 27, name: 'connect-v27-snapshot-source', up: migrationV27 },
   { version: 28, name: 'connect-v28-review-template-assignees', up: migrationV28 },
   { version: 29, name: 'connect-v29-project-types', up: migrationV29 },
+  { version: 30, name: 'connect-v30-report-idempotency', up: migrationV30 },
 ];
 
 /**

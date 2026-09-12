@@ -214,6 +214,12 @@ export interface ReportPayload {
   resourceNote: string;
   /** B15：编辑态携带 —— 草稿/已打回 点「提交」时置 true，服务端将其流转为「已提交」（清打回原因、写提交时间）；省略则保持原状态 */
   submit?: boolean;
+  /**
+   * 幂等键（v30）：新建/提交时由前端生成（每次打开表单一个，见 `genIdemKey`）。
+   * 服务端据此对「按钮双击 / 请求重试 / 并发竞态」判重，返回既有周报而非新建第二条。
+   * 省略则行为与改动前完全一致；编辑（updateReport）不需要该字段。
+   */
+  idemKey?: string;
   /** B8（R2）：tasks[].actualDays 为本周实际工时（人日）入参，仅勾选叶子行携带 */
   tasks: Array<{ nodeId: string; progressAfter: number; selected: boolean; actualDays?: number }>;
   risks: Array<{ description: string; owner: string; dueDate: string }>;

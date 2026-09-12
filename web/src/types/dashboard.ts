@@ -444,8 +444,9 @@ export interface WeeklyProgress {
 }
 
 /**
- * 任务时间轴三栏（B12 全局总览新增）。
- * 每行 = `WbsNode`（已补 `projectName` 供跨项目展示）；三栏按「截止日相对今天」单一真源切分，零重叠：
+ * 任务时间轴四栏（B12 全局总览新增）。
+ * 每行 = `WbsNode`（已补 `projectName` 供跨项目展示）；四栏按「截止日相对今天」单一真源切分，零重叠：
+ *  - `unscheduled`：未排期（既无开始日也无截止日；按优先级 P0 前置）
  *  - `overdue`  ：已逾期（gap < 0）
  *  - `dueSoon`  ：临期（0 ≤ gap ≤ 3 天）
  *  - `cycle`    ：计划周期内（4 ≤ gap ≤ 14 天）
@@ -454,6 +455,7 @@ export interface TaskTimelineSummary {
   overdue: WbsNode[];
   dueSoon: WbsNode[];
   cycle: WbsNode[];
+  unscheduled: WbsNode[];
 }
 
 /** 逐项目任务量（B12 · 「各项目任务量」横向条形面板数据源） */
@@ -593,8 +595,8 @@ export interface DashboardTasksQuery {
   taskStatus?: TaskStatus | TaskStatus[];
   /** 维度：逾期档位（1to7 / 8to30 / over30） */
   overdueBucket?: OverdueBucket;
-  /** B12：任务时间轴三栏下钻（overdue / dueSoon / cycle） */
-  dueWindow?: 'overdue' | 'dueSoon' | 'cycle';
+  /** B12：任务时间轴四栏下钻（overdue / dueSoon / cycle / unscheduled） */
+  dueWindow?: 'overdue' | 'dueSoon' | 'cycle' | 'unscheduled';
   page?: number;
   pageSize?: number;
 }

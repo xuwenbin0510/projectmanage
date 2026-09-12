@@ -199,6 +199,25 @@ function assertAssociation(db, projectId, nodeId, milestoneId) {
   }
 }
 
+/**
+ * 还原 multipart 文件名（中文文件名乱码修复）。
+ * multer/busboy 默认按 latin1 解析 Content-Disposition 的 filename，浏览器按 UTF-8 发送的
+ * 中文名会被逐字节解读成「æµ‹è¯•.pdf」这类乱码。这里做一次 latin1→UTF-8 回升：
+ * 仅当原串的 latin1 字节序列本身是合法 UTF-8（round-trip 一致）时才替换，
+ * 从而避免误伤本就是合法 ASCII / latin1 的名称。
+ */
+function decodeFileName(name) {
+  const raw = String(name == null ? '' : name);
+  if (!raw) return raw;
+  if (/[^\u0000-\u00ff]/.test(raw)) return raw; // 已含真实非拉丁字符（已正确解码），原样返回
+  if (!/[\u0080-\u00ff]/.test(raw)) return raw; // 纯 ASCII，无需处理
+  const buf = Buffer.from(raw, 'latin1');
+  const utf8 = buf.toString('utf8');
+  if (utf8.includes('\ufffd')) return raw; // 字节序列非合法 UTF-8
+  if (!Buffer.from(utf8, 'utf8').equals(buf)) return raw; // 不可逆，说明并非 UTF-8 误读
+  return utf8;
+}
+
 function uploadDocument(db, projectId, payload) {
   const file = payload.file;
   if (!file || !file.buffer || !file.originalname) {
@@ -216,7 +235,8 @@ function uploadDocument(db, projectId, payload) {
   const milestoneId = payload.milestoneId || '';
   assertAssociation(db, projectId, nodeId, milestoneId);
 
-  const safeName = String(file.originalname).replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_').slice(-120) || 'file';
+  const decodedName = decodeFileName(file.originalname);
+  const safeName = decodedName.replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_').slice(-120) || 'file';
   const storedName = crypto.randomUUID() + '_' + safeName;
   const projectDir = path.join(root(), projectId);
   ensureDir(projectDir);
@@ -259,7 +279,7 @@ function uploadDocument(db, projectId, payload) {
         id: existing.id,
         nodeId: keepNode,
         milestoneId: keepMs,
-        name: file.originalname,
+        name: decodedName,
         fileName: storedName,
         fileSize: file.size,
         mimeType: mime,
@@ -295,7 +315,7 @@ function uploadDocument(db, projectId, payload) {
     projectId: projectId,
     nodeId: nodeId,
     milestoneId: milestoneId,
-    name: file.originalname,
+    name: decodedName,
     fileName: storedName,
     fileSize: file.size,
     mimeType: mime,
