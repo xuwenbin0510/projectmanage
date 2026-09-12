@@ -112,7 +112,6 @@ export function WorkbenchPage(): JSX.Element {
     priority?: Priority;
   }>({ open: false });
   /* Q1：周报提醒命中任务展开态（projectId → 是否展开全部） */
-  const [reminderExpanded, setReminderExpanded] = useState<Record<string, boolean>>({});
   /* 我的任务明细抽屉的当前数据源（默认合并已完成；按筛选下探时替换为对应子集） */
   const [drawerTasks, setDrawerTasks] = useState<WbsNode[]>([]);
 
@@ -676,47 +675,6 @@ export function WorkbenchPage(): JSX.Element {
                         {r.state === '待填' ? '去填写' : r.state === '待确认' ? '去确认' : r.state}
                       </Button>
                     </Stack>
-                    {/* Q1：命中任务下钻（本周计划窗口内、我名下未完成的任务） */}
-                    {r.tasks && r.tasks.length > 0 && (
-                      <Box sx={{ px: 1.5, pb: 1 }}>
-                        {(reminderExpanded[r.projectId] ? r.tasks : r.tasks.slice(0, 3)).map((t) => {
-                          const od = isOverdue(t.dueDate);
-                          const soon = !od && diffDays(today(), t.dueDate) <= 3 && !!t.dueDate;
-                          return (
-                            <Stack
-                              key={t.id}
-                              direction="row"
-                              spacing={1}
-                              justifyContent="space-between"
-                              alignItems="center"
-                              sx={{ py: 0.75, pl: 1, borderTop: `1px dashed ${tokens.border.subtle}` }}
-                            >
-                              <Box sx={{ minWidth: 0 }}>
-                                <Typography sx={{ fontSize: 12.5 }} noWrap>
-                                  {t.wbsCode} {t.name}
-                                </Typography>
-                                <Typography
-                                  variant="caption"
-                                  color={od ? 'error.main' : soon ? 'warning.main' : 'text.secondary'}
-                                >
-                                  {t.dueDate ? `截止 ${fmtDate(t.dueDate)}${od ? ' · 已逾期' : soon ? ' · 临期' : ''}` : '无计划日期'}
-                                </Typography>
-                              </Box>
-                              <ProgressBar value={t.progress} tone={od ? 'danger' : 'brand'} sx={{ width: 76, flexShrink: 0 }} />
-                            </Stack>
-                          );
-                        })}
-                        {r.tasks.length > 3 && (
-                          <Button
-                            size="small"
-                            sx={{ mt: 0.5 }}
-                            onClick={() => setReminderExpanded((e) => ({ ...e, [r.projectId]: !e[r.projectId] }))}
-                          >
-                            {reminderExpanded[r.projectId] ? '收起' : `展开全部 ${r.tasks.length} 条`}
-                          </Button>
-                        )}
-                      </Box>
-                    )}
                   </Box>
                 ))}
                 {missing.length > 0 && (
