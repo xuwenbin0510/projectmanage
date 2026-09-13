@@ -30,7 +30,7 @@ import CheckCircleOutlineOutlinedIcon from '@mui/icons-material/CheckCircleOutli
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import HourglassEmptyOutlinedIcon from '@mui/icons-material/HourglassEmptyOutlined';
 
-import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard, UserAvatar } from '@/components/common';
+import { DataTable, LoadingState, PageHeader, PermissionButton, PermissionGate, SectionCard, UserAvatar } from '@/components/common';
 import { FeishuImportDialog } from '@/components/FeishuImportDialog';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
@@ -407,7 +407,7 @@ export function AdminUsersPage(): JSX.Element {
       render: (u) => {
         const all = (u.globalRoles && u.globalRoles.length ? u.globalRoles : [u.globalRole]).filter(Boolean);
         return (
-          <PermissionButton action="admin:user:role" fallback="disable">
+          <PermissionGate action="admin:user:role" fallback="disable">
             <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
               {all.length === 0 ? (
                 <Chip size="small" label="未分配" variant="outlined" color="default" title="尚未分配公司职位" />
@@ -424,7 +424,7 @@ export function AdminUsersPage(): JSX.Element {
                 ))
               )}
             </Stack>
-          </PermissionButton>
+          </PermissionGate>
         );
       },
     },
@@ -437,24 +437,24 @@ export function AdminUsersPage(): JSX.Element {
       render: (u) => {
         const meta = STATUS_META[u.status] || STATUS_META.active;
         return (
-          <PermissionButton action="admin:user:role" fallback="disable">
+          <PermissionGate action="admin:user:role" fallback="disable">
             <Chip
               size="small"
               label={meta.label}
               color={meta.color}
               variant={u.status === 'active' ? 'filled' : 'outlined'}
             />
-          </PermissionButton>
+          </PermissionGate>
         );
       },
     },
     {
       key: 'actions',
       label: '操作',
-      width: 160,
+      width: 200,
       align: 'center',
       render: (u) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
+        <PermissionGate action="admin:user:role" fallback="disable">
           <Stack direction="row" spacing={0.5} justifyContent="center" useFlexGap>
             <Button size="small" startIcon={<VisibilityOutlinedIcon />} onClick={() => setDetailTarget(u)}>
               详情
@@ -466,7 +466,7 @@ export function AdminUsersPage(): JSX.Element {
               <MoreVertOutlinedIcon fontSize="small" />
             </IconButton>
           </Stack>
-        </PermissionButton>
+        </PermissionGate>
       ),
     },
   ];

@@ -26,7 +26,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 import RuleOutlinedIcon from '@mui/icons-material/RuleOutlined';
 
-import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard } from '@/components/common';
+import { DataTable, LoadingState, PageHeader, PermissionButton, PermissionGate, SectionCard } from '@/components/common';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
 import type { ReviewTemplateConfig, ReviewTemplateScope, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, RoleCandidate } from '@/types/project';
@@ -290,16 +290,16 @@ export function AdminReviewTemplatesPage(): JSX.Element {
     {
       key: 'active',
       label: '状态',
-      width: 90,
+      width: 110,
       render: (t) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
+        <PermissionGate action="admin:user:role" fallback="disable">
           <Stack direction="row" spacing={0.75} alignItems="center">
             <Switch size="small" checked={t.active} onChange={() => void toggleActive(t)} />
             <Typography variant="caption" sx={{ color: t.active ? 'success.main' : 'text.secondary' }}>
               {t.active ? '启用' : '停用'}
             </Typography>
           </Stack>
-        </PermissionButton>
+        </PermissionGate>
       ),
     },
     {
@@ -307,13 +307,11 @@ export function AdminReviewTemplatesPage(): JSX.Element {
       label: '操作',
       width: 72,
       render: (t) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
-          <Tooltip title="操作">
-            <IconButton size="small" onClick={(e) => openMenu(e, t)}>
-              <MoreVertOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </PermissionButton>
+        <PermissionGate action="admin:user:role" fallback="disable" tooltip="操作">
+          <IconButton size="small" onClick={(e) => openMenu(e, t)}>
+            <MoreVertOutlinedIcon fontSize="small" />
+          </IconButton>
+        </PermissionGate>
       ),
     },
   ];

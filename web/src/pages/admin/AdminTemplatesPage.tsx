@@ -24,7 +24,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 
-import { DataTable, EmptyState, LoadingState, PageHeader, PermissionButton, SectionCard, StatusChip } from '@/components/common';
+import { DataTable, EmptyState, LoadingState, PageHeader, PermissionButton, PermissionGate, SectionCard, StatusChip } from '@/components/common';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
 import { TemplateEditorDialog } from '@/components/admin/TemplateEditorDialog';
@@ -228,16 +228,16 @@ export function AdminTemplatesPage(): JSX.Element {
     {
       key: 'isActive',
       label: '状态',
-      width: 92,
+      width: 110,
       render: (t) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
+        <PermissionGate action="admin:user:role" fallback="disable">
           <Stack direction="row" spacing={0.75} alignItems="center">
             <Switch size="small" checked={t.isActive} onChange={() => void toggleActive(t)} />
             <Typography variant="caption" sx={{ color: t.isActive ? 'success.main' : 'text.secondary' }}>
               {t.isActive ? '启用' : '停用'}
             </Typography>
           </Stack>
-        </PermissionButton>
+        </PermissionGate>
       ),
     },
     {
@@ -245,13 +245,11 @@ export function AdminTemplatesPage(): JSX.Element {
       label: '操作',
       width: 72,
       render: (t) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
-          <Tooltip title="操作">
-            <IconButton size="small" onClick={(e) => openMenu(e, t)}>
-              <MoreVertOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </PermissionButton>
+        <PermissionGate action="admin:user:role" fallback="disable" tooltip="操作">
+          <IconButton size="small" onClick={(e) => openMenu(e, t)}>
+            <MoreVertOutlinedIcon fontSize="small" />
+          </IconButton>
+        </PermissionGate>
       ),
     },
   ];

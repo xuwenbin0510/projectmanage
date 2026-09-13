@@ -12,4 +12,5 @@ export type { Column } from './DataTable';
 export { TruncatedName } from './TruncatedName';
 export { ConfirmDialog, FormDialog } from './Dialogs';
 export { PermissionButton } from './PermissionButton';
+export { PermissionGate } from './PermissionGate';
 export { StatCard, ProgressBar, UserAvatar, FieldRow } from './Widgets';

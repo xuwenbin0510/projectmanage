@@ -8,6 +8,8 @@ import {
   TableHead,
   TableRow,
   TablePagination,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { EmptyState, LoadingState } from './States';
 
@@ -77,16 +79,36 @@ export function DataTable<T>({
   dense = false,
   tableLayout = 'auto',
 }: DataTableProps<T>): JSX.Element {
+  // 响应式断点：用于计算 fixed 布局下「当前可见列」的声明宽度之和，作为表格最小宽度。
+  // 注意：以下 hook 必须位于所有 early return 之前，避免 hooks 调用顺序不一致。
+  const theme = useTheme();
+  const smUp = useMediaQuery(theme.breakpoints.up('sm'));
+  const mdUp = useMediaQuery(theme.breakpoints.up('md'));
+  const lgUp = useMediaQuery(theme.breakpoints.up('lg'));
+  const xlUp = useMediaQuery(theme.breakpoints.up('xl'));
+
   if (loading) return <LoadingState variant="skeleton" rows={5} height={44} />;
   if (!rows.length) return <EmptyState title={emptyTitle} description={emptyDescription} dense />;
 
   const isFixed = tableLayout === 'fixed';
 
+  // fixed 模式的最小宽度 = 当前断点下可见列的声明宽度之和：
+  // 容器变窄时表格改为横向滚动（TableContainer 已 overflowX:auto），而不是把列同比压窄到触发 text-overflow 裁切。
+  const upByBreakpoint: Record<'sm' | 'md' | 'lg' | 'xl', boolean> = { sm: smUp, md: mdUp, lg: lgUp, xl: xlUp };
+  const isColumnVisible = (c: Column<T>): boolean => {
+    const below = c.hideBelow ?? (c.hideOnMobile ? 'md' : undefined);
+    return below ? upByBreakpoint[below] : true;
+  };
+  const fixedMinWidth = columns.reduce(
+    (sum, c) => (isColumnVisible(c) && typeof c.width === 'number' ? sum + c.width : sum),
+    0,
+  );
+
   return (
     <Box>
       <TableContainer sx={{ overflowX: 'auto', width: '100%' }}>
-        {/* fixed：列宽按 width 比例伸缩铺满容器，故不设 max-content 下限；auto：保持既有行为 */}
-        <Table size={dense ? 'small' : 'medium'} sx={{ tableLayout, minWidth: isFixed ? undefined : 'max-content' }}>
+        {/* fixed：设最小宽度=可见列声明宽度之和，容器更窄时横向滚动，避免列被压窄后触发 text-overflow 裁切；auto：保持既有行为 */}
+        <Table size={dense ? 'small' : 'medium'} sx={{ tableLayout, minWidth: isFixed ? fixedMinWidth || undefined : 'max-content' }}>
           <TableHead>
             <TableRow>
               {columns.map((c) => (

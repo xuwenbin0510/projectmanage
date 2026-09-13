@@ -31,6 +31,7 @@ import {
   LoadingState,
   PageHeader,
   PermissionButton,
+  PermissionGate,
   SectionCard,
 } from '@/components/common';
 import type { Column } from '@/components/common';
@@ -229,16 +230,16 @@ export function AdminProjectTypesPage(): JSX.Element {
     {
       key: 'enabled',
       label: '启用',
-      width: 96,
+      width: 120,
       render: (t) => (
-        <PermissionButton action="admin:template" fallback="disable">
+        <PermissionGate action="admin:template" fallback="disable">
           <Stack direction="row" spacing={0.75} alignItems="center">
             <Switch size="small" checked={t.enabled} onChange={() => void toggleEnabled(t)} />
             <Typography variant="caption" sx={{ color: t.enabled ? 'success.main' : 'text.secondary' }}>
               {t.enabled ? '启用' : '停用'}
             </Typography>
           </Stack>
-        </PermissionButton>
+        </PermissionGate>
       ),
     },
     {
@@ -275,7 +276,7 @@ export function AdminProjectTypesPage(): JSX.Element {
     {
       key: 'actions',
       label: '操作',
-      width: 84,
+      width: 112,
       render: (t) => (
         <Button size="small" startIcon={<EditOutlinedIcon fontSize="small" />} onClick={() => openEditor(t)}>
           编辑

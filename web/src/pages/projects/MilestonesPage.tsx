@@ -477,7 +477,7 @@ export function MilestonesPage(): JSX.Element {
     {
       key: 'status',
       label: '状态',
-      width: 120,
+      width: 128,
       render: (m) => {
         /* R4-P1-2（决策 B）：进行中且非人工覆盖时，标注来源（纯展示，零契约变更）
          * 时间驱动 = taskStats.progress === 0 且 startFrom <= today；任务驱动 = progress > 0 */

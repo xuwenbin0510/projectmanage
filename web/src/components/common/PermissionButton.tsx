@@ -14,7 +14,13 @@ interface PermissionButtonProps extends Omit<ButtonProps, 'children' | 'action'>
 }
 
 /**
- * 权限按钮：前端仅控制可见性，服务端仍会二次校验
+ * 权限按钮：前端仅控制可见性，服务端仍会二次校验。
+ *
+ * 警告：本组件仅用于包裹真正的按钮。若在表格单元格里用它包裹非按钮内容
+ * （开关 Switch、图标按钮 IconButton、Chip 等），Button 自带的 min-width: 64px 与 padding
+ * 会撑破单元格，并让 DataTable 的 text-overflow: ellipsis 在裁切边缘画出多余的省略号。
+ * 那种场景请改用 PermissionGate。
+ *
  * @prd 全局
  */
 export function PermissionButton({

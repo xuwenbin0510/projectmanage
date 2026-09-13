@@ -15,7 +15,6 @@ import {
   Stack,
   Switch,
   TextField,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
@@ -23,7 +22,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import DeleteOutlineOutlinedIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
 
-import { DataTable, LoadingState, PageHeader, PermissionButton, SectionCard } from '@/components/common';
+import { DataTable, LoadingState, PageHeader, PermissionButton, PermissionGate, SectionCard } from '@/components/common';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
 import type { Role, RoleScope, CreateRolePayload, UpdateRolePayload } from '@/types/project';
@@ -237,16 +236,16 @@ export function AdminRolesPage(): JSX.Element {
     {
       key: 'enabled',
       label: '状态',
-      width: 100,
+      width: 110,
       render: (r) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
+        <PermissionGate action="admin:user:role" fallback="disable">
           <Stack direction="row" spacing={0.75} alignItems="center">
             <Switch size="small" checked={r.enabled} onChange={() => void toggleEnabled(r)} />
             <Typography variant="caption" sx={{ color: r.enabled ? 'success.main' : 'text.secondary' }}>
               {r.enabled ? '启用' : '停用'}
             </Typography>
           </Stack>
-        </PermissionButton>
+        </PermissionGate>
       ),
     },
     {
@@ -254,13 +253,11 @@ export function AdminRolesPage(): JSX.Element {
       label: '操作',
       width: 72,
       render: (r) => (
-        <PermissionButton action="admin:user:role" fallback="disable">
-          <Tooltip title="操作">
-            <IconButton size="small" onClick={(e) => openMenu(e, r)}>
-              <MoreVertOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </PermissionButton>
+        <PermissionGate action="admin:user:role" fallback="disable" tooltip="操作">
+          <IconButton size="small" onClick={(e) => openMenu(e, r)}>
+            <MoreVertOutlinedIcon fontSize="small" />
+          </IconButton>
+        </PermissionGate>
       ),
     },
   ];
