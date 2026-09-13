@@ -45,6 +45,18 @@ export function ReviewStepper({ review, dense = false, roleNameMap }: ReviewStep
   const steps: ReviewStep[] = review.steps;
   const roleLabel = (key: string): string => roleNameMap?.[key] ?? CHAIN_ROLE_LABEL[key] ?? key;
 
+  /**
+   * 兜底代批备注：步骤已决策且「实际决策人」与「归属人」不同（如 admin 代批）时，
+   * 追加 `由 X 代批`；相同则不重复显示。归属人仍保留（表示这一步该谁批）。
+   */
+  const proxyNote = (s: ReviewStep): string => {
+    const decided = s.status === 'approved' || s.status === 'rejected';
+    if (decided && s.decidedByName && s.decidedByName !== s.assigneeName) {
+      return `由 ${s.decidedByName} 代批`;
+    }
+    return '';
+  };
+
   if (dense) {
     return (
       <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -53,8 +65,8 @@ export function ReviewStepper({ review, dense = false, roleNameMap }: ReviewStep
             key={s.id}
             arrow
             title={`${roleLabel(s.role)} · ${s.assigneeName} · ${REVIEW_STEP_STATUS_LABEL[s.status]}${
-              s.comment ? `：${s.comment}` : ''
-            }`}
+              proxyNote(s) ? `（${proxyNote(s)}）` : ''
+            }${s.comment ? `：${s.comment}` : ''}`}
           >
             <Stack direction="row" spacing={0.5} alignItems="center">
               <StepIcon status={s.status} />
@@ -98,6 +110,11 @@ export function ReviewStepper({ review, dense = false, roleNameMap }: ReviewStep
                   <Typography variant="caption" color="text.secondary">
                     {s.assigneeName || '待指派'}
                   </Typography>
+                  {proxyNote(s) && (
+                    <Typography variant="caption" color="text.secondary">
+                      · {proxyNote(s)}
+                    </Typography>
+                  )}
                   <Typography variant="caption" sx={{ color }}>
                     {REVIEW_STEP_STATUS_LABEL[s.status]}
                   </Typography>

@@ -3,6 +3,7 @@ import { Alert, Stack, TextField, Typography } from '@mui/material';
 
 import { FormDialog } from '@/components/common';
 import { ReviewStepper } from './ReviewStepper';
+import { ChangeSummaryPanel } from './ChangeSummaryPanel';
 import type { Review } from '@/types/review';
 import type { DecisionPayload } from '@/api/contract';
 import { REVIEW_TYPE_LABEL } from '@/config/enums';
@@ -75,6 +76,8 @@ export function DecisionDialog({ open, review, action, onClose, onSubmit }: Deci
           所属项目：{review.projectName} · 发起人：{review.initiatorName}
         </Typography>
       </Stack>
+
+      {review.refType === 'change' && review.refId && <ChangeSummaryPanel changeId={review.refId} />}
 
       <ReviewStepper review={review} />
 

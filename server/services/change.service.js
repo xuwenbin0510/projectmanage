@@ -136,6 +136,130 @@ function getChange(db, id) {
   return toApiChange(db, getChangeRow(db, id));
 }
 
+/* ── 变更摘要（审批通知富文本） ───────────────────── */
+
+/**
+ * 取字符串首行（跳过空行、去首尾空白）；把长文本压缩成单行摘要用。
+ * @param {*} v
+ * @returns {string}
+ */
+function firstLineOf(v) {
+  const s = mappers.toStr(v);
+  if (!s) return '';
+  const lines = s.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t) return t;
+  }
+  return '';
+}
+
+/**
+ * 截断字符串到指定长度（超出追加省略号）。
+ * @param {string} s
+ * @param {number} n
+ * @returns {string}
+ */
+function truncate(s, n) {
+  const str = mappers.toStr(s).trim();
+  if (str.length <= n) return str;
+  return str.slice(0, n) + '…';
+}
+
+/**
+ * 计算两个「YYYY-MM-DD」日期的天数差（原生 Date，不引第三方依赖）。
+ * 返回 `to - from`：正数=延后，负数=提前，0=同日；无法解析时回落 0。
+ * @param {string} from
+ * @param {string} to
+ * @returns {number}
+ */
+function dayDiff(from, to) {
+  const a = new Date(String(from).slice(0, 10) + 'T00:00:00');
+  const b = new Date(String(to).slice(0, 10) + 'T00:00:00');
+  const ta = a.getTime();
+  const tb = b.getTime();
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
+  return Math.round((tb - ta) / 86400000);
+}
+
+/**
+ * 生成变更单「一句话中文摘要」（≤ 120 字），供审批通知正文与变更详情面板复用。
+ *
+ * 兼容两种入参形态：
+ *  - 已映射的 API 对象（camelCase，payload 已解析为对象）；
+ *  - changes 表原始行（snake_case，payload 为 JSON 字符串）。
+ *
+ * 规则：
+ *  - milestone_date + milestone → `里程碑「名称」计划日期 from → to（延后/提前 N 天）`；
+ *  - 其他类型回落 content 首行（截断 60 字）→ impact_analysis 首行；
+ *  - effortDays > 0 追加 ` · 预计 N 人日`；
+ *  - 最终整体截断 120 字，无可用信息返回 ''。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {object} change 变更单 API 对象或 changes 行
+ * @returns {string}
+ */
+function summarizeChange(db, change) {
+  const c = change && typeof change === 'object' ? change : {};
+  const read = function (camel, snake) {
+    const v = c[camel] !== undefined ? c[camel] : c[snake];
+    return mappers.toStr(v);
+  };
+
+  const changeType = read('changeType', 'change_type');
+  const targetType = read('targetType', 'target_type');
+  const targetId = read('targetId', 'target_id');
+  const effortDays = mappers.toNum(c.effortDays !== undefined ? c.effortDays : c.effort_days, 0);
+
+  /* payload：API 对象已解析为对象；原始行为 JSON 字符串 —— 与 applyChange 同源安全解析 */
+  let payload = {};
+  const rawPayload = c.payload;
+  if (rawPayload && typeof rawPayload === 'object') {
+    payload = rawPayload;
+  } else if (typeof rawPayload === 'string' && rawPayload) {
+    try {
+      payload = JSON.parse(rawPayload) || {};
+    } catch (e) {
+      payload = {};
+    }
+  }
+
+  let summary = '';
+
+  if (changeType === 'milestone_date' && targetType === 'milestone') {
+    let msName = targetId;
+    if (targetId) {
+      const ms = db.prepare('SELECT name FROM milestones WHERE id = ?').get(String(targetId));
+      if (ms && ms.name) msName = mappers.toStr(ms.name);
+    }
+    const fromDate = mappers.toStr(payload.fromDate).slice(0, 10);
+    const toDate = mappers.toStr(payload.toDate).slice(0, 10);
+    let datePart = '';
+    if (fromDate && toDate) {
+      const delta = dayDiff(fromDate, toDate);
+      let suffix = '（日期不变）';
+      if (delta > 0) suffix = '（延后 ' + delta + ' 天）';
+      else if (delta < 0) suffix = '（提前 ' + Math.abs(delta) + ' 天）';
+      datePart = fromDate + ' → ' + toDate + suffix;
+    } else if (fromDate) {
+      datePart = fromDate;
+    } else if (toDate) {
+      datePart = toDate;
+    }
+    summary = '里程碑「' + msName + '」计划日期' + (datePart ? ' ' + datePart : '');
+  } else {
+    const first = firstLineOf(read('content', 'content')) || firstLineOf(read('impactAnalysis', 'impact_analysis'));
+    summary = truncate(first, 60);
+  }
+
+  if (effortDays > 0) {
+    const effortNote = '预计 ' + effortDays + ' 人日';
+    summary = summary ? summary + ' · ' + effortNote : effortNote;
+  }
+
+  return truncate(summary, 120);
+}
+
 /* ── 创建 / 提交 / 实施 ───────────────────────────── */
 
 /**
@@ -204,6 +328,9 @@ function createChange(db, req, projectId, payload) {
   });
   const created = tx();
 
+  /* 摘要富化：把「变更了什么」带进通知正文（无可用信息时回落旧文案） */
+  const createdSummary = summarizeChange(db, created);
+
   /* 通知：项目 PM + 全局 admin/pmo（剔除创建人自身） */
   notificationService.notify(db, {
     recipients: notificationService.resolveRecipients(db, {
@@ -214,7 +341,9 @@ function createChange(db, req, projectId, payload) {
     }),
     type: notificationService.NOTIFICATION_TYPES.CHANGE_CREATED,
     title: '新的变更单：' + code + ' ' + title,
-    body: '「' + code + ' ' + title + '」已创建，待提交审批',
+    body: createdSummary
+      ? '「' + code + ' ' + title + '」已创建，待提交审批：' + createdSummary
+      : '「' + code + ' ' + title + '」已创建，待提交审批',
     projectId: String(projectId),
     refType: 'change',
     refId: id,
@@ -235,6 +364,7 @@ function createChange(db, req, projectId, payload) {
  */
 function submitChange(db, req, id) {
   const openId = mappers.toStr(req.user && (req.user.open_id !== undefined ? req.user.open_id : req.user.openId));
+  let summary = '';
   const tx = db.transaction(function () {
     const row = getChangeRow(db, id);
     const projectId = mappers.toStr(row.project_id);
@@ -246,13 +376,17 @@ function submitChange(db, req, id) {
     const tpl = enums.REVIEW_TEMPLATES[reviewType];
     const title = mappers.toStr(row.code) + ' ' + mappers.toStr(row.title) + ' · ' + tpl.label;
 
-    /* 复用评审引擎创建审批（ref_type='change'） */
+    /* 摘要富化：同一份摘要同时喂给评审通知正文与变更通知正文 */
+    summary = summarizeChange(db, row);
+
+    /* 复用评审引擎创建审批（ref_type='change'）；detail 为新增可选字段，旧调用方不受影响 */
     reviewService.createReview(db, {
       projectId: projectId,
       refType: 'change',
       refId: String(row.id),
       reviewType: reviewType,
       title: title,
+      detail: summary,
     }, me);
 
     const rid = db
@@ -276,7 +410,9 @@ function submitChange(db, req, id) {
     }),
     type: notificationService.NOTIFICATION_TYPES.CHANGE_SUBMITTED,
     title: '变更单待审批：' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title),
-    body: '「' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title) + '」已提交，待审批',
+    body: summary
+      ? '「' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title) + '」待审批：' + summary
+      : '「' + mappers.toStr(result.code) + ' ' + mappers.toStr(result.title) + '」已提交，待审批',
     projectId: mappers.toStr(result.projectId),
     refType: 'change',
     refId: id,
@@ -366,4 +502,5 @@ module.exports = {
   createChange,
   submitChange,
   applyChange,
+  summarizeChange,
 };

@@ -11,6 +11,7 @@ import {
   StatusChip,
 } from '@/components/common';
 import { ReviewStepper } from '@/components/review/ReviewStepper';
+import { ChangeSummaryPanel } from '@/components/review/ChangeSummaryPanel';
 import { DecisionDialog } from '@/components/review/DecisionDialog';
 import type { DecisionAction } from '@/components/review/DecisionDialog';
 import { api } from '@/api/client';
@@ -166,6 +167,8 @@ export function ApprovalsPage(): JSX.Element {
                     </Button>
                   )}
                 </Stack>
+
+                {r.refType === 'change' && r.refId && <ChangeSummaryPanel changeId={r.refId} />}
 
                 <Box
                   sx={{

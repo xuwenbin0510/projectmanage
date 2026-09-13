@@ -346,6 +346,9 @@ function createReview(db, payload, me) {
   const projectId = mappers.toStr(p.projectId || '');
   const reviewType = mappers.toStr(p.reviewType || '');
   const title = mappers.toStr(p.title || '').trim();
+  /* 可选：审批详情摘要（如变更单摘要），写入 REVIEW_CREATED 通知正文；
+     新增可选字段，旧调用方不传时为 ''，通知文案与历史完全一致。上限 200 字防滥用。 */
+  const detail = mappers.toStr(p.detail).trim().slice(0, 200);
 
   const project = db
     .prepare('SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL')
@@ -515,7 +518,7 @@ function createReview(db, payload, me) {
     }),
     type: notificationService.NOTIFICATION_TYPES.REVIEW_CREATED,
     title: '新的评审待处理：' + title,
-    body: '「' + (project.name || projectId) + '」发起评审「' + title + '」，请你审批',
+    body: '「' + (project.name || projectId) + '」发起评审「' + title + '」' + (detail ? '：' + detail : '') + '，请你审批',
     projectId: projectId,
     refType: 'review',
     refId: id,

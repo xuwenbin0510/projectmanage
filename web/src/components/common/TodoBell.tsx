@@ -139,7 +139,16 @@ export function TodoBell(): JSX.Element {
                 primary={n.title}
                 secondary={`${NOTIFICATION_TYPE_LABEL[n.type]}${n.body ? ' · ' + n.body : ''}`}
                 primaryTypographyProps={{ variant: 'body2', noWrap: true, fontWeight: n.isRead ? 400 : 600 }}
-                secondaryTypographyProps={{ variant: 'caption', noWrap: true }}
+                secondaryTypographyProps={{
+                  variant: 'caption',
+                  /* 通知正文最多 2 行省略：变更摘要等富文本不被单行截断吃掉 */
+                  sx: {
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  },
+                }}
               />
               <Typography
                 variant="caption"
