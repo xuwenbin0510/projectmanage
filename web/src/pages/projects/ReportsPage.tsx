@@ -329,6 +329,8 @@ export function ReportsPage(): JSX.Element {
     {
       key: 'doneNote',
       label: '完成摘要',
+      /* fixed 布局：每列都必须给 width，否则窄容器下会被压成 0 宽（700px 实测）；且 fixedMinWidth 只累加数值型 width */
+      width: 220,
       render: (r) => (
         <Typography
           variant="caption"
