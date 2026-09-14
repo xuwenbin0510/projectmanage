@@ -15,6 +15,8 @@ export {
   isTypeEnabled,
 } from './useProjectTypes';
 export type { UseProjectTypesResult } from './useProjectTypes';
+export { useRoleCatalog, ensureRoleCatalog, reloadRoleCatalog, roleNameOf } from './useRoleCatalog';
+export type { UseRoleCatalogResult } from './useRoleCatalog';
 
 /**
  * useAsync 选项

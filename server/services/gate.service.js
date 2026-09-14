@@ -18,6 +18,8 @@ const rbac = require('../middleware/rbac');
 const { writeAudit } = require('../lib/audit');
 const milestoneService = require('./milestone.service');
 const projectService = require('./project.service');
+/* 角色中文名（roles 表为唯一真相源）：用于审计/变更记录文案，不落英文 key */
+const roleCatalog = require('./roleCatalog');
 
 /* ═══════════════════════════════════════════════════
  * 一、基础读取
@@ -425,7 +427,9 @@ function updateGate(db, req, gateId, payload) {
       db, me, 'gate', String(gateId), 'update', projectId,
       '修改质量门「' + mappers.toStr(gate.code) + '」设置：' +
         (name !== mappers.toStr(gate.name) ? '名称 ' + mappers.toStr(gate.name) + ' → ' + name + '；' : '') +
-        (ownerRole !== mappers.toStr(gate.owner_role) ? '责任角色 ' + mappers.toStr(gate.owner_role) + ' → ' + ownerRole : ''),
+        (ownerRole !== mappers.toStr(gate.owner_role)
+          ? '责任角色 ' + roleCatalog.roleLabelOf(gate.owner_role) + ' → ' + roleCatalog.roleLabelOf(ownerRole)
+          : ''),
       [],
     );
     return milestoneService.listMilestonesWithGate(db, projectId);

@@ -46,7 +46,7 @@ import {
 import { api } from '@/api/client';
 import { useProjectStore } from '@/stores/projectStore';
 import { useAuthStore } from '@/stores/authStore';
-import { useAsync, usePermission, useProjectTypes, useToast } from '@/hooks';
+import { ensureRoleCatalog, reloadRoleCatalog, useAsync, usePermission, useProjectTypes, useRoleCatalog, useToast } from '@/hooks';
 import type { CloseBlocker, GateChecklistItem, LifecycleTemplate, MilestoneWithGate, ProjectMember, ProjectRole, ProjectStatus, ProjectType, QualityGate, Role, User } from '@/types/project';
 import { GATE_CONCLUSIONS, GATE_ICON, PROJECT_ROLE_LABEL, PROJECT_TRANSITIONS } from '@/config/enums';
 import { alphaOf as alpha, colorOf, tokens, toneColor } from '@/theme/tokens';
@@ -89,6 +89,8 @@ export function ProjectOverviewPage(): JSX.Element {
   const isGateOwner = (ownerRole?: string) => !!ownerRole && gateMyRoles.includes(ownerRole);
   /* 类型标签 / 下拉走运行时目录 —— 必须置于所有 early return 之前（Hooks 顺序稳定） */
   const { types, enabledTypes, labelOf } = useProjectTypes();
+  /* 质量门责任角色中文名：`roles` 表（职位管理）为唯一真相源，禁止直接展示英文 key */
+  const { nameOf: gateRoleName } = useRoleCatalog();
 
   const project = useProjectStore((s) => s.current);
   const members = useProjectStore((s) => s.members);
@@ -195,10 +197,12 @@ export function ProjectOverviewPage(): JSX.Element {
   const [addRole, setAddRole] = useState<string>('member');
 
   /** 加载职位目录（项目内视野 + 启用）到 roleOptions，供卡片与弹窗统一映射角色中文名。
-   *  组件挂载即加载，避免「重新进概览时 roleOptions 为空 → 卡片走硬编码兜底显示错误角色」。 */
-  const loadRoleOptions = useCallback(async (): Promise<void> => {
+   *  组件挂载即加载，避免「重新进概览时 roleOptions 为空 → 卡片走硬编码兜底显示错误角色」。
+   *  数据来自 `ensureRoleCatalog()`（全站共享缓存，与 `useRoleCatalog` 同一次拉取）；
+   *  `force=true` 时强制重拉（打开「管理成员」前刷新，保留原「每次打开都取最新职位」语义）。 */
+  const loadRoleOptions = useCallback(async (force = false): Promise<void> => {
     try {
-      const rs = await api.listSelectableRoles();
+      const rs = force ? await reloadRoleCatalog() : await ensureRoleCatalog();
       setRoleOptions(
         rs.filter((r) => r.enabled && r.scope === 'project').sort((a, b) => a.orderNo - b.orderNo),
       );
@@ -220,7 +224,7 @@ export function ProjectOverviewPage(): JSX.Element {
       setAllUsers([]);
       toast.error(e, '成员候选列表加载失败，无法选择新成员');
     }
-    await loadRoleOptions();
+    await loadRoleOptions(true);
     setAddUserOpenId('');
     setAddRole('member');
     setMemberOpen(true);
@@ -669,7 +673,7 @@ export function ProjectOverviewPage(): JSX.Element {
           title={activeMs?.gate ? `${activeMs.gate.code} ${activeMs.gate.name}` : '质量门'}
           subtitle={
             activeMs?.gate
-              ? `责任角色 ${activeMs.gate.ownerRole.toUpperCase()} · 全部检查项确认后方可提交结论`
+              ? `责任角色 ${gateRoleName(activeMs.gate.ownerRole)} · 全部检查项确认后方可提交结论`
               : activeMs
                 ? '该里程碑未挂载质量门'
                 : '请选择一个里程碑'
@@ -701,7 +705,7 @@ export function ProjectOverviewPage(): JSX.Element {
                     can('gate:decide') || isGateOwner(activeMs?.gate?.ownerRole) || isGateOverride;
                   const disabled = archived || !canDecideGate || uncheckedCount > 0;
                   const reason = !canDecideGate
-                    ? `仅责任角色 ${(activeMs?.gate?.ownerRole || '').toUpperCase()} 可提交（或管理员代操作）`
+                    ? `仅责任角色 ${gateRoleName(activeMs?.gate?.ownerRole)} 可提交（或管理员代操作）`
                     : uncheckedCount > 0
                       ? `还有 ${uncheckedCount} 项检查项未确认，需全部确认后才能提交结论`
                       : '';
@@ -827,7 +831,7 @@ export function ProjectOverviewPage(): JSX.Element {
                       }
                       secondary={
                         <Typography variant="caption" color="text.secondary">
-                          责任角色 {item.ownerRole.toUpperCase()}
+                          责任角色 {gateRoleName(item.ownerRole)}
                         {isGateOwner(item.ownerRole) ? '（你）' : ''}
                           {item.checked && item.checkedAt ? ` · ${fmtDate(item.checkedAt)} 确认` : ''}
                           {item.source === 'custom' ? ' · 项目自定义' : ''}
@@ -1149,7 +1153,7 @@ export function ProjectOverviewPage(): JSX.Element {
           >
             {gateTemplates.map((g) => (
               <MenuItem key={g.code} value={g.code}>
-                {g.code} {g.name}（{g.ownerRole.toUpperCase()} · {g.itemCount} 项检查项）
+                {g.code} {g.name}（{gateRoleName(g.ownerRole)} · {g.itemCount} 项检查项）
               </MenuItem>
             ))}
           </TextField>

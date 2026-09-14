@@ -293,7 +293,9 @@ function assertGateOwnerOrOverrideMock(db: MockDb, alias: string, projectId: str
   const OVERRIDE = ['admin', 'cpo', 'cto', 'management'];
   if (OVERRIDE.some((r) => globalRoles.includes(r) || roles.includes(r))) return me;
   if (ownerRole && [...globalRoles, ...roles].includes(ownerRole)) return me;
-  throw new ApiError(ErrorCode.E_FORBIDDEN, `仅责任角色 ${ownerRole || ''} 可操作（或管理员代操作）`, undefined, 403);
+  /* 报错文案用中文名（roles 表为唯一真相源），不把英文 key 直接抛给界面 */
+  const ownerLabel = db.roles.find((r) => r.roleKey === ownerRole)?.name ?? ownerRole ?? '';
+  throw new ApiError(ErrorCode.E_FORBIDDEN, `仅责任角色 ${ownerLabel} 可操作（或管理员代操作）`, undefined, 403);
 }
 
 /** E1.5：取用户全局职位数组（兜底单值）；值为 role_key（含动态职位） */

@@ -43,7 +43,7 @@ import {
   TaskTimeRow,
 } from '@/components/dashboard';
 import { api } from '@/api/client';
-import { useAsync, useProjectTypes } from '@/hooks';
+import { useAsync, useProjectTypes, useRoleCatalog } from '@/hooks';
 import { ROUTES } from '@/config/routes';
 import type { ProgressSegment } from '@/types/dashboard';
 import type { Priority, WbsNode } from '@/types/wbs';
@@ -133,6 +133,8 @@ export function WorkbenchPage(): JSX.Element {
 
   /* 类型短标签走运行时目录（stop 新类型渲染为空）——必须置于所有 early return 之前 */
   const { shortOf } = useProjectTypes();
+  /* 质量门责任角色中文名走运行时职位目录（roles 表），不展示英文 key ——同为 Hooks 顺序前置 */
+  const { nameOf: gateRoleName } = useRoleCatalog();
 
   /* B11：仪表盘聚合。必须在任何早退之前调用，保证 Hooks 顺序稳定 */
   const dashboard = useMemo(() => buildDashboard(data), [data]);
@@ -827,7 +829,7 @@ export function WorkbenchPage(): JSX.Element {
                         {g.projectName} · {g.milestoneCode} {g.milestoneName}
                       </Typography>
                     </Box>
-                    <Chip size="small" label={`责任 ${g.ownerRole.toUpperCase()}`} variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+                    <Chip size="small" label={`责任 ${gateRoleName(g.ownerRole)}`} variant="outlined" sx={{ height: 20, fontSize: 11 }} />
                   </Stack>
                 </Paper>
               ))}

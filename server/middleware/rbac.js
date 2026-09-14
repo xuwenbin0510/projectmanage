@@ -17,6 +17,7 @@ const db = require('../../db');
 const { AppError, ErrorCode } = require('../lib/errors');
 const { PROJECT_ARCHIVED_STATUSES } = require('../config/enums');
 const { canDo } = require('../config/permissions');
+const roleCatalog = require('../services/roleCatalog');
 
 /**
  * 取用户在指定项目中的项目角色集合。
@@ -129,6 +130,7 @@ function assertCan(db, req, action, projectId) {
  * @throws {AppError} E_UNAUTHORIZED / E_FORBIDDEN
  */
 const GATE_OVERRIDE_ROLES = ['admin', 'cpo', 'cto', 'management'];
+
 function assertGateOwnerOrOverride(db, req, ownerRole, projectId, action) {
   const me = req && req.user;
   if (!me) throw new AppError(ErrorCode.E_UNAUTHORIZED);
@@ -141,7 +143,7 @@ function assertGateOwnerOrOverride(db, req, ownerRole, projectId, action) {
   if (GATE_OVERRIDE_ROLES.some(function (r) { return mine.has(r); })) return me;
   // 责任角色本人（即便不在能力清单也能操作）
   if (ownerRole && mine.has(String(ownerRole).trim())) return me;
-  throw new AppError(ErrorCode.E_FORBIDDEN, '仅责任角色 ' + (ownerRole || '') + ' 可操作（或管理员代操作）');
+  throw new AppError(ErrorCode.E_FORBIDDEN, '仅责任角色 ' + roleCatalog.roleLabelOf(ownerRole) + ' 可操作（或管理员代操作）');
 }
 
 /**

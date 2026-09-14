@@ -80,10 +80,28 @@ function allRoleKeys() {
   return Array.from(getCatalog().keys());
 }
 
+/**
+ * 角色 key → 中文名（**唯一真相源 = `roles` 表**，读上面预热好的缓存）。
+ *
+ * 用于所有**面向用户**的文案（报错 / 变更记录 / 日志），避免把 `qa` / `tl`
+ * 这类英文 key 直接抛给界面。查不到（缓存未预热 / 未知角色）时回落 key 原文，
+ * 绝不返回空串——空 key 才返回空串。
+ *
+ * @param {string} [role]
+ * @returns {string}
+ */
+function roleLabelOf(role) {
+  const key = String(role || '').trim();
+  if (!key) return '';
+  const r = getRole(key);
+  return (r && r.name) || key;
+}
+
 module.exports = {
   refreshRoleCatalog,
   getCatalog,
   getRole,
+  roleLabelOf,
   getRoleScope,
   isGlobalRole,
   isProjectRole,
