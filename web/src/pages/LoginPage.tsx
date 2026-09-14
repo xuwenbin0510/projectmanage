@@ -546,7 +546,7 @@ export function LoginPage(): JSX.Element {
 
             {!appId && !feishuReady && (
               <Typography variant="caption" sx={{ display: 'block', mt: 2, color: 'rgba(255,255,255,0.35)' }}>
-                未配置飞书凭证时，请使用邮箱密码登录。首次登录默认密码为 AstrBytes@2026，登录后请立即修改。
+                未配置飞书凭证时，请使用邮箱密码登录。首次登录默认密码为 AstrByte@2026，登录后请立即修改。
               </Typography>
             )}
 

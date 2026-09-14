@@ -283,6 +283,19 @@ function assertCan(db: MockDb, alias: string, projectId?: string): User {
   return me;
 }
 
+/** A2 质量门责任角色校验（mock，与后端 rbac.assertGateOwnerOrOverride 同源）：capability 或 责任人 或 override */
+function assertGateOwnerOrOverrideMock(db: MockDb, alias: string, projectId: string, ownerRole?: string): User {
+  const me = currentUser(db);
+  const roles = projectRolesOf(db, projectId, me.openId);
+  const globalRoles = globalRoleSet(me);
+  const action = ACTION_KEY[alias] ?? alias;
+  if (canDo(globalRoles, action, roles)) return me;
+  const OVERRIDE = ['admin', 'cpo', 'cto', 'management'];
+  if (OVERRIDE.some((r) => globalRoles.includes(r) || roles.includes(r))) return me;
+  if (ownerRole && [...globalRoles, ...roles].includes(ownerRole)) return me;
+  throw new ApiError(ErrorCode.E_FORBIDDEN, `仅责任角色 ${ownerRole || ''} 可操作（或管理员代操作）`, undefined, 403);
+}
+
 /** E1.5：取用户全局职位数组（兜底单值）；值为 role_key（含动态职位） */
 function globalRoleSet(u: User): string[] {
   if (Array.isArray(u.globalRoles) && u.globalRoles.length) return u.globalRoles;
@@ -709,7 +722,7 @@ export class MockApiClient implements ApiClient {
     const user = db.users.find((u) => u.email && u.email.toLowerCase() === email.toLowerCase());
     if (!user) throw new ApiError(ErrorCode.E_UNAUTHORIZED, '邮箱或密码错误');
     if (user.status === 'disabled') throw new ApiError(ErrorCode.E_FORBIDDEN, '该账号已停用');
-    if (password !== 'AstrBytes@2026') throw new ApiError(ErrorCode.E_UNAUTHORIZED, '邮箱或密码错误');
+    if (password !== 'AstrByte@2026') throw new ApiError(ErrorCode.E_UNAUTHORIZED, '邮箱或密码错误');
     db.sessionOpenId = user.openId;
     saveDb();
     return { token: MOCK_TOKEN_PREFIX + user.openId, user: deepClone(user), mustChangePwd: true };
@@ -1360,7 +1373,7 @@ export class MockApiClient implements ApiClient {
     const item = db.gateItems.find((i) => i.id === itemId) ?? nf();
     const gate = db.gates.find((g) => g.id === item.gateId) ?? nf();
     assertWritable(db, gate.projectId);
-    const me = assertCan(db, 'gate.check', gate.projectId);
+    const me = assertGateOwnerOrOverrideMock(db, 'gate.check', gate.projectId, item.ownerRole);
     item.checked = checked;
     item.checkedBy = checked ? me.openId : null;
     item.checkedAt = checked ? today() : null;
@@ -1435,12 +1448,12 @@ export class MockApiClient implements ApiClient {
     await delay(200);
     const db = getDb();
     assertWritable(db, projectId);
-    const me = assertCan(db, 'gate.decide', projectId);
     const gate = db.gates.find((g) => g.id === payload.gateId) ?? nf();
+    const me = assertGateOwnerOrOverrideMock(db, 'gate.decide', projectId, gate.ownerRole);
     const items = db.gateItems.filter((i) => i.gateId === gate.id);
     const { ready, unchecked } = gateReady(items);
 
-    if (!ready && payload.conclusion !== '不通过') {
+    if (!ready) {
       throw new ApiError(ErrorCode.E_GATE_ITEM_INCOMPLETE, undefined, {
         unchecked: unchecked.map((u) => ({ id: u.id, content: u.content })),
       });
@@ -4162,7 +4175,7 @@ export class MockApiClient implements ApiClient {
     u.updatedAt = nowIso();
     audit(db, me, 'user', String(userId), 'reset-password', '', `重置用户「${u.name}」密码`, []);
     saveDb();
-    return { defaultPassword: 'AstrBytes@2026', openId: String(u.openId || '') };
+    return { defaultPassword: 'AstrByte@2026', openId: String(u.openId || '') };
   }
 
   async deleteUser(userId: number): Promise<null> {

@@ -77,6 +77,16 @@ export function ProjectOverviewPage(): JSX.Element {
   const navigate = useNavigate();
   const toast = useToast();
   const { can } = usePermission();
+  // A2 质量门责任角色感知：合并 capability / 责任人 / override（与后端 assertGateOwnerOrOverride 同源）
+  const gateUser = useAuthStore((s) => s.user);
+  const gateProjectRoles = useAuthStore((s) => s.projectRoles);
+  const GATE_OVERRIDE_ROLES = ['admin', 'cpo', 'cto', 'management'];
+  const gateMyRoles = useMemo(
+    () => [...(gateUser?.globalRoles || []), ...gateProjectRoles],
+    [gateUser, gateProjectRoles],
+  );
+  const isGateOverride = gateMyRoles.some((r) => GATE_OVERRIDE_ROLES.includes(r));
+  const isGateOwner = (ownerRole?: string) => !!ownerRole && gateMyRoles.includes(ownerRole);
   /* 类型标签 / 下拉走运行时目录 —— 必须置于所有 early return 之前（Hooks 顺序稳定） */
   const { types, enabledTypes, labelOf } = useProjectTypes();
 
@@ -686,16 +696,29 @@ export function ProjectOverviewPage(): JSX.Element {
                     </Tooltip>
                   </>
                 )}
-                <PermissionButton
-                  action="gate:decide"
-                  size="small"
-                  variant="contained"
-                  disabled={archived}
-                  disabledReason={uncheckedCount > 0 ? `还有 ${uncheckedCount} 项未确认（可提交「不通过」）` : ''}
-                  onClick={() => setGateOpen(true)}
-                >
-                  提交门控结论
-                </PermissionButton>
+                {(() => {
+                  const canDecideGate =
+                    can('gate:decide') || isGateOwner(activeMs?.gate?.ownerRole) || isGateOverride;
+                  const disabled = archived || !canDecideGate || uncheckedCount > 0;
+                  const reason = !canDecideGate
+                    ? `仅责任角色 ${(activeMs?.gate?.ownerRole || '').toUpperCase()} 可提交（或管理员代操作）`
+                    : uncheckedCount > 0
+                      ? `还有 ${uncheckedCount} 项检查项未确认，需全部确认后才能提交结论`
+                      : '';
+                  const btn = (
+                    <Button size="small" variant="contained" disabled={disabled} onClick={() => setGateOpen(true)}>
+                      提交门控结论
+                    </Button>
+                  );
+                  return reason ? (
+                    /* disabled 按钮 pointer-events:none 不会派发鼠标事件，需 span 包裹才能唤起 Tooltip */
+                    <Tooltip title={reason} arrow>
+                      <span>{btn}</span>
+                    </Tooltip>
+                  ) : (
+                    btn
+                  );
+                })()}
               </Stack>
             ) : canEditGate && activeMs && !activeMs.done ? (
               /* D07：无门里程碑可设置质量门 */
@@ -782,7 +805,10 @@ export function ProjectOverviewPage(): JSX.Element {
                       <Checkbox
                         size="small"
                         checked={item.checked}
-                        disabled={archived}
+                        disabled={
+                          archived ||
+                          !(can('gate:item:check') || isGateOwner(item.ownerRole) || isGateOverride)
+                        }
                         onChange={(e) => void handleToggleItem(item, e.target.checked)}
                       />
                     </ListItemIcon>
@@ -802,6 +828,7 @@ export function ProjectOverviewPage(): JSX.Element {
                       secondary={
                         <Typography variant="caption" color="text.secondary">
                           责任角色 {item.ownerRole.toUpperCase()}
+                        {isGateOwner(item.ownerRole) ? '（你）' : ''}
                           {item.checked && item.checkedAt ? ` · ${fmtDate(item.checkedAt)} 确认` : ''}
                           {item.source === 'custom' ? ' · 项目自定义' : ''}
                         </Typography>
@@ -1001,12 +1028,13 @@ export function ProjectOverviewPage(): JSX.Element {
         title={`提交门控结论 · ${activeMs?.gate?.code ?? ''}`}
         submitText="提交结论"
         submitting={submitting}
+        disabled={uncheckedCount > 0}
         onClose={() => setGateOpen(false)}
         onSubmit={() => void handleDecide()}
       >
         {uncheckedCount > 0 && (
           <Alert severity="warning" variant="outlined">
-            还有 {uncheckedCount} 项检查项未确认，只能提交「不通过」结论。
+            还有 {uncheckedCount} 项检查项未确认，需全部确认后才能提交门控结论。
           </Alert>
         )}
         <TextField
@@ -1017,7 +1045,7 @@ export function ProjectOverviewPage(): JSX.Element {
           fullWidth
         >
           {GATE_CONCLUSIONS.map((c) => (
-            <MenuItem key={c} value={c} disabled={uncheckedCount > 0 && c !== '不通过'}>
+            <MenuItem key={c} value={c} disabled={uncheckedCount > 0}>
               {c}
             </MenuItem>
           ))}

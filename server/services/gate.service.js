@@ -83,7 +83,8 @@ function toggleGateItem(db, req, itemId, checked) {
     const projectId = mappers.toStr(gate.project_id);
 
     rbac.assertWritable(db, projectId);
-    const me = rbac.assertCan(db, req, 'gate:item:check', projectId);
+    // A2：capability 或 责任人 或 override（合并校验，避免责任人无能力被前置拦死）
+    const me = rbac.assertGateOwnerOrOverride(db, req, mappers.toStr(item.owner_role), projectId, 'gate:item:check');
 
     const next = checked === true || checked === 1 || checked === 'true';
     const openId = mappers.toStr(me.open_id !== undefined ? me.open_id : me.openId);
@@ -109,7 +110,7 @@ function toggleGateItem(db, req, itemId, checked) {
 /**
  * 提交门控结论（`mock/index.ts:919` · P0-03）。
  *
- * 关键分支：**「不通过」允许在检查项没勾齐时直接下结论**，其余结论必须先勾齐。
+ * 关键分支：**任何结论（含「不通过」）都必须先勾齐全部检查项**。
  * `GATE_PASSED_STATUSES = ['已通过','有条件通过']` 命中 → 挂载里程碑自动达成（§4.3）。
  *
  * @param {import('better-sqlite3').Database} db
@@ -124,12 +125,13 @@ function decideGate(db, req, projectId, gateId, payload) {
   const p = payload || {};
   const tx = db.transaction(function () {
     rbac.assertWritable(db, projectId);
-    const me = rbac.assertCan(db, req, 'gate:decide', projectId);
-
+    // 先取门实体：A2 需要 gate.owner_role；同时校验门存在且归属本项目
     const gate = requireGateRow(db, gateId);
     if (mappers.toStr(gate.project_id) !== String(projectId)) {
       throw new AppError(ErrorCode.E_VALIDATION, '质量门不属于当前项目', { gateId: String(gateId) });
     }
+    // A2：capability 或 责任人 或 override（合并校验，避免责任人无能力被前置拦死）
+    const me = rbac.assertGateOwnerOrOverride(db, req, mappers.toStr(gate.owner_role), projectId, 'gate:decide');
 
     const conclusion = String(p.conclusion === undefined || p.conclusion === null ? '' : p.conclusion);
     if (enums.GATE_CONCLUSIONS.indexOf(conclusion) < 0) {
@@ -141,8 +143,8 @@ function decideGate(db, req, projectId, gateId, payload) {
 
     const items = loadGateItems(db, gate.id);
     const readiness = wbs.gateReady(items);
-    /* 「不通过」是明确的例外分支：不要求勾齐 */
-    if (!readiness.ready && conclusion !== '不通过') {
+    /* 需求：任何结论（含「不通过」）都必须在所有检查项已确认后才能提交 */
+    if (!readiness.ready) {
       throw new AppError(ErrorCode.E_GATE_ITEM_INCOMPLETE, undefined, {
         unchecked: readiness.unchecked.map(function (u) {
           return { id: u.id, content: u.content };

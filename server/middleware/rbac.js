@@ -107,6 +107,44 @@ function assertCan(db, req, action, projectId) {
 }
 
 /**
+ * A2 质量门责任角色校验：capability 或 责任人 或 override（方案 A2）。
+ *
+ * 用于 `toggleGateItem` / `decideGate` 在既有能力校验之上叠加"责任角色"语义。
+ * 与"先 assertCan 再判 owner"的区别：本函数把三者**合并为一道校验**，
+ * 避免「责任人无能力却被前置 assertCan 提前拦死」。
+ *
+ * - ownerRole 为空 → 跳过 owner 判定（兼容历史/未分配，仅靠 capability 把关，不锁死）。
+ * - capability 命中 → 直接通过（保持既有粗粒度能力语义）。
+ * - override（管理类救火角色）→ 通过（即便非责任人也能代操作）。
+ * - 否则仅当操作者有效角色含 ownerRole 时通过；否则 E_FORBIDDEN。
+ *
+ * 返回 `req.user`（与 assertCan 同签名），供调用方继续以 `me` 写审计。
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {import('express').Request} req 已过 requireAuth
+ * @param {string} [ownerRole] 目标责任角色（门级或项级 owner_role）
+ * @param {string} [projectId]
+ * @param {string} action 能力 key（如 'gate:item:check' / 'gate:decide'）
+ * @returns {object} req.user
+ * @throws {AppError} E_UNAUTHORIZED / E_FORBIDDEN
+ */
+const GATE_OVERRIDE_ROLES = ['admin', 'cpo', 'cto', 'management'];
+function assertGateOwnerOrOverride(db, req, ownerRole, projectId, action) {
+  const me = req && req.user;
+  if (!me) throw new AppError(ErrorCode.E_UNAUTHORIZED);
+  const globalRoles = globalRolesOf(db, me.id, me.global_role);
+  const projectRoles = projectId ? projectRolesOf(db, projectId, me.id) : [];
+  const mine = new Set([...globalRoles, ...projectRoles]);
+  // A2：能力持有者直接通过（保持既有 capability 语义）
+  if (canDo(globalRoles, action, projectRoles)) return me;
+  // override：管理类救火角色（即便非责任人也能代操作）
+  if (GATE_OVERRIDE_ROLES.some(function (r) { return mine.has(r); })) return me;
+  // 责任角色本人（即便不在能力清单也能操作）
+  if (ownerRole && mine.has(String(ownerRole).trim())) return me;
+  throw new AppError(ErrorCode.E_FORBIDDEN, '仅责任角色 ' + (ownerRole || '') + ' 可操作（或管理员代操作）');
+}
+
+/**
  * 校验引用的里程碑存在且属于同一项目。
  * @param {import('better-sqlite3').Database} db
  * @param {string} projectId
@@ -144,6 +182,7 @@ module.exports = {
   loadProject,
   assertWritable,
   assertCan,
+  assertGateOwnerOrOverride,
   assertSameProjectMilestone,
   requirePermission,
 };
