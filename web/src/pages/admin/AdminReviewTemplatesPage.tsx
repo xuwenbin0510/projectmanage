@@ -24,12 +24,11 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import MoreVertOutlinedIcon from '@mui/icons-material/MoreVertOutlined';
-import RuleOutlinedIcon from '@mui/icons-material/RuleOutlined';
 
-import { DataTable, LoadingState, PageHeader, PermissionButton, PermissionGate, SectionCard } from '@/components/common';
+import { DataTable, LoadingState, PageHeader, PermissionGate, SectionCard } from '@/components/common';
 import type { Column } from '@/components/common';
 import { AdminTabs } from './AdminTabs';
-import type { ReviewTemplateConfig, ReviewTemplateScope, CreateReviewTemplatePayload, UpdateReviewTemplatePayload, RoleCandidate } from '@/types/project';
+import type { ReviewTemplateConfig, ReviewTemplateScope, UpdateReviewTemplatePayload, RoleCandidate } from '@/types/project';
 import type { ReviewMode } from '@/types/review';
 import type { Role } from '@/types/project';
 import { api } from '@/api/client';
@@ -126,12 +125,6 @@ export function AdminReviewTemplatesPage(): JSX.Element {
   };
   const closeMenu = (): void => setMenuAnchor(null);
 
-  const openCreate = (): void => {
-    setEditing(null);
-    setForm({ ...EMPTY_FORM });
-    setOpen(true);
-  };
-
   const openEdit = (t: ReviewTemplateConfig): void => {
     setEditing(t);
     setForm({
@@ -158,7 +151,7 @@ export function AdminReviewTemplatesPage(): JSX.Element {
   };
 
   const remove = async (t: ReviewTemplateConfig): Promise<void> => {
-    if (!window.confirm(`确认删除审批模板「${t.label}」（${t.key}）？存在进行中的审批时将无法删除。`)) return;
+    if (!window.confirm(`确认删除审批模板「${t.label}」（${t.key}）？删除后该流程将回落内置默认链，且本页无法再重建（需在「项目类型」页重新配置）。存在进行中的审批时将无法删除。`)) return;
     try {
       await api.deleteReviewTemplate(t.key);
       setRows((list) => list.filter((x) => x.key !== t.key));
@@ -170,34 +163,20 @@ export function AdminReviewTemplatesPage(): JSX.Element {
   };
 
   const save = async (): Promise<void> => {
+    if (!editing) return;
     setSaving(true);
     try {
-      if (editing) {
-        const patch: UpdateReviewTemplatePayload = {
-          label: form.label.trim(),
-          scope: form.scope,
-          mode: form.mode,
-          chain: form.chain,
-          assignees: form.assignees,
-          description: form.description,
-        };
-        const updated = await api.updateReviewTemplate(editing.key, patch);
-        setRows((list) => list.map((x) => (x.key === editing.key ? updated : x)));
-        toast.success(`已更新「${updated.label}」`);
-      } else {
-        const payload: CreateReviewTemplatePayload = {
-          key: form.key.trim(),
-          scope: form.scope,
-          label: form.label.trim(),
-          mode: form.mode,
-          chain: form.chain,
-          assignees: form.assignees,
-          description: form.description,
-        };
-        const created = await api.createReviewTemplate(payload);
-        setRows((list) => [...list, created]);
-        toast.success(`已创建「${created.label}」`);
-      }
+      const patch: UpdateReviewTemplatePayload = {
+        label: form.label.trim(),
+        scope: form.scope,
+        mode: form.mode,
+        chain: form.chain,
+        assignees: form.assignees,
+        description: form.description,
+      };
+      const updated = await api.updateReviewTemplate(editing.key, patch);
+      setRows((list) => list.map((x) => (x.key === editing.key ? updated : x)));
+      toast.success(`已更新「${updated.label}」`);
       setOpen(false);
     } catch (e) {
       toast.error(e);
@@ -324,14 +303,7 @@ export function AdminReviewTemplatesPage(): JSX.Element {
       <AdminTabs />
       <PageHeader
         title="审批配置"
-        subtitle="管理内置审批流程：项目类立项链（A/B/C）与业务类评审链；保存即生效，停用的模板自动回落默认配置"
-        actions={
-          <PermissionButton action="admin:user:role" fallback="disable">
-            <Button variant="contained" size="small" startIcon={<RuleOutlinedIcon />} onClick={openCreate}>
-              新增审批模板
-            </Button>
-          </PermissionButton>
-        }
+        subtitle="调整已存在的审批流：项目类的立项链 / 变更链在「项目类型」下配置，业务类是内置的 5 条评审链；保存即生效，停用的模板自动回落默认配置"
       />
       <SectionCard flush>
         {loading ? (
@@ -370,21 +342,20 @@ export function AdminReviewTemplatesPage(): JSX.Element {
         </MenuItem>
       </Menu>
 
-      {/* 新增 / 编辑弹窗 */}
+      {/* 编辑弹窗。新增入口已移除：`project:<类型码>` / `ccb:<类型码>` 由「项目类型」页
+          自动生成并配置，业务类 5 条为内置链，本页手写 key 只会造出不生效的模板。 */}
       <Dialog open={open} onClose={() => !saving && setOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editing ? `编辑审批模板 · ${editing.key}` : '新增审批模板'}</DialogTitle>
+        <DialogTitle>编辑审批模板 · {editing?.key ?? ''}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            {!editing && (
-              <TextField
-                label="模板 Key（必填）"
-                size="small"
-                fullWidth
-                value={form.key}
-                onChange={(e) => setForm((f) => ({ ...f, key: e.target.value }))}
-                helperText="唯一标识，如 project:A / formal；创建后不可修改"
-              />
-            )}
+            <TextField
+              label="模板 Key"
+              size="small"
+              fullWidth
+              value={form.key}
+              disabled
+              helperText="唯一标识，决定生效位置；创建后不可修改"
+            />
             <Stack direction="row" spacing={1.5}>
               <TextField
                 select
