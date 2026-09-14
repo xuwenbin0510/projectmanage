@@ -14,7 +14,7 @@
 const cfg = require('../../config');
 const { createTemplates } = require('../config/lifecycle');
 const { nowIso } = require('../lib/dates');
-const { hashPassword, verifyPassword } = require('../lib/password');
+const { hashPassword } = require('../lib/password');
 
 /**
  * 演示账号（与前端 demoAccounts.ts 对应）
@@ -122,21 +122,19 @@ function ensureSystemAdmin(db, ts) {
  * 系统默认初始化密码。首次登录强制改密，因此该默认值仅用于第一次登入，不长期使用。
  */
 const DEFAULT_PASSWORD = process.env.DEFAULT_USER_PASSWORD || 'AstrByte@2026';
-/** 历史默认密码：用于识别「仍是旧默认密码」的存量账号并迁移到新默认密码（勿删）。 */
-const LEGACY_DEFAULT_PASSWORDS = ['AstrBytes@2026'];
 
 /**
- * 初始化 / 迁移用户密码（幂等），两步：
- *  1. 所有缺少 password_hash 的现有用户 → 写入新默认密码，标记 must_change_pwd=1，补齐邮箱。
- *  2. 迁移：仍有 password_hash、但正好命中某个「旧默认密码」的用户 → 用同一语句重哈希为新默认密码。
- *     幂等：迁移后哈希不再匹配旧值，重复启动不会重复处理。
+ * 初始化用户密码（幂等、**只补不覆盖**）：为所有缺少 password_hash 的现有用户写入默认密码，
+ * 标记 must_change_pwd=1 并补齐邮箱；**已设置过密码的用户一律不动**。
  *
- * 说明：hashPassword / verifyPassword 均为异步，better-sqlite3 禁止在事务内 await，
+ * 存量账号改密走人工途径（管理员在用户管理页重置），不在启动时对已有哈希做任何识别或替换。
+ *
+ * 说明：hashPassword 为异步，better-sqlite3 禁止在事务内 await，
  * 因此本函数必须在任何 db.transaction 之外调用；哈希只计算一次并复用。
  *
  * @param {import('better-sqlite3').Database} db
  * @param {string} ts ISO 时间戳
- * @returns {Promise<number>} 实际更新条数（初始化 + 迁移）
+ * @returns {Promise<number>} 实际更新条数
  */
 async function initializePasswords(db, ts) {
   const hashed = await hashPassword(DEFAULT_PASSWORD);
@@ -145,31 +143,13 @@ async function initializePasswords(db, ts) {
   );
   const fallbackEmail = (openId) => `${openId}@local.astrbytes.com`.toLowerCase();
 
-  /* (1) 缺失密码的现有用户 */
   const missing = db.prepare('SELECT open_id FROM users WHERE password_hash IS NULL').all();
   let n = 0;
   missing.forEach(function (row) {
     n += upd.run(hashed, fallbackEmail(row.open_id), ts, row.open_id).changes;
   });
   console.log('[seed] 为 %d 位现有用户初始化默认密码（首次登录需修改）', n);
-
-  /* (2) 迁移：仍在使用旧默认密码的用户，重哈希为新默认密码 */
-  const hashedUsers = db.prepare('SELECT open_id, password_hash FROM users WHERE password_hash IS NOT NULL').all();
-  let migrated = 0;
-  for (const row of hashedUsers) {
-    let isLegacy = false;
-    for (const legacy of LEGACY_DEFAULT_PASSWORDS) {
-      if (await verifyPassword(legacy, row.password_hash)) {
-        isLegacy = true;
-        break;
-      }
-    }
-    if (!isLegacy) continue;
-    migrated += upd.run(hashed, fallbackEmail(row.open_id), ts, row.open_id).changes;
-  }
-  if (migrated) console.log('[seed] migrated %d users off a legacy default password', migrated);
-
-  return n + migrated;
+  return n;
 }
 
 /**
