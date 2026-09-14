@@ -4,26 +4,58 @@ import { execSync } from 'node:child_process';
 
 /**
  * 构建期版本信息 —— 供左下角展示，用来比对「本地应用」与「线上应用」是否同一份代码。
+ * 结构须与 `web/src/vite-env.d.ts` 的 `__APP_VERSION__` 声明保持一致。
+ */
+export interface AppVersion {
+  /** 产品版本：HEAD 可达的最近一个发布 tag（如 `v1.0.0`）；仓库无 tag 时为 null */
+  version: string | null;
+  /** 相对该 tag 领先的提交数；0 = 正好落在 tag 上 */
+  commitsSinceTag: number;
+  /** git 短 SHA；无 git 环境为 `'unknown'` */
+  sha: string;
+  /** git 完整 SHA（Tooltip 用） */
+  fullSha: string;
+  /**
+   * **已跟踪文件**存在未提交改动时为 true。这点很关键：本地改完没提交直接构建时，
+   * SHA 与线上可能完全相同但内容不同 —— 靠脏标记才能分辨。用 `--untracked-files=no`
+   * 排除未跟踪文件（如本地 `pm-data/`），否则 ECS 上会永远显示脏。
+   */
+  dirty: boolean;
+  /** 构建时刻 ISO 8601（UTC）——由浏览器按本地时区渲染，规避构建机时区差异 */
+  buildTime: string;
+}
+
+/** 执行 git 命令；失败（无 git / 非仓库 / 无 tag）返回 null，绝不让构建失败 */
+function tryGit(cmd: string): string | null {
+  try {
+    return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 版本号口径（2026-09-14 定稿）：**产品版本由 git tag 驱动**。
  *
- * - `sha`：`git rev-parse --short HEAD`；构建环境无 git（例如只解压源码）时回落 `'unknown'`。
- * - `dirty`：**已跟踪文件**存在未提交改动时为 true。这点很关键：本地改完没提交直接构建时，
- *   SHA 与线上可能完全相同，但内容不同 —— 靠脏标记才能分辨。用 `--untracked-files=no`
- *   排除未跟踪文件（如本地 `pm-data/`），否则 ECS 上会永远显示脏。
- * - `buildTime`：ISO(UTC) 绝对时刻，由浏览器按本地时区渲染，规避构建机时区差异。
+ * 「打 tag」即「发布」，版本号从 tag 自动推导、不手工维护任何数字 —— 这样它永远不会
+ * 像手填字段那样失真（此前 `package.json` 的 version 自建仓起就没 bump 过，故不采用）。
+ * 呈现为 `v1.0.0+3` = 发布 v1.0.0 之后的第 3 个未发布提交；仓库无 tag 时回落「未发布」。
  *
  * 注：Docker 构建上下文已放开 `.git`（见 `.dockerignore`），且 `.dockerignore` 排除的路径
- *     均为 gitignore 项，故容器内 dirty 探测与本地同语义。
+ *     均为 gitignore 项，故容器内探测与本地同语义。
  */
-function resolveAppVersion(): { sha: string; dirty: boolean; buildTime: string } {
-  let sha = 'unknown';
-  let dirty = false;
-  try {
-    sha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim() || 'unknown';
-    dirty = execSync('git status --porcelain --untracked-files=no', { encoding: 'utf8' }).trim().length > 0;
-  } catch {
-    /* 无 git 环境：版本退化为 unknown，不允许影响构建 */
-  }
-  return { sha, dirty, buildTime: new Date().toISOString() };
+function resolveAppVersion(): AppVersion {
+  const version = tryGit('git describe --tags --abbrev=0');
+  const sha = tryGit('git rev-parse --short HEAD') ?? 'unknown';
+  const dirty = (tryGit('git status --porcelain --untracked-files=no') ?? '').length > 0;
+  return {
+    version,
+    commitsSinceTag: version ? Number(tryGit(`git rev-list --count ${version}..HEAD`)) || 0 : 0,
+    sha,
+    fullSha: tryGit('git rev-parse HEAD') ?? 'unknown',
+    dirty,
+    buildTime: new Date().toISOString(),
+  };
 }
 
 /**

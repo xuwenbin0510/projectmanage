@@ -11,8 +11,9 @@ web/dist
 attachments
 
 # 仓库/工具杂项
-# ⚠ .git 必须进构建上下文：构建期要跑 `git rev-parse --short HEAD` 生成左下角版本号。
-#   镜像内会在构建结束时删除它（见 Dockerfile），不会随产物发布。
+# ⚠ .git 必须进构建上下文：构建期要跑 `git describe --tags`（产品版本号，来自 tag）
+#   与 `git rev-parse/status`（构建 SHA、脏标记）生成左下角版本徽标。
+#   tag 随 .git 一并带入，故容器内版本号与本地同源。镜像内会在构建结束时删除它（见 Dockerfile）。
 .cache
 .workbuddy
 pm-app-deploy*

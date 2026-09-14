@@ -46,6 +46,25 @@ function formatBuildTime(iso: string): string {
   return d.toLocaleString('zh-CN', { hour12: false });
 }
 
+/**
+ * 产品版本标签。数字来自构建期的 git tag（`vite.config.ts` 的 define），不手工维护：
+ * - 正好落在发布 tag 上      → `v1.0.0`
+ * - 该 tag 之后 N 个未发布提交 → `v1.0.0+3`
+ * - 仓库无 tag               → `未发布`
+ */
+function formatVersionLabel(): string {
+  if (!VERSION.version) return '未发布';
+  return VERSION.commitsSinceTag > 0 ? `${VERSION.version}+${VERSION.commitsSinceTag}` : VERSION.version;
+}
+
+/** Tooltip 里的版本释义 */
+function describeVersion(): string {
+  if (!VERSION.version) return '仓库无发布 tag';
+  return VERSION.commitsSinceTag > 0
+    ? `产品版本 ${VERSION.version} 之后的第 ${VERSION.commitsSinceTag} 个提交（未发布）`
+    : `产品版本 ${VERSION.version}（发布版本）`;
+}
+
 /** 左侧主导航 */
 export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
   const user = useAuthStore((s) => s.user);
@@ -151,14 +170,17 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
           <Typography variant="caption" color="text.secondary">
             {USE_MOCK ? 'S1 静态原型 · Mock 数据' : '已连接服务 · 数据持久化'}
           </Typography>
-          {/* 版本号：与线上同名位置对照即可判断两边是否同一份构建 */}
+          {/* 版本徽标：产品版本（git tag 推导）+ 构建 SHA。与线上同名位置对照即可判断两边是否同一份构建 */}
           <Tooltip
             placement="top"
             arrow
             title={
               <Box component="span" sx={{ display: 'block', fontSize: 11, lineHeight: 1.7 }}>
-                <Box component="span" sx={{ display: 'block', fontFamily: 'monospace' }}>
-                  {VERSION.sha}
+                <Box component="span" sx={{ display: 'block' }}>
+                  {describeVersion()}
+                </Box>
+                <Box component="span" sx={{ display: 'block', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                  {VERSION.fullSha}
                 </Box>
                 <Box component="span" sx={{ display: 'block' }}>
                   构建于 {formatBuildTime(VERSION.buildTime)}
@@ -171,24 +193,59 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
               </Box>
             }
           >
-            <Typography
-              variant="caption"
+            <Box
               sx={{
-                display: 'block',
-                mt: 0.25,
-                width: 'fit-content',
-                fontFamily: 'monospace',
-                fontSize: 10.5,
-                letterSpacing: 0.3,
-                color: tokens.text.secondary,
-                opacity: 0.72,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                mt: 0.75,
+                px: 1,
+                py: 0.25,
+                borderRadius: 999,
+                bgcolor: alpha(tokens.status.neutral, 0.1),
+                border: `0.5px solid ${alpha(tokens.status.neutral, 0.22)}`,
                 cursor: 'default',
-                userSelect: 'text',
+                '&:hover': { bgcolor: alpha(tokens.status.neutral, 0.16) },
               }}
             >
-              {VERSION.sha}
-              {VERSION.dirty ? '+' : ''}
-            </Typography>
+              <Typography
+                component="span"
+                sx={{
+                  fontSize: 10.5,
+                  lineHeight: '16px',
+                  fontWeight: 600,
+                  letterSpacing: 0.2,
+                  color: tokens.text.secondary,
+                }}
+              >
+                {formatVersionLabel()}
+              </Typography>
+              <Box
+                component="span"
+                sx={{
+                  width: 3,
+                  height: 3,
+                  flexShrink: 0,
+                  borderRadius: '50%',
+                  bgcolor: alpha(tokens.status.neutral, 0.45),
+                }}
+              />
+              <Typography
+                component="span"
+                sx={{
+                  fontFamily: 'monospace',
+                  fontSize: 10.5,
+                  lineHeight: '16px',
+                  letterSpacing: 0.3,
+                  color: tokens.text.secondary,
+                  opacity: 0.75,
+                  userSelect: 'text',
+                }}
+              >
+                {VERSION.sha}
+                {VERSION.dirty ? '+' : ''}
+              </Typography>
+            </Box>
           </Tooltip>
         </Box>
       )}
