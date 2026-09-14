@@ -295,7 +295,7 @@ function assertGateOwnerOrOverrideMock(db: MockDb, alias: string, projectId: str
   if (ownerRole && [...globalRoles, ...roles].includes(ownerRole)) return me;
   /* 报错文案用中文名（roles 表为唯一真相源），不把英文 key 直接抛给界面 */
   const ownerLabel = db.roles.find((r) => r.roleKey === ownerRole)?.name ?? ownerRole ?? '';
-  throw new ApiError(ErrorCode.E_FORBIDDEN, `仅责任角色 ${ownerLabel} 可操作（或管理员代操作）`, undefined, 403);
+  throw new ApiError(ErrorCode.E_FORBIDDEN, `你当前的角色无此操作权限（责任角色：${ownerLabel}）`, undefined, 403);
 }
 
 /** E1.5：取用户全局职位数组（兜底单值）；值为 role_key（含动态职位） */

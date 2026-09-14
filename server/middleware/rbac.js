@@ -119,6 +119,11 @@ function assertCan(db, req, action, projectId) {
  * - override（管理类救火角色）→ 通过（即便非责任人也能代操作）。
  * - 否则仅当操作者有效角色含 ownerRole 时通过；否则 E_FORBIDDEN。
  *
+ * ⚠ 语义澄清（2026-09-14 校对）：「责任角色」是**兜底通道，不是排他约束**——
+ *   capability 与 override 判定在前，持有能力/override 的角色可操作任意门与任意项
+ *   （线上 `gate:item:check` 授予 11 个角色、`gate:decide` 授予 7 个，仅 dev/ops/ued/member 会被拦）。
+ *   因此**界面文案不得宣称"仅责任角色可操作"**；非责任人操作时前端标注「由你代操作」。
+ *
  * 返回 `req.user`（与 assertCan 同签名），供调用方继续以 `me` 写审计。
  *
  * @param {import('better-sqlite3').Database} db
@@ -143,7 +148,7 @@ function assertGateOwnerOrOverride(db, req, ownerRole, projectId, action) {
   if (GATE_OVERRIDE_ROLES.some(function (r) { return mine.has(r); })) return me;
   // 责任角色本人（即便不在能力清单也能操作）
   if (ownerRole && mine.has(String(ownerRole).trim())) return me;
-  throw new AppError(ErrorCode.E_FORBIDDEN, '仅责任角色 ' + roleCatalog.roleLabelOf(ownerRole) + ' 可操作（或管理员代操作）');
+  throw new AppError(ErrorCode.E_FORBIDDEN, '你当前的角色无此操作权限（责任角色：' + roleCatalog.roleLabelOf(ownerRole) + '）');
 }
 
 /**

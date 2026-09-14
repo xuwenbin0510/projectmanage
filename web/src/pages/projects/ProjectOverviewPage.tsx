@@ -87,6 +87,8 @@ export function ProjectOverviewPage(): JSX.Element {
   );
   const isGateOverride = gateMyRoles.some((r) => GATE_OVERRIDE_ROLES.includes(r));
   const isGateOwner = (ownerRole?: string) => !!ownerRole && gateMyRoles.includes(ownerRole);
+  /* 非责任人但持能力/override 时勾选属「代操作」——文案上如实标注（判定与后端 assertGateOwnerOrOverride 同源） */
+  const canOperateGateItem = can('gate:item:check') || isGateOverride;
   /* 类型标签 / 下拉走运行时目录 —— 必须置于所有 early return 之前（Hooks 顺序稳定） */
   const { types, enabledTypes, labelOf } = useProjectTypes();
   /* 质量门责任角色中文名：`roles` 表（职位管理）为唯一真相源，禁止直接展示英文 key */
@@ -705,7 +707,7 @@ export function ProjectOverviewPage(): JSX.Element {
                     can('gate:decide') || isGateOwner(activeMs?.gate?.ownerRole) || isGateOverride;
                   const disabled = archived || !canDecideGate || uncheckedCount > 0;
                   const reason = !canDecideGate
-                    ? `仅责任角色 ${gateRoleName(activeMs?.gate?.ownerRole)} 可提交（或管理员代操作）`
+                    ? `该门责任角色为 ${gateRoleName(activeMs?.gate?.ownerRole)}；你当前角色无门控决议权限`
                     : uncheckedCount > 0
                       ? `还有 ${uncheckedCount} 项检查项未确认，需全部确认后才能提交结论`
                       : '';
@@ -832,7 +834,7 @@ export function ProjectOverviewPage(): JSX.Element {
                       secondary={
                         <Typography variant="caption" color="text.secondary">
                           责任角色 {gateRoleName(item.ownerRole)}
-                        {isGateOwner(item.ownerRole) ? '（你）' : ''}
+                        {isGateOwner(item.ownerRole) ? '（你）' : canOperateGateItem ? '（由你代操作）' : ''}
                           {item.checked && item.checkedAt ? ` · ${fmtDate(item.checkedAt)} 确认` : ''}
                           {item.source === 'custom' ? ' · 项目自定义' : ''}
                         </Typography>
