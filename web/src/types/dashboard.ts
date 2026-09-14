@@ -290,6 +290,12 @@ export interface OverdueDurationDistribution {
 
 /** 周报任务进度行（D02 · 周报勾选的关键任务 before→after） */
 export interface WeeklyTaskRowItem {
+  /**
+   * 关联任务 nodeId（wbs_nodes.id）。
+   * D03 环比区块点任务行时，按它在「周报动态」里反查该任务被哪份周报勾选汇报，实现精确下钻。
+   * 历史行可能为空（work_report_tasks.node_id 可空），空值不参与反查。
+   */
+  nodeId: string;
   /** WBS 编码 */
   nodeCode: string;
   /** 任务名 */
@@ -328,6 +334,13 @@ export interface TaskDeltaItem {
   added: boolean;
   /** 真新增 = 任务创建于上周一及以后；false = 创建更早、仅因前周无快照而首次纳入（上线过渡期产物） */
   newTask: boolean;
+  /**
+   * 互斥分档（一个任务只归一档，与顶部色块一一对应）：
+   * `done` 完成 > `added` 新增 > `backfill` 首次纳入 > `advanced` 推进 > `regressed` 回退。
+   * 用来解决原口径下「推进」与「完成」重叠（任务 60%→100% 被两处各数一次）导致
+   * 顶部数字相加 ≠ 列表条数的问题。点色块筛选时即按本字段过滤。
+   */
+  category: 'done' | 'added' | 'backfill' | 'advanced' | 'regressed';
 }
 
 /** 单周快照元数据（D03 · 到点快照架构） */
@@ -344,9 +357,14 @@ export interface TaskDeltaSummary {
   prevWeek: string;
   /** 有变化的任务（推进/完成/新增/纳入/回退），按 delta 降序，全量返回（前端滚动展示） */
   tasks: TaskDeltaItem[];
-  /** 推进任务数（delta > 0） */
+  /**
+   * 以下四个计数按 `category` **互斥**统计（无重叠），数字即该档在 `tasks` 里的条数，
+   * 也是顶部色块点击筛选后列表的条数。注意与原口径的差异：「推进」**不再包含**已完成的任务
+   * （任务 60%→100% 只计「完成」）。
+   */
+  /** 推进任务数（进度上升且未完成） */
   advancedCount: number;
-  /** 完成数 */
+  /** 完成数（状态=完成 或 进度 100%） */
   completedCount: number;
   /** 真新增任务数（前周无快照且创建于上周一及以后） */
   addedCount: number;

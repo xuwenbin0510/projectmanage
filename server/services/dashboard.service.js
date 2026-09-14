@@ -733,13 +733,15 @@ function computeWeeklyProgress(db, projectIds) {
     const rowsByReport = {};
     chunk(reportIds, SQL_IN_CHUNK).forEach(function (part) {
       db.prepare(
-        'SELECT report_id, node_code, node_name, progress_before, progress_after '
+        'SELECT report_id, node_id, node_code, node_name, progress_before, progress_after '
         + 'FROM work_report_tasks WHERE report_id IN (' + placeholders(part) + ') AND selected = 1',
       )
         .all(part)
         .forEach(function (r) {
           if (!rowsByReport[r.report_id]) rowsByReport[r.report_id] = [];
           rowsByReport[r.report_id].push({
+            /* nodeId：任务进度环比区块「查看周报」按任务精确反查周报的关联键 */
+            nodeId: mappers.toStr(r.node_id),
             nodeCode: mappers.toStr(r.node_code),
             nodeName: mappers.toStr(r.node_name),
             progressBefore: mappers.toNum(r.progress_before, 0),
@@ -862,6 +864,18 @@ function computeWeeklyProgress(db, projectIds) {
        前周无快照但创建更早 = 首次纳入快照（历史任务，非真新增） */
     const createdDate = (ls.createdAt || '').slice(0, 10);
     const newTask = added && !!createdDate && createdDate >= lastStart;
+    /* 互斥分档（2026-09-14）：一个任务只归一档，优先级
+       完成 > 新增 > 首次纳入 > 推进 > 回退。
+       原口径下「推进」与「完成」重叠（任务从 60% 干到 100% 同时计入两者），
+       导致顶部色块数字相加 > 列表实际条数（实测 W36 为 12 vs 10），
+       点色块筛选时也会出现同一任务落在两个筛选结果里。改为互斥后：
+       顶部数字 = 该档列表条数，颜色与列表行左边条一一对应。
+       注意新增任务 delta 恒为 0，故「新增/首次纳入」与「推进」天然不重叠。 */
+    const isDone = ls.status === '完成' || progress >= 100;
+    const category = isDone ? 'done'
+      : added ? (newTask ? 'added' : 'backfill')
+      : delta > 0 ? 'advanced'
+      : 'regressed';
     deltaTasks.push({
       nodeId: objectId,
       wbsCode: ls.wbsCode,
@@ -871,9 +885,10 @@ function computeWeeklyProgress(db, projectIds) {
       prevProgress: prevProgress, // -1 = 前周无快照（新增/纳入任务）
       progress: progress,
       delta: delta,
-      done: ls.status === '完成' || progress >= 100,
+      done: isDone,
       added: added,
       newTask: newTask,
+      category: category,
     });
   });
   deltaTasks.sort(function (a, b) { return b.delta - a.delta; });
@@ -900,10 +915,13 @@ function computeWeeklyProgress(db, projectIds) {
   const delta = {
     prevWeek: prevWeek,
     tasks: deltaTasks, // 全量返回，不做 50 条截断（前端滚动展示）
-    advancedCount: deltaTasks.filter(function (t) { return t.delta > 0; }).length,
-    completedCount: deltaTasks.filter(function (t) { return t.done; }).length,
-    addedCount: deltaTasks.filter(function (t) { return t.added && t.newTask; }).length,
-    backfillCount: deltaTasks.filter(function (t) { return t.added && !t.newTask; }).length,
+    /* 计数字段与 category 一一对应（互斥，无重叠）：数字即该档列表条数 */
+    advancedCount: deltaTasks.filter(function (t) { return t.category === 'advanced'; }).length,
+    completedCount: deltaTasks.filter(function (t) { return t.category === 'done'; }).length,
+    addedCount: deltaTasks.filter(function (t) { return t.category === 'added'; }).length,
+    backfillCount: deltaTasks.filter(function (t) { return t.category === 'backfill'; }).length,
+    /* 净增百分点保持「所有正向增量之和」口径，不受分档影响
+       （完成任务 60%→100% 的 40 个百分点仍计入） */
     netPoints: deltaTasks.reduce(function (s, t) { return s + (t.delta > 0 ? t.delta : 0); }, 0),
     snapshotMeta: {
       prevWeek: { week: prevWeek, backfilledProjects: backfilledProjectsOf(prevWeek) },

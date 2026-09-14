@@ -3409,10 +3409,12 @@ export class MockApiClient implements ApiClient {
         submittedAt: r.submittedAt ?? '',
         updatedAt: r.updatedAt,
         summary: r.doneNote,
-        /* D02：周报勾选（selected=true）的关键任务进度 before→after（mock Report.tasks） */
+        /* D02：周报勾选（selected=true）的关键任务进度 before→after（mock Report.tasks）；
+           nodeId 供 D03 环比任务反查周报（与真实后端 ①.5 查询同源） */
         taskRows: (r.tasks ?? [])
           .filter((t) => t.selected === true)
           .map((t) => ({
+            nodeId: t.nodeId,
             nodeCode: t.nodeCode,
             nodeName: t.nodeName,
             progressBefore: t.progressBefore,
@@ -3482,6 +3484,7 @@ export class MockApiClient implements ApiClient {
       done: boolean;
       added: boolean;
       newTask: boolean;
+      category: 'done' | 'added' | 'backfill' | 'advanced' | 'regressed';
     }> = [];
     const lastStartDate = weekRange(lastWeek).start.slice(0, 10); // 'YYYY-MM-DD'，真新增判定基准（上周一）
     for (const [objectId, ls] of lastSnap) {
@@ -3493,6 +3496,17 @@ export class MockApiClient implements ApiClient {
       const node = db.wbsNodes.find((n) => n.id === objectId);
       const createdDate = (node?.createdAt ?? '').slice(0, 10);
       const newTask = added && !!createdDate && createdDate >= lastStartDate;
+      const isDone = ls.status === '完成' || ls.progress >= 100;
+      /* 互斥分档（与真实后端同源）：完成 > 新增 > 首次纳入 > 推进 > 回退，一个任务只归一档 */
+      const category: 'done' | 'added' | 'backfill' | 'advanced' | 'regressed' = isDone
+        ? 'done'
+        : added
+          ? newTask
+            ? 'added'
+            : 'backfill'
+          : delta > 0
+            ? 'advanced'
+            : 'regressed';
       deltaTasks.push({
         nodeId: objectId,
         wbsCode: node?.wbsCode ?? '',
@@ -3502,19 +3516,21 @@ export class MockApiClient implements ApiClient {
         prevProgress,
         progress: ls.progress,
         delta,
-        done: ls.status === '完成' || ls.progress >= 100,
+        done: isDone,
         added,
         newTask,
+        category,
       });
     }
     deltaTasks.sort((a, b) => b.delta - a.delta);
     const delta = {
       prevWeek,
       tasks: deltaTasks, // 全量返回，与真实后端口径一致（前端滚动展示）
-      advancedCount: deltaTasks.filter((t) => t.delta > 0).length,
-      completedCount: deltaTasks.filter((t) => t.done).length,
-      addedCount: deltaTasks.filter((t) => t.added && t.newTask).length,
-      backfillCount: deltaTasks.filter((t) => t.added && !t.newTask).length,
+      /* 计数与 category 一一对应（互斥无重叠），数字 = 该档列表条数 */
+      advancedCount: deltaTasks.filter((t) => t.category === 'advanced').length,
+      completedCount: deltaTasks.filter((t) => t.category === 'done').length,
+      addedCount: deltaTasks.filter((t) => t.category === 'added').length,
+      backfillCount: deltaTasks.filter((t) => t.category === 'backfill').length,
       netPoints: deltaTasks.reduce((s, t) => s + (t.delta > 0 ? t.delta : 0), 0),
       snapshotMeta: {
         prevWeek: { week: prevWeek, backfilledProjects: [] },

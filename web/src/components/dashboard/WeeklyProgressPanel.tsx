@@ -301,20 +301,65 @@ function MilestoneRow({ m }: { m: MilestoneAchievedItem }): JSX.Element {
 }
 
 /* ── D03 任务进度环比行 ─────────────────────────────── */
-function DeltaRow({ t }: { t: TaskDeltaItem }): JSX.Element {
-  const up = t.delta > 0;
-  const down = t.delta < 0;
-  const accent = t.done ? 'success.main' : up ? 'primary.main' : down ? 'error.main' : 'transparent';
+/**
+ * 分档 → 强调色。与顶部色块**一一对应**（互斥：一个任务只有一种），
+ * 修掉「顶部有色块、列表只有推进有色」的不一致。
+ */
+const DELTA_ACCENT: Record<TaskDeltaItem['category'], string> = {
+  done: 'success.main',
+  advanced: 'primary.main',
+  added: 'warning.main',
+  backfill: 'text.disabled',
+  regressed: 'error.main',
+};
+
+/** 分档 → 行尾数字色（首次纳入的进度增量无意义，用次级文字色即可） */
+const DELTA_VALUE_COLOR: Record<TaskDeltaItem['category'], string> = {
+  done: 'success.main',
+  advanced: 'primary.main',
+  added: 'warning.main',
+  backfill: 'text.secondary',
+  regressed: 'error.main',
+};
+
+/** 分档 → 中文名（筛选提示文案用） */
+const DELTA_CATEGORY_LABEL: Record<TaskDeltaItem['category'], string> = {
+  done: '完成',
+  advanced: '推进',
+  added: '新增',
+  backfill: '首次纳入',
+  regressed: '回退',
+};
+
+function DeltaRow({
+  t,
+  hasReport,
+  onOpenReport,
+}: {
+  t: TaskDeltaItem;
+  /** 该任务是否被上周的某份周报勾选汇报（决定是否给出「查看周报」入口） */
+  hasReport: boolean;
+  onOpenReport: (t: TaskDeltaItem) => void;
+}): JSX.Element {
   return (
     <Box
+      onClick={hasReport ? () => onOpenReport(t) : undefined}
+      role={hasReport ? 'button' : undefined}
+      tabIndex={hasReport ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (hasReport && (e.key === 'Enter' || e.key === ' ')) onOpenReport(t);
+      }}
       sx={{
         p: 1,
         borderRadius: 1,
         border: '1px solid',
+        /* 完成态保留绿框（原视觉）；其余用默认分隔线，分类由左侧色条表达 */
         borderColor: t.done ? 'success.main' : 'divider',
         borderLeft: '3px solid',
-        borderLeftColor: accent,
-        bgcolor: down ? 'action.hover' : 'transparent',
+        borderLeftColor: DELTA_ACCENT[t.category],
+        bgcolor: t.category === 'regressed' ? 'action.hover' : 'transparent',
+        cursor: hasReport ? 'pointer' : 'default',
+        '&:hover': hasReport ? { borderColor: 'primary.main', bgcolor: 'action.hover' } : undefined,
       }}
     >
       <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
@@ -330,16 +375,14 @@ function DeltaRow({ t }: { t: TaskDeltaItem }): JSX.Element {
         <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
           {t.added ? '—' : `${t.prevProgress}%`} → {t.progress}%
         </Typography>
-        <Typography
-          sx={{
-            fontSize: 12,
-            fontWeight: 700,
-            flexShrink: 0,
-            color: t.done ? 'success.main' : up ? 'primary.main' : down ? 'error.main' : 'text.secondary',
-          }}
-        >
-          {t.added ? (t.newTask ? '新增' : '首次纳入') : `${up ? '+' : ''}${t.delta}%`}
+        <Typography sx={{ fontSize: 12, fontWeight: 700, flexShrink: 0, color: DELTA_VALUE_COLOR[t.category] }}>
+          {t.added ? (t.newTask ? '新增' : '首次纳入') : `${t.delta > 0 ? '+' : ''}${t.delta}%`}
         </Typography>
+        {hasReport && (
+          <Tooltip title="该任务被上周周报勾选汇报，点击查看">
+            <DescriptionOutlinedIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />
+          </Tooltip>
+        )}
       </Stack>
     </Box>
   );
@@ -351,12 +394,18 @@ function ReportDetailDialog({
   loading,
   open,
   projectName,
+  highlightNodeId,
   onClose,
 }: {
   report: Report | null;
   loading: boolean;
   open: boolean;
   projectName: string;
+  /**
+   * 需要高亮的任务 nodeId（D03 环比区块「查看周报」下钻时传入）：
+   * 命中的任务行加左侧强调条 + 浅底，便于在长列表里一眼定位。
+   */
+  highlightNodeId?: string;
   onClose: () => void;
 }): JSX.Element {
   return (
@@ -423,7 +472,15 @@ function ReportDetailDialog({
                       direction="row"
                       spacing={0.75}
                       alignItems="center"
-                      sx={{ bgcolor: 'action.hover', borderRadius: 1, px: 1, py: 0.5 }}
+                      sx={{
+                        bgcolor: t.nodeId === highlightNodeId ? 'action.selected' : 'action.hover',
+                        borderRadius: 1,
+                        px: 1,
+                        py: 0.5,
+                        ...(t.nodeId === highlightNodeId
+                          ? { borderLeft: '3px solid', borderLeftColor: 'primary.main' }
+                          : {}),
+                      }}
                     >
                       <Typography sx={{ fontSize: 11, color: 'text.secondary', fontFamily: 'monospace', flexShrink: 0 }}>
                         {t.nodeCode}
@@ -514,6 +571,13 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
   const [detailLoading, setDetailLoading] = useState(false);
   /* 按项目筛选（前端过滤：各条目均带 projectId/projectName，无需后端配合） */
   const [projectFilter, setProjectFilter] = useState<string>('');
+  /**
+   * D03 环比区块的分类筛选（互斥分档，'all' = 不筛选）。
+   * 点顶部色块切换；再次点同一色块取消。筛选后列表条数 = 色块数字。
+   */
+  const [deltaFilter, setDeltaFilter] = useState<'all' | TaskDeltaItem['category']>('all');
+  /** D03 联动：从环比任务下钻进周报时要高亮的任务 nodeId（普通点周报卡片时为空） */
+  const [highlightNodeId, setHighlightNodeId] = useState<string>('');
 
   /* 可选项目 = 数据中出现过的项目并集（周报/任务更新/里程碑/环比/未提交），按名称排序 */
   const projectOptions = useMemo(() => {
@@ -531,8 +595,14 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
       .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
   }, [data]);
 
-  const openReportDetail = async (r: WeeklyReportItem): Promise<void> => {
+  /**
+   * 打开周报详情弹窗。
+   * @param r 目标周报
+   * @param highlightNode 需高亮的任务 nodeId（D03 环比任务下钻时传；普通点卡片留空）
+   */
+  const openReportDetail = async (r: WeeklyReportItem, highlightNode = ''): Promise<void> => {
     setDetailItem(r);
+    setHighlightNodeId(highlightNode);
     setDetailReport(null);
     setDetailLoading(true);
     try {
@@ -583,13 +653,68 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
     return {
       ...d,
       tasks: ft,
-      advancedCount: ft.filter((t) => t.delta > 0).length,
-      completedCount: ft.filter((t) => t.done).length,
-      addedCount: ft.filter((t) => t.added && t.newTask).length,
-      backfillCount: ft.filter((t) => t.added && !t.newTask).length,
+      /* 计数按 category 互斥统计（与后端同口径）：色块数字 = 该档列表条数，无重叠 */
+      advancedCount: ft.filter((t) => t.category === 'advanced').length,
+      completedCount: ft.filter((t) => t.category === 'done').length,
+      addedCount: ft.filter((t) => t.category === 'added').length,
+      backfillCount: ft.filter((t) => t.category === 'backfill').length,
       netPoints: ft.reduce((s, t) => s + (t.delta > 0 ? t.delta : 0), 0),
     };
   })();
+
+  /**
+   * D03 联动索引：任务 nodeId → 勾选汇报了它的周报。
+   * 同一任务可能被多份周报勾选，取先出现的那份（接口已按提交时间倒序）。
+   */
+  const reportIndex = (() => {
+    const m = new Map<string, WeeklyReportItem>();
+    reports.forEach((r) => {
+      (r.taskRows ?? []).forEach((row) => {
+        if (row.nodeId && !m.has(row.nodeId)) m.set(row.nodeId, r);
+      });
+    });
+    return m;
+  })();
+
+  /** 点环比任务行：命中周报则弹窗并高亮该任务；未命中（未被任何周报勾选）则不给入口 */
+  const openReportByNode = (t: TaskDeltaItem): void => {
+    const r = reportIndex.get(t.nodeId);
+    if (r) void openReportDetail(r, t.nodeId);
+  };
+
+  /** 应用分类筛选后的环比列表（'all' 时 = 全量） */
+  const visibleDeltaTasks = (delta?.tasks ?? []).filter(
+    (t) => deltaFilter === 'all' || t.category === deltaFilter,
+  );
+
+  /** 顶部色块（可点击筛选，再次点击取消）；选中态用外圈标注，底色保持与列表色条一致 */
+  const deltaChip = (
+    category: TaskDeltaItem['category'],
+    label: string,
+    count: number,
+    color: string,
+    tip: string,
+  ): JSX.Element => {
+    const active = deltaFilter === category;
+    return (
+      <Tooltip title={`${tip}　点击筛选，再次点击取消`}>
+        <Chip
+          size="small"
+          label={`${label} ${count}`}
+          onClick={() => setDeltaFilter((f) => (f === category ? 'all' : category))}
+          sx={{
+            height: 22,
+            fontWeight: 600,
+            bgcolor: color,
+            color: '#fff',
+            cursor: 'pointer',
+            ...(active ? { outline: '2px solid', outlineColor: 'text.primary', outlineOffset: 1 } : {}),
+          }}
+        />
+      </Tooltip>
+    );
+  };
+
   const allEmpty = reports.length === 0 && tasks.length === 0 && milestones.length === 0;
 
   return (
@@ -606,7 +731,11 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             size="small"
             label="按项目筛选"
             value={projectFilter}
-            onChange={(e) => setProjectFilter(e.target.value)}
+            onChange={(e) => {
+              setProjectFilter(e.target.value);
+              /* 切换项目时清掉环比分类筛选，避免筛选与项目范围错位出现空列表 */
+              setDeltaFilter('all');
+            }}
             sx={{ minWidth: 240 }}
           >
             <MenuItem value="">全部项目</MenuItem>
@@ -684,20 +813,11 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
               {fmtDate(weekRange(delta.prevWeek).start)} ~ {fmtDate(weekRange(delta.prevWeek).end)} → 上周
             </Typography>
             <Box sx={{ flex: 1 }} />
-            <Tooltip title="上周快照中进度较前周上升的任务数">
-              <Chip size="small" label={`推进 ${delta.advancedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'primary.main', color: '#fff' }} />
-            </Tooltip>
-            <Tooltip title="上周快照中已完成（进度 100%）的任务数">
-              <Chip size="small" label={`完成 ${delta.completedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'success.main', color: '#fff' }} />
-            </Tooltip>
-            <Tooltip title="前周快照不存在、且任务创建于上周一及以后（真新增）的任务数">
-              <Chip size="small" label={`新增 ${delta.addedCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'warning.main', color: '#fff' }} />
-            </Tooltip>
-            {delta.backfillCount > 0 && (
-              <Tooltip title="前周无快照但任务创建早于上周一——首次纳入快照（快照功能上线过渡期产物，非真新增）">
-                <Chip size="small" label={`首次纳入 ${delta.backfillCount}`} sx={{ height: 22, fontWeight: 600, bgcolor: 'text.disabled', color: '#fff' }} />
-              </Tooltip>
-            )}
+            {deltaChip('advanced', '推进', delta.advancedCount, 'primary.main', '上周快照进度较前周上升、且未达到完成的任务数')}
+            {deltaChip('done', '完成', delta.completedCount, 'success.main', '上周快照中已达完成（状态=完成 或进度 100%）的任务数')}
+            {deltaChip('added', '新增', delta.addedCount, 'warning.main', '前周快照不存在、且任务创建于上周一及以后（真新增）的任务数')}
+            {delta.backfillCount > 0 &&
+              deltaChip('backfill', '首次纳入', delta.backfillCount, 'text.disabled', '前周无快照但任务创建早于上周一——首次纳入快照（快照功能上线过渡期产物，非真新增）')}
             <Tooltip title={`所有推进任务的进度增量之和（百分点）：上周快照进度合计 − 前周快照进度合计`}>
               <Chip size="small" label={`净增 ${delta.netPoints} 个百分点`} variant="outlined" sx={{ height: 22, fontWeight: 700 }} />
             </Tooltip>
@@ -722,9 +842,22 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
             </Typography>
           ) : (
             <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-                共 {delta.tasks.length} 条 · 按增量降序 · 滚动查看全部
-              </Typography>
+              <Stack direction="row" spacing={1} alignItems="baseline" sx={{ mb: 0.5 }} flexWrap="wrap" useFlexGap>
+                <Typography variant="caption" color="text.secondary">
+                  {deltaFilter === 'all'
+                    ? `共 ${delta.tasks.length} 条 · 按增量降序 · 滚动查看全部`
+                    : `已筛选「${DELTA_CATEGORY_LABEL[deltaFilter]}」${visibleDeltaTasks.length} 条 / 共 ${delta.tasks.length} 条`}
+                </Typography>
+                {deltaFilter !== 'all' && (
+                  <Typography
+                    variant="caption"
+                    onClick={() => setDeltaFilter('all')}
+                    sx={{ color: 'primary.main', cursor: 'pointer' }}
+                  >
+                    清除筛选
+                  </Typography>
+                )}
+              </Stack>
               <Box
                 sx={{
                   maxHeight: 480,
@@ -736,9 +869,23 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
                   gridTemplateColumns: { xs: '1fr', xl: 'repeat(2, 1fr)' },
                 }}
               >
-                {delta.tasks.map((t) => (
-                  <DeltaRow key={t.nodeId} t={t} />
-                ))}
+                {visibleDeltaTasks.length === 0 ? (
+                  <Typography
+                    variant="body2"
+                    sx={{ color: 'text.disabled', py: 1.5, textAlign: 'center', fontSize: 13, gridColumn: '1 / -1' }}
+                  >
+                    该分类下暂无任务
+                  </Typography>
+                ) : (
+                  visibleDeltaTasks.map((t) => (
+                    <DeltaRow
+                      key={t.nodeId}
+                      t={t}
+                      hasReport={reportIndex.has(t.nodeId)}
+                      onOpenReport={openReportByNode}
+                    />
+                  ))
+                )}
               </Box>
             </Box>
           )}
@@ -802,7 +949,11 @@ export function WeeklyProgressPanel({ data, loading }: WeeklyProgressPanelProps)
         loading={detailLoading}
         open={detailItem !== null}
         projectName={detailItem?.projectName ?? ''}
-        onClose={() => setDetailItem(null)}
+        highlightNodeId={highlightNodeId}
+        onClose={() => {
+          setDetailItem(null);
+          setHighlightNodeId('');
+        }}
       />
     </SectionCard>
   );
