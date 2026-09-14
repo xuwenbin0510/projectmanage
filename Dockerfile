@@ -3,20 +3,25 @@ FROM node:22-slim AS build
 WORKDIR /app
 
 # better-sqlite3 为原生模块，构建阶段装 python3 + make + g++ 以支持 node-gyp 源码编译
+# git 用于生成构建期版本号（左下角展示），构建上下文需包含 .git（见 .dockerignore）
 # apt 源替换为华为云镜像，加速构建期依赖安装
 RUN sed -i 's/deb.debian.org/mirrors.huaweicloud.com/g; s/security.debian.org/mirrors.huaweicloud.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
     sed -i 's/deb.debian.org/mirrors.huaweicloud.com/g; s/security.debian.org/mirrors.huaweicloud.com/g' /etc/apt/sources.list
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ git \
     && rm -rf /var/lib/apt/lists/*
 RUN npm config set registry https://registry.npmmirror.com
 
 COPY package.json ./
 RUN npm install
 COPY . .
+# COPY 以 root 落盘，git 会因 owner 与当前用户不符报 "dubious ownership" 而拒绝读取
+RUN git config --global --add safe.directory /app
 # 前端构建（web/dist 在 .gitignore，不随仓库走，必须在此生成）
 WORKDIR /app/web
 RUN npm install && npm run build
 WORKDIR /app
+# 镜像无需携带仓库历史（版本号已在构建期烘焙进 bundle）
+RUN rm -rf /app/.git
 
 # ── 运行阶段：仅运行时，数据卷挂 /app/data ──
 FROM node:22-slim AS runtime

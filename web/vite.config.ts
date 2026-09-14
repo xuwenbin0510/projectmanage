@@ -1,5 +1,30 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { execSync } from 'node:child_process';
+
+/**
+ * 构建期版本信息 —— 供左下角展示，用来比对「本地应用」与「线上应用」是否同一份代码。
+ *
+ * - `sha`：`git rev-parse --short HEAD`；构建环境无 git（例如只解压源码）时回落 `'unknown'`。
+ * - `dirty`：**已跟踪文件**存在未提交改动时为 true。这点很关键：本地改完没提交直接构建时，
+ *   SHA 与线上可能完全相同，但内容不同 —— 靠脏标记才能分辨。用 `--untracked-files=no`
+ *   排除未跟踪文件（如本地 `pm-data/`），否则 ECS 上会永远显示脏。
+ * - `buildTime`：ISO(UTC) 绝对时刻，由浏览器按本地时区渲染，规避构建机时区差异。
+ *
+ * 注：Docker 构建上下文已放开 `.git`（见 `.dockerignore`），且 `.dockerignore` 排除的路径
+ *     均为 gitignore 项，故容器内 dirty 探测与本地同语义。
+ */
+function resolveAppVersion(): { sha: string; dirty: boolean; buildTime: string } {
+  let sha = 'unknown';
+  let dirty = false;
+  try {
+    sha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim() || 'unknown';
+    dirty = execSync('git status --porcelain --untracked-files=no', { encoding: 'utf8' }).trim().length > 0;
+  } catch {
+    /* 无 git 环境：版本退化为 unknown，不允许影响构建 */
+  }
+  return { sha, dirty, buildTime: new Date().toISOString() };
+}
 
 /**
  * Vite 配置
@@ -13,6 +38,10 @@ import react from '@vitejs/plugin-react';
  */
 export default defineConfig({
   plugins: [react()],
+  /* 构建期常量：编译时静态替换，无运行时开销、无额外请求 */
+  define: {
+    __APP_VERSION__: JSON.stringify(resolveAppVersion()),
+  },
   resolve: {
     alias: {
       // 项目位于含非 ASCII（中文）字符的目录时，URL.pathname 返回百分号编码路径，

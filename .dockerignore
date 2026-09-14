@@ -11,7 +11,8 @@ web/dist
 attachments
 
 # 仓库/工具杂项
-.git
+# ⚠ .git 必须进构建上下文：构建期要跑 `git rev-parse --short HEAD` 生成左下角版本号。
+#   镜像内会在构建结束时删除它（见 Dockerfile），不会随产物发布。
 .cache
 .workbuddy
 pm-app-deploy*

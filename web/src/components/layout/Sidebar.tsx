@@ -36,6 +36,16 @@ interface SidebarProps {
   onNavigate?: () => void;
 }
 
+/** 构建期注入的版本信息（vite.config.ts 的 define） */
+const VERSION = __APP_VERSION__;
+
+/** ISO(UTC) → 浏览器本地时区可读时间；解析失败则原样返回 */
+function formatBuildTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
 /** 左侧主导航 */
 export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
   const user = useAuthStore((s) => s.user);
@@ -141,6 +151,45 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps): JSX.Element {
           <Typography variant="caption" color="text.secondary">
             {USE_MOCK ? 'S1 静态原型 · Mock 数据' : '已连接服务 · 数据持久化'}
           </Typography>
+          {/* 版本号：与线上同名位置对照即可判断两边是否同一份构建 */}
+          <Tooltip
+            placement="top"
+            arrow
+            title={
+              <Box component="span" sx={{ display: 'block', fontSize: 11, lineHeight: 1.7 }}>
+                <Box component="span" sx={{ display: 'block', fontFamily: 'monospace' }}>
+                  {VERSION.sha}
+                </Box>
+                <Box component="span" sx={{ display: 'block' }}>
+                  构建于 {formatBuildTime(VERSION.buildTime)}
+                </Box>
+                {VERSION.dirty && (
+                  <Box component="span" sx={{ display: 'block' }}>
+                    含未提交改动 —— 与线上同 SHA 也可能内容不同
+                  </Box>
+                )}
+              </Box>
+            }
+          >
+            <Typography
+              variant="caption"
+              sx={{
+                display: 'block',
+                mt: 0.25,
+                width: 'fit-content',
+                fontFamily: 'monospace',
+                fontSize: 10.5,
+                letterSpacing: 0.3,
+                color: tokens.text.secondary,
+                opacity: 0.72,
+                cursor: 'default',
+                userSelect: 'text',
+              }}
+            >
+              {VERSION.sha}
+              {VERSION.dirty ? '+' : ''}
+            </Typography>
+          </Tooltip>
         </Box>
       )}
     </Box>
